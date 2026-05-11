@@ -71,12 +71,12 @@
   <div class="flex items-center gap-3">
     <svg class="w-4 h-4" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
     <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.06em;color:var(--fg)">Equity<span style="color:var(--accent)">OS</span></span>
-    <span id="headerBadge" class="badge badge-good" style="font-size:.58rem"><span class="blink">●</span> LIVE</span>
+    <span id="headerBadge" class="badge badge-good" style="font-size:.58rem" title="Rankings from saved snapshot files">SNAPSHOT</span>
   </div>
   <div class="flex items-center gap-4">
     <a href="/" style="color:var(--accent);font-size:.72rem;letter-spacing:.05em">Dashboard</a>
     <a href="/sectors" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
-    <button class="run-btn" id="runBtn" onclick="openRunModal()">Run Analysis</button>
+    <button class="run-btn" id="runBtn" onclick="openRunModal()">Universe scan</button>
   </div>
 </nav>
 
@@ -421,7 +421,13 @@ async function loadSummary() {
     const d = await r.json();
 
     $('statTotal').textContent = d.total_companies;
-    $('statSource').textContent = d.data_source;
+    const parts = [
+      d.data_source,
+      d.data_universe_file,
+      d.data_universe_modified ? ('as of ' + d.data_universe_modified) : null,
+      d.data_rescored_overlay_file ? ('scores overlay ' + d.data_rescored_overlay_file) : null,
+    ].filter(Boolean);
+    $('statSource').textContent = parts.join(' · ');
     $('statAvg').textContent = d.average_score.toFixed(1);
     $('statTop').textContent  = d.top_overall?.symbol || '–';
     $('statTopScore').textContent = d.top_overall?.score?.toFixed(1) + '/20';
@@ -429,7 +435,7 @@ async function loadSummary() {
     $('statGrowthDetail').textContent = `Growth ${d.top_growth?.growth_score?.toFixed(1)}/5 · ROIC ${d.top_growth?.roic_pct?.toFixed(0)}%`;
     $('statRevenue').textContent = '$' + d.total_revenue_b.toFixed(0) + 'B';
     $('statMcap').textContent   = '$' + d.total_market_cap_t.toFixed(1) + 'T';
-    $('headerBadge').textContent = d.total_companies + ' Companies';
+    $('headerBadge').textContent = d.total_companies + ' in snapshot';
 
     /* Category pills */
     const cats = d.investment_categories || {};
@@ -482,7 +488,7 @@ let _progressTimer = null;
 async function startAnalysis() {
   const btn = $('runBtn');
   btn.disabled = true;
-  btn.textContent = 'Running…';
+  btn.textContent = 'Scanning…';
   try {
     const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:2000, workers:20}) });
     const d = await r.json();
@@ -491,18 +497,18 @@ async function startAnalysis() {
         $('progressModal').classList.add('open');
         scheduleProgressPoll();
         btn.disabled = true;
-        btn.textContent = 'Running…';
+        btn.textContent = 'Scanning…';
       } else {
         alert(d.error);
         btn.disabled=false;
-        btn.textContent='Run Analysis';
+        btn.textContent='Universe scan';
       }
       return;
     }
     // Start polling
     $('progressModal').classList.add('open');
     scheduleProgressPoll();
-  } catch(e) { alert('Failed to start: '+e); btn.disabled=false; btn.textContent='Run Analysis'; }
+  } catch(e) { alert('Failed to start: '+e); btn.disabled=false; btn.textContent='Universe scan'; }
 }
 
 function scheduleProgressPoll() {
@@ -518,7 +524,7 @@ async function checkProgress() {
     if (d.running) scheduleProgressPoll();
     else {
       $('runBtn').disabled = false;
-      $('runBtn').textContent = 'Run Analysis';
+      $('runBtn').textContent = 'Universe scan';
       // Auto-reload table when done
       setTimeout(() => { resetAndLoad(); loadSummary(); }, 800);
     }
@@ -539,7 +545,7 @@ function renderProgress(d) {
   const statusTxt = d.running
     ? `Scanning universe\u2026 ${d.done}/${d.total} (${(d.pct||0).toFixed(1)}%)`
     : (d.total > 0
-        ? `Scan complete \u2014 ${d.successful||d.done} analyzed, ${d.failed||0} failed`
+        ? `Scan complete \u2014 ${d.successful||d.done} fetched OK, ${d.failed||0} failed`
         : 'Ready \u2014 click Execute Scan to begin');
   $('progStatus').textContent = statusTxt;
   $('progStatus').style.color = d.running ? 'var(--accent2)' : 'var(--pos)';
@@ -552,7 +558,7 @@ function renderProgress(d) {
   const d = await r.json().catch(()=>({}));
   if (d.running) {
     $('runBtn').disabled = true;
-    $('runBtn').textContent = 'Running…';
+    $('runBtn').textContent = 'Scanning…';
     $('progressModal').classList.add('open');
     scheduleProgressPoll();
   }
@@ -563,7 +569,7 @@ function renderProgress(d) {
 <div id="progressModal">
   <div id="progressBox">
     <div class="flex items-center justify-between mb-5">
-      <div style="font-size:.8rem;font-weight:700;color:var(--fg);letter-spacing:.04em">Analysis Progress</div>
+      <div style="font-size:.8rem;font-weight:700;color:var(--fg);letter-spacing:.04em">Universe scan progress</div>
       <button onclick="closeProgressModal()" style="color:var(--dim);font-size:.85rem;background:none;border:none;cursor:pointer;padding:.2rem .4rem" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">&#x2715;</button>
     </div>
     <div id="progStatus" style="color:var(--pos);font-size:.75rem;margin-bottom:1rem">–</div>
@@ -576,7 +582,7 @@ function renderProgress(d) {
     </div>
     <div class="grid grid-cols-2 gap-3 mb-5">
       <div style="background:var(--muted);border:1px solid var(--border);padding:.65rem;border-radius:2px">
-        <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;text-transform:uppercase;margin-bottom:.2rem">Analyzed</div>
+        <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;text-transform:uppercase;margin-bottom:.2rem">Fetched OK</div>
         <div style="color:var(--pos);font-weight:700" id="progSuccess">–</div>
       </div>
       <div style="background:var(--muted);border:1px solid var(--border);padding:.65rem;border-radius:2px">
@@ -586,7 +592,7 @@ function renderProgress(d) {
     </div>
     <div style="color:var(--dim);font-size:.65rem;margin-bottom:1.25rem">Last: <span id="progLast" style="color:var(--accent2)">–</span></div>
     <div class="flex gap-3">
-      <button class="run-btn flex-1" onclick="startAnalysis()" id="startBtn">Execute Scan</button>
+      <button class="run-btn flex-1" onclick="startAnalysis()" id="startBtn">Start universe scan</button>
       <button onclick="closeProgressModal()" class="run-btn flex-1" style="border-color:var(--border);color:var(--dim)" onmouseover="this.style.borderColor='var(--dim)'" onmouseout="this.style.borderColor='var(--border)'">Close</button>
     </div>
   </div>

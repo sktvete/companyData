@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
 Equity Analysis Web Application
-Serves rescored company data with full sector analysis and infinite-scroll API.
+Serves the latest scaled universe with optional rescored score overlay, sector views,
+and infinite-scroll API. Rankings come from stored pipeline output + EODHD snapshots,
+not from live in-request re-analysis.
 """
 
 import os
+import re
 import sys
 import json
 import subprocess
 import threading
+import time
 from pathlib import Path
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response, stream_with_context
 from datetime import datetime
 from dotenv import load_dotenv
 import requests as _req
@@ -28,6 +32,8 @@ app = Flask(__name__)
 companies: list[dict] = []
 company_lookup: dict[str, dict] = {}
 DATA_SOURCE = "none"
+DATA_FILE: Path | None = None  # primary universe jsonl (e.g. scaled)
+DATA_OVERLAY_FILE: Path | None = None  # rescored jsonl applied on top, if any
 
 def _latest_nonempty(directory: Path, pattern: str) -> Path | None:
     """Return the most-recent non-empty file matching pattern."""
@@ -39,49 +45,117 @@ def _latest_nonempty(directory: Path, pattern: str) -> Path | None:
     return None
 
 
+def _dedupe_rows_best_score(rows: list[dict]) -> list[dict]:
+    """De-duplicate by symbol (keep row with highest overall_score)."""
+    seen: dict[str, dict] = {}
+    for c in rows:
+        sym = c["symbol"]
+        existing_score = seen.get(sym, {}).get("investment_scores", {}).get("overall_score", -1)
+        new_score = c.get("investment_scores", {}).get("overall_score", 0)
+        if new_score >= existing_score:
+            seen[sym] = c
+    return sorted(
+        seen.values(),
+        key=lambda x: x.get("investment_scores", {}).get("overall_score", 0),
+        reverse=True,
+    )
+
+
 def load_data() -> bool:
-    """Load the best available analysis data, priority: rescored > scaled > final."""
-    global companies, company_lookup, DATA_SOURCE
+    """Load universe from latest scaled (or final), overlay rescored scores when present.
+
+    Root issue fixed: an older small ``rescored_*.jsonl`` must not replace a larger
+    ``scaled_analysis_*.jsonl`` — we always keep the scaled universe and only patch
+    ``investment_scores`` / ``name`` from rescored for matching symbols.
+    """
+    global companies, company_lookup, DATA_SOURCE, DATA_FILE, DATA_OVERLAY_FILE
 
     output_dir = PROJECT_ROOT / "outputs"
 
-    candidates = [
-        (output_dir / "rescored_analysis",     "rescored_*.jsonl",           "rescored"),
-        (output_dir / "scaled_analysis",      "scaled_analysis_*.jsonl",    "scaled"),
-        (output_dir / "final_working_analysis", "*analysis_*.jsonl",        "final"),
-    ]
+    scaled_f = _latest_nonempty(output_dir / "scaled_analysis", "scaled_analysis_*.jsonl")
+    rescored_f = _latest_nonempty(output_dir / "rescored_analysis", "rescored_*.jsonl")
+    final_f = _latest_nonempty(output_dir / "final_working_analysis", "*analysis_*.jsonl")
 
-    for directory, pattern, label in candidates:
-        if not directory.exists():
-            continue
-        f = _latest_nonempty(directory, pattern)
-        if f:
-            companies = read_jsonl(f)
-            # De-duplicate by symbol (keep highest score)
-            seen: dict[str, dict] = {}
-            for c in companies:
-                sym = c["symbol"]
-                existing_score = seen.get(sym, {}).get("investment_scores", {}).get("overall_score", -1)
-                new_score = c.get("investment_scores", {}).get("overall_score", 0)
-                if new_score >= existing_score:
-                    seen[sym] = c
-            companies = sorted(seen.values(),
-                               key=lambda x: x.get("investment_scores", {}).get("overall_score", 0),
-                               reverse=True)
-            company_lookup = {c["symbol"]: c for c in companies}
-            DATA_SOURCE = label
-            print(f"[OK] Loaded {len(companies)} companies from {label} ({f.name})")
-            return True
+    scaled_rows = read_jsonl(scaled_f) if scaled_f else []
+    rescored_rows = read_jsonl(rescored_f) if rescored_f else []
+    final_rows = read_jsonl(final_f) if final_f else []
 
-    print("[ERR] No analysis data found")
-    return False
+    base_rows: list[dict] = []
+    base_label = ""
+    base_file: Path | None = None
+
+    if scaled_rows:
+        base_rows, base_label, base_file = scaled_rows, "scaled", scaled_f
+    elif final_rows:
+        base_rows, base_label, base_file = final_rows, "final", final_f
+    elif rescored_rows:
+        base_rows, base_label, base_file = rescored_rows, "rescored", rescored_f
+    else:
+        companies = []
+        company_lookup = {}
+        DATA_SOURCE = "none"
+        DATA_FILE = None
+        DATA_OVERLAY_FILE = None
+        print("[ERR] No analysis data found")
+        return False
+
+    base_rows = _dedupe_rows_best_score(base_rows)
+    rescored_map = {c["symbol"]: c for c in rescored_rows} if rescored_rows else {}
+    overlay_used = False
+    if rescored_map and base_label in ("scaled", "final"):
+        for c in base_rows:
+            sym = c["symbol"]
+            if sym in rescored_map:
+                rc = rescored_map[sym]
+                c["investment_scores"] = dict(rc.get("investment_scores") or c.get("investment_scores", {}))
+                if rc.get("name"):
+                    c["name"] = rc["name"]
+                overlay_used = True
+
+    companies = sorted(
+        base_rows,
+        key=lambda x: x.get("investment_scores", {}).get("overall_score", 0),
+        reverse=True,
+    )
+    company_lookup = {c["symbol"]: c for c in companies}
+
+    if overlay_used and base_label == "scaled":
+        DATA_SOURCE = "scaled+rescored_scores"
+    elif overlay_used and base_label == "final":
+        DATA_SOURCE = "final+rescored_scores"
+    else:
+        DATA_SOURCE = base_label
+
+    DATA_FILE = base_file
+    DATA_OVERLAY_FILE = rescored_f if overlay_used and rescored_f else None
+
+    print(
+        f"[OK] Loaded {len(companies)} companies ({DATA_SOURCE}) "
+        f"from {base_file.name if base_file else '?'}"
+        + (f" + overlay {rescored_f.name}" if DATA_OVERLAY_FILE else "")
+    )
+    return True
 
 def _score(c: dict) -> float:
     return c.get("investment_scores", {}).get("overall_score", 0.0)
 
 
+_SYMBOL_RE = re.compile(r"^[A-Z0-9][A-Z0-9.\-]{0,15}$")
+
+
+def _parse_symbol(raw: str) -> str | None:
+    """Reject path tricks and garbage; allow BRK.B style tickers."""
+    if not raw:
+        return None
+    s = raw.strip().upper()
+    if not _SYMBOL_RE.fullmatch(s):
+        return None
+    return s
+
+
 def get_company(symbol: str) -> dict | None:
-    return company_lookup.get(symbol.upper())
+    ps = _parse_symbol(symbol)
+    return company_lookup.get(ps) if ps else None
 
 
 def filter_sort(sector=None, category=None, min_score=0.0,
@@ -157,8 +231,9 @@ def api_summary():
 
     for c in companies:
         s = c.get("investment_scores", {})
-        cats[s.get("investment_category", "UNKNOWN")] = cats.get(s.get("investment_category", "UNKNOWN"), 0) + 1
-        sec = c.get("sector", "Unknown")
+        cat = s.get("investment_category") or "UNKNOWN"
+        cats[cat] = cats.get(cat, 0) + 1
+        sec = c.get("sector") or "Unknown"
         sectors_count[sec] = sectors_count.get(sec, 0) + 1
         total_score += s.get("overall_score", 0)
         total_rev   += c.get("financial_metrics", {}).get("revenue", 0)
@@ -170,9 +245,21 @@ def api_summary():
     top_growth = max(companies, key=lambda c: c.get("investment_scores", {}).get("growth_score", 0))
     top_overall = companies[0] if companies else {}
 
+    def _iso_mtime(p: Path | None) -> str | None:
+        if not p or not p.is_file():
+            return None
+        try:
+            return datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            return None
+
     return jsonify({
         "total_companies": n,
         "data_source": DATA_SOURCE,
+        "data_universe_file": DATA_FILE.name if DATA_FILE else None,
+        "data_universe_modified": _iso_mtime(DATA_FILE),
+        "data_rescored_overlay_file": DATA_OVERLAY_FILE.name if DATA_OVERLAY_FILE else None,
+        "data_rescored_overlay_modified": _iso_mtime(DATA_OVERLAY_FILE),
         "average_score": round(total_score / n, 2),
         "total_revenue_b": round(total_rev / 1e9, 1),
         "total_market_cap_t": round(total_mcap / 1e12, 2),
@@ -185,7 +272,7 @@ def api_summary():
             "oeps_cagr_pct": top_growth.get("investment_scores", {}).get("oeps_cagr_pct", 0),
             "roic_pct": top_growth.get("investment_scores", {}).get("roic_pct", 0),
         },
-        "last_updated": datetime.now().isoformat(),
+        "dashboard_refreshed_at": datetime.now().isoformat(timespec="seconds"),
     })
 
 @app.route('/api/companies')
@@ -276,6 +363,18 @@ _CACHE_DIR  = PROJECT_ROOT / "outputs" / "fundamentals_cache"
 _CACHE_TTL  = 24 * 3600   # seconds
 
 
+def _read_fundamentals_cache_file(sym: str) -> dict | None:
+    """Load sym.json from disk; None if missing or invalid JSON."""
+    cache_file = _CACHE_DIR / f"{sym}.json"
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _safe_float(x, default: float = 0.0) -> float:
     if x is None:
         return default
@@ -288,47 +387,68 @@ def _safe_float(x, default: float = 0.0) -> float:
 
 
 def _get_fundamentals(symbol: str) -> dict | None:
-    """Return fundamentals for symbol: disk cache first, then EODHD API."""
-    sym = symbol.upper()
-    cache_file = _CACHE_DIR / f"{sym}.json"
-
-    # Cache hit?
-    if cache_file.exists():
-        import time
-        if time.time() - cache_file.stat().st_mtime < _CACHE_TTL:
-            try:
-                return json.loads(cache_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
-    # Cache miss → fetch live
-    api_key = os.getenv("EODHD_API_KEY", "")
-    if not api_key:
+    """Return fundamentals: fresh cache, else live EODHD, else stale cache."""
+    ps = _parse_symbol(symbol)
+    if not ps:
         return None
-    r = _req.get(
-        f"https://eodhd.com/api/fundamentals/{sym}.US",
-        params={"api_token": api_key, "fmt": "json"}, timeout=15
-    )
-    r.raise_for_status()
-    data = r.json()
-    if data and isinstance(data, dict):
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    sym = ps
+    cache_file = _CACHE_DIR / f"{sym}.json"
+    now = time.time()
+
+    if cache_file.is_file() and (now - cache_file.stat().st_mtime) < _CACHE_TTL:
+        hit = _read_fundamentals_cache_file(sym)
+        if hit:
+            return hit
+
+    api_key = (os.getenv("EODHD_API_KEY") or "").strip()
+    if api_key:
         try:
-            cache_file.write_text(
-                json.dumps(data, separators=(",", ":")), encoding="utf-8"
+            r = _req.get(
+                f"https://eodhd.com/api/fundamentals/{sym}.US",
+                params={"api_token": api_key, "fmt": "json"}, timeout=15,
             )
+            r.raise_for_status()
+            data = r.json()
+            if data and isinstance(data, dict):
+                _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                try:
+                    cache_file.write_text(
+                        json.dumps(data, separators=(",", ":")), encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+                return data
         except Exception:
             pass
-    return data
+
+    # Offline / no key / network error: use stale cache if present
+    return _read_fundamentals_cache_file(sym)
+
+
+def _empty_history_payload(message: str) -> dict:
+    return {
+        "history":         [],
+        "analyst_ratings": None,
+        "price":           0.0,
+        "eps_ttm":         0.0,
+        "pe_ttm":          0.0,
+        "market_cap_b":    0.0,
+        "partial":         True,
+        "message":         message,
+    }
 
 
 @app.route('/api/company/<symbol>/history')
 def api_company_history(symbol):
     """Serve historical annual financials + analyst data (cache-first)."""
+    if not _parse_symbol(symbol):
+        return jsonify({"error": "Invalid symbol"}), 400
     try:
         d = _get_fundamentals(symbol)
         if not d:
-            return jsonify({"error": "No API key or data"}), 500
+            return jsonify(_empty_history_payload(
+                "No fundamentals on disk and EODHD unavailable — charts skipped."
+            ))
     except Exception as e:
         return jsonify({"error": str(e)}), 502
 
@@ -381,6 +501,18 @@ def api_company_history(symbol):
 
     analyst = _fmt_analyst(d.get("AnalystRatings", {}))
     h = d.get("Highlights", {})
+    if not history:
+        return jsonify({
+            **_empty_history_payload(
+                "Fundamentals file has no annual income statement — charts skipped."
+            ),
+            "analyst_ratings": analyst,
+            "price":           _safe_float(h.get("WallStreetTargetPrice")),
+            "eps_ttm":         _safe_float(h.get("EarningsShare")),
+            "pe_ttm":          _safe_float(h.get("PERatio")),
+            "market_cap_b":    round(_safe_float(h.get("MarketCapitalization")) / 1e9, 2),
+        })
+
     return jsonify({
         "history":         history,
         "analyst_ratings": analyst,
@@ -388,12 +520,15 @@ def api_company_history(symbol):
         "eps_ttm":         _safe_float(h.get("EarningsShare")),
         "pe_ttm":          _safe_float(h.get("PERatio")),
         "market_cap_b":    round(_safe_float(h.get("MarketCapitalization")) / 1e9, 2),
+        "partial":         False,
     })
 
 
 @app.route('/api/company/<symbol>')
 def api_company(symbol):
-    c = get_company(symbol.upper())
+    if not _parse_symbol(symbol):
+        return jsonify({"error": "Invalid symbol"}), 400
+    c = get_company(symbol)
     if not c:
         return jsonify({"error": "Company not found"}), 404
 
@@ -439,6 +574,420 @@ def api_company(symbol):
         "data_quality": c.get("data_quality", {}),
         "analyst_ratings": _fmt_analyst(c.get("analyst_ratings", {})),
     })
+
+
+def _chat_stock_context_tiny(c: dict) -> dict:
+    """Minimal ticker context for the LLM (full EODHD via tool only)."""
+    m = c.get("financial_metrics", {})
+    ci = c.get("company_info", {})
+    s = c.get("investment_scores", {})
+    sym = c["symbol"]
+    rf = m.get("red_flags") or []
+    if isinstance(rf, list):
+        rf = rf[:5]
+    desc = (ci.get("description") or "")[:400]
+    return {
+        "ticker": sym,
+        "name": c.get("name", sym),
+        "sector": c.get("sector"),
+        "category": s.get("investment_category"),
+        "overall_score": s.get("overall_score"),
+        "qvgs": {
+            "quality": s.get("quality_score"),
+            "value": s.get("value_score"),
+            "growth": s.get("growth_score"),
+            "safety": s.get("safety_score"),
+        },
+        "metrics": {
+            "revenue_b": round(m.get("revenue", 0) / 1e9, 2),
+            "net_income_b": round(m.get("net_income", 0) / 1e9, 2),
+            "pe": ci.get("pe_ratio") or m.get("pe_ratio"),
+            "market_cap_b": round(ci.get("market_cap", 0) / 1e9, 2),
+            "roe_pct": round(m.get("roe", 0) * 100, 1),
+            "roic_pct": round(m.get("roic", 0) * 100, 1),
+        },
+        "red_flags_sample": rf,
+        "data_quality": (c.get("data_quality") or {}).get("quality"),
+        "description_excerpt": desc,
+    }
+
+
+_CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "eodhd_fundamentals_snapshot",
+            "description": (
+                "Fetch a compact EODHD fundamentals snapshot for the ticker on this page. "
+                "The server uses EODHD_API_KEY from its environment — never ask the user for keys. "
+                "Use when you need Highlights, General metadata, or recent annual income lines."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "detail_level": {
+                        "type": "string",
+                        "enum": ["summary", "financials"],
+                        "description": (
+                            "summary = General + Highlights only; "
+                            "financials = also last 3 annual income statement rows."
+                        ),
+                    },
+                },
+            },
+        },
+    }
+]
+
+
+def _eodhd_snapshot_for_tool(symbol: str, detail_level: str) -> str:
+    d = _get_fundamentals(symbol)
+    if not d:
+        return json.dumps({"ok": False, "error": "No EODHD data (cache or API) for this symbol."})
+    gen = d.get("General") or {}
+    hi = d.get("Highlights") or {}
+    out: dict = {
+        "ok": True,
+        "symbol": symbol,
+        "general": {
+            k: gen.get(k)
+            for k in ("Name", "Code", "Sector", "Industry", "CurrencyCode", "FiscalYearEnd")
+            if gen.get(k) is not None
+        },
+        "highlights": {
+            k: hi.get(k)
+            for k in (
+                "MarketCapitalization", "PERatio", "EarningsShare", "Beta",
+                "52WeekHigh", "52WeekLow", "DividendYield", "AverageVolume",
+                "WallStreetTargetPrice",
+            )
+            if hi.get(k) is not None
+        },
+    }
+    if detail_level == "financials":
+        annual = (d.get("Financials") or {}).get("Income_Statement", {}).get("yearly") or {}
+        keys = sorted(annual.keys(), reverse=True)[:3]
+        out["annual_income_last_3"] = []
+        for k in keys:
+            inc = annual[k]
+            out["annual_income_last_3"].append({
+                "period": k,
+                "totalRevenue": inc.get("totalRevenue"),
+                "netIncome": inc.get("netIncome"),
+                "grossProfit": inc.get("grossProfit"),
+            })
+    try:
+        return json.dumps(out, default=str)[:10000]
+    except Exception:
+        return json.dumps({"ok": False, "error": "serialization failed"})
+
+
+def _openai_chat_round(
+    client,
+    model: str,
+    messages: list,
+    max_out: int,
+    temp: float,
+    *,
+    tools: list | None = None,
+):
+    """One completion; omits temperature or switches token param if the model rejects it."""
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_out,
+        "temperature": temp,
+    }
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = "auto"
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e1:
+        err = str(e1).lower()
+        if "temperature" in err or "unsupported" in err:
+            kwargs.pop("temperature", None)
+            try:
+                return client.chat.completions.create(**kwargs)
+            except Exception:
+                kwargs.pop("max_tokens", None)
+                kwargs["max_completion_tokens"] = max_out
+                return client.chat.completions.create(**kwargs)
+        if "max_tokens" in err or "max_completion_tokens" in err:
+            kwargs.pop("max_tokens", None)
+            kwargs["max_completion_tokens"] = max_out
+            return client.chat.completions.create(**kwargs)
+        raise
+
+
+def _chat_ndjson_line(obj: dict) -> bytes:
+    return (json.dumps(obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
+
+
+def _chat_system_prompt(ctx_json: str) -> str:
+    return (
+        "You interpret one stock dashboard page. Be **brief**: default to 2–4 tight sentences "
+        "or a tiny bullet list unless the user explicitly asks for depth. No filler. "
+        "Context JSON is below. For more EODHD fields call `eodhd_fundamentals_snapshot` "
+        "(server uses EODHD_API_KEY; never ask users for keys). Not financial advice; "
+        "note when numbers are uncertain.\n\n"
+        + ctx_json
+    )
+
+
+def _chat_build_messages(c: dict, user_msg: str, history: list, max_in: int, max_turns: int) -> tuple[str, list]:
+    sym = c["symbol"]
+    try:
+        ctx_json = json.dumps(_chat_stock_context_tiny(c), ensure_ascii=False, default=str)[:4000]
+    except Exception:
+        ctx_json = "{}"
+    system = _chat_system_prompt(ctx_json)
+    messages: list = [{"role": "system", "content": system}]
+    for h in history[-max_turns:]:
+        role = h.get("role")
+        content = h.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str):
+            continue
+        content = content.strip()
+        if not content:
+            continue
+        messages.append({"role": role, "content": content[:max_in]})
+    messages.append({"role": "user", "content": user_msg})
+    return sym, messages
+
+
+def _openai_stream_create(client, model: str, messages: list, max_out: int, temp: float | None):
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": max_out,
+    }
+    if temp is not None:
+        kwargs["temperature"] = temp
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as e1:
+        err = str(e1).lower()
+        if temp is not None and ("temperature" in err or "unsupported" in err):
+            kwargs.pop("temperature", None)
+            try:
+                return client.chat.completions.create(**kwargs)
+            except Exception:
+                kwargs.pop("max_tokens", None)
+                kwargs["max_completion_tokens"] = max_out
+                return client.chat.completions.create(**kwargs)
+        if "max_tokens" in err or "max_completion_tokens" in err:
+            kwargs.pop("max_tokens", None)
+            kwargs["max_completion_tokens"] = max_out
+            return client.chat.completions.create(**kwargs)
+        raise
+
+
+def _chat_run_tool_loop(client, model: str, messages: list, max_out: int, temp: float, sym: str, max_tool_rounds: int) -> str:
+    """Mutates messages; returns final assistant reply text."""
+    reply_text = ""
+    for _ in range(max_tool_rounds):
+        rsp = _openai_chat_round(client, model, messages, max_out, temp, tools=_CHAT_TOOLS)
+        assistant_msg = rsp.choices[0].message
+        tcalls = getattr(assistant_msg, "tool_calls", None) or []
+
+        if not tcalls:
+            reply_text = (assistant_msg.content or "").strip()
+            break
+
+        assistant_dict: dict = {"role": "assistant", "content": assistant_msg.content}
+        assistant_dict["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+            }
+            for tc in tcalls
+        ]
+        messages.append(assistant_dict)
+
+        for tc in tcalls:
+            if tc.function.name != "eodhd_fundamentals_snapshot":
+                payload = json.dumps({"ok": False, "error": "unknown tool"})
+            else:
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                detail = args.get("detail_level") or "summary"
+                if detail not in ("summary", "financials"):
+                    detail = "summary"
+                payload = _eodhd_snapshot_for_tool(sym, detail)
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
+
+    if not reply_text and messages:
+        for m in reversed(messages):
+            if m.get("role") == "assistant" and m.get("content"):
+                reply_text = str(m["content"]).strip()
+                break
+    if not reply_text:
+        rsp = _openai_chat_round(client, model, messages, max_out, temp, tools=None)
+        reply_text = (rsp.choices[0].message.content or "").strip()
+    return reply_text
+
+
+@app.route("/api/company/<symbol>/chat", methods=["POST"])
+def api_company_chat(symbol):
+    """Stock-aware chat: OpenAI (default GPT-5 family); EODHD only via server tool."""
+    if not _parse_symbol(symbol):
+        return jsonify({"error": "Invalid symbol"}), 400
+    c = get_company(symbol)
+    if not c:
+        return jsonify({"error": "Company not found"}), 404
+
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return jsonify({
+            "error": "Chat is not configured. Set OPENAI_API_KEY in the server environment (never commit keys).",
+        }), 503
+
+    body = request.get_json(silent=True) or {}
+    user_msg = (body.get("message") or "").strip()
+    if not user_msg:
+        return jsonify({"error": "message is required"}), 400
+    max_in = min(int(os.getenv("OPENAI_CHAT_MAX_INPUT", "8000")), 32000)
+    if len(user_msg) > max_in:
+        return jsonify({"error": "message too long"}), 400
+
+    history = body.get("history")
+    if not isinstance(history, list):
+        history = []
+    max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
+
+    model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-5-mini").strip()
+    sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
+
+    max_out = min(int(os.getenv("OPENAI_CHAT_MAX_TOKENS", "512")), 8192)
+    temp = float(os.getenv("OPENAI_CHAT_TEMPERATURE", "0.35"))
+    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key)
+        reply_text = _chat_run_tool_loop(
+            client, model, messages, max_out, temp, sym, max_tool_rounds,
+        )
+        return jsonify({"reply": reply_text, "model": model})
+    except Exception as e:
+        return jsonify({"error": f"OpenAI error: {e!s}"}), 502
+
+
+@app.route("/api/company/<symbol>/chat/stream", methods=["POST"])
+def api_company_chat_stream(symbol):
+    """NDJSON stream: phase thinking/tool, then token deltas; briefer defaults."""
+    if not _parse_symbol(symbol):
+        return Response(_chat_ndjson_line({"error": "Invalid symbol", "done": True}), status=400, mimetype="application/x-ndjson")
+
+    c = get_company(symbol)
+    if not c:
+        return Response(_chat_ndjson_line({"error": "Company not found", "done": True}), status=404, mimetype="application/x-ndjson")
+
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return Response(
+            _chat_ndjson_line({"error": "OPENAI_API_KEY not set", "done": True}),
+            status=503,
+            mimetype="application/x-ndjson",
+        )
+
+    body = request.get_json(silent=True) or {}
+    user_msg = (body.get("message") or "").strip()
+    if not user_msg:
+        return Response(_chat_ndjson_line({"error": "message is required", "done": True}), status=400, mimetype="application/x-ndjson")
+
+    max_in = min(int(os.getenv("OPENAI_CHAT_MAX_INPUT", "8000")), 32000)
+    if len(user_msg) > max_in:
+        return Response(_chat_ndjson_line({"error": "message too long", "done": True}), status=400, mimetype="application/x-ndjson")
+
+    history = body.get("history") if isinstance(body.get("history"), list) else []
+    max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
+    model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-5-mini").strip()
+    sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
+    max_out = min(int(os.getenv("OPENAI_CHAT_STREAM_MAX_TOKENS", os.getenv("OPENAI_CHAT_MAX_TOKENS", "512"))), 2048)
+    temp = float(os.getenv("OPENAI_CHAT_TEMPERATURE", "0.35"))
+    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
+
+    @stream_with_context
+    def gen():
+        yield _chat_ndjson_line({"phase": "thinking"})
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=api_key)
+            msgs = [dict(m) for m in messages]
+
+            reply_text = ""
+            for _ in range(max_tool_rounds):
+                rsp = _openai_chat_round(client, model, msgs, max_out, temp, tools=_CHAT_TOOLS)
+                assistant_msg = rsp.choices[0].message
+                tcalls = getattr(assistant_msg, "tool_calls", None) or []
+
+                if not tcalls:
+                    reply_text = (assistant_msg.content or "").strip()
+                    break
+
+                yield _chat_ndjson_line({"phase": "tool"})
+                assistant_dict: dict = {"role": "assistant", "content": assistant_msg.content}
+                assistant_dict["tool_calls"] = [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+                    }
+                    for tc in tcalls
+                ]
+                msgs.append(assistant_dict)
+
+                for tc in tcalls:
+                    if tc.function.name != "eodhd_fundamentals_snapshot":
+                        payload = json.dumps({"ok": False, "error": "unknown tool"})
+                    else:
+                        try:
+                            args = json.loads(tc.function.arguments or "{}")
+                        except json.JSONDecodeError:
+                            args = {}
+                        detail = args.get("detail_level") or "summary"
+                        if detail not in ("summary", "financials"):
+                            detail = "summary"
+                        payload = _eodhd_snapshot_for_tool(sym, detail)
+                    msgs.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
+
+            if not reply_text and msgs:
+                for m in reversed(msgs):
+                    if m.get("role") == "assistant" and m.get("content"):
+                        reply_text = str(m["content"]).strip()
+                        break
+
+            if reply_text:
+                step = 32
+                for i in range(0, len(reply_text), step):
+                    yield _chat_ndjson_line({"token": reply_text[i : i + step]})
+            else:
+                stream = _openai_stream_create(client, model, msgs, max_out, temp)
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    piece = chunk.choices[0].delta.content
+                    if piece:
+                        yield _chat_ndjson_line({"token": piece})
+
+            yield _chat_ndjson_line({"done": True, "model": model})
+        except Exception as e:
+            yield _chat_ndjson_line({"error": str(e), "done": True})
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+    return Response(gen(), mimetype="application/x-ndjson", headers=headers)
+
 
 @app.route('/api/top/<int:limit>')
 def api_top(limit):
@@ -493,7 +1042,9 @@ def api_sectors():
 
 @app.route('/company/<symbol>')
 def company_detail(symbol):
-    c = get_company(symbol.upper())
+    if not _parse_symbol(symbol):
+        return "<h2>Invalid symbol</h2>", 400
+    c = get_company(symbol)
     if not c:
         return "<h2>Company not found</h2>", 404
 
