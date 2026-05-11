@@ -1,0 +1,1 @@
+"""OpenFIGI research adapter placeholder."""

@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Equity Sorter - GARP Investment Strategy Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #10b981; }
+        .status-offline { background-color: #ef4444; }
+        .status-warning { background-color: #f59e0b; }
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 300px;
+            background-color: #1f2937;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -150px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+        .score-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .score-high { background-color: #dcfce7; color: #166534; }
+        .score-medium { background-color: #fef3c7; color: #92400e; }
+        .score-low { background-color: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            const [status, setStatus] = useState(null);
+            const [pipelines, setPipelines] = useState([]);
+            const [results, setResults] = useState([]);
+            const [selectedResult, setSelectedResult] = useState(null);
+            const [rankingData, setRankingData] = useState(null);
+            const [isRunning, setIsRunning] = useState(false);
+            const [logs, setLogs] = useState([]);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [showHelp, setShowHelp] = useState(false);
+            const [configs, setConfigs] = useState({});
+            const [universes, setUniverses] = useState({});
+            const [selectedConfig, setSelectedConfig] = useState('balanced');
+            const [showConfigModal, setShowConfigModal] = useState(false);
+            const [companies, setCompanies] = useState([]);
+            const [selectedCompany, setSelectedCompany] = useState(null);
+            const [companyDetails, setCompanyDetails] = useState(null);
+            const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+
+            useEffect(() => {
+                loadStatus();
+                loadPipelines();
+                loadResults();
+                loadConfigs();
+                loadCompanies();
+                
+                const interval = setInterval(() => {
+                    loadResults();
+                }, 30000);
+                return () => clearInterval(interval);
+            }, []);
+
+            useEffect(() => {
+                if (companyDetails && companyDetails.prices && companyDetails.prices.length > 0) {
+                    // Render price chart
+                    setTimeout(() => {
+                        const canvas = document.getElementById('priceChart');
+                        if (canvas) {
+                            const ctx = canvas.getContext('2d');
+                            const prices = companyDetails.prices.slice(-252); // Last year of trading days
+                            
+                            new Chart(ctx, {
+                                type: 'line',
+                                data: {
+                                    labels: prices.map(p => p.date),
+                                    datasets: [{
+                                        label: 'Close Price',
+                                        data: prices.map(p => p.close),
+                                        borderColor: 'rgb(59, 130, 246)',
+                                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                        tension: 0.1
+                                    }]
+                                },
+                                options: {
+                                    responsive: true,
+                                    plugins: {
+                                        title: {
+                                            display: true,
+                                            text: `${companyDetails.symbol} Price History`
+                                        }
+                                    },
+                                    scales: {
+                                        x: {
+                                            display: false
+                                        },
+                                        y: {
+                                            beginAtZero: false,
+                                            ticks: {
+                                                callback: function(value) {
+                                                    return '$' + value.toFixed(2);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    }, 100);
+                }
+            }, [companyDetails]);
+
+            const loadStatus = async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const data = await response.json();
+                    setStatus(data);
+                } catch (error) {
+                    console.error('Failed to load status:', error);
+                }
+            };
+
+            const loadPipelines = async () => {
+                try {
+                    const response = await fetch('/api/pipelines');
+                    const data = await response.json();
+                    setPipelines(data);
+                } catch (error) {
+                    console.error('Failed to load pipelines:', error);
+                }
+            };
+
+            const loadConfigs = async () => {
+                try {
+                    const response = await fetch('/api/analysis-configs');
+                    const data = await response.json();
+                    setConfigs(data.configs);
+                    setUniverses(data.universes);
+                } catch (error) {
+                    console.error('Failed to load configs:', error);
+                }
+            };
+
+            const loadCompanies = async () => {
+                try {
+                    const response = await fetch('/api/companies');
+                    const data = await response.json();
+                    setCompanies(data.companies || []);
+                } catch (error) {
+                    console.error('Failed to load companies:', error);
+                }
+            };
+
+            const loadCompanyDetails = async (securityId) => {
+                try {
+                    const response = await fetch(`/api/company/${securityId}`);
+                    const data = await response.json();
+                    if (data.error) {
+                        setLogs(prev => [...prev, `❌ Failed to load company: ${data.error}`]);
+                        return;
+                    }
+                    setCompanyDetails(data);
+                    setActiveTab('companies');
+                } catch (error) {
+                    console.error('Failed to load company details:', error);
+                    setLogs(prev => [...prev, `❌ Failed to load company: ${error.message}`]);
+                }
+            };
+
+            const bulkDownload = async (maxCompanies = null) => {
+                setIsBulkDownloading(true);
+                setLogs([`🚀 Starting bulk download...`]);
+                
+                try {
+                    const response = await fetch('/api/bulk-download', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            exchange: 'US',
+                            max_companies: maxCompanies
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        const result = data.result;
+                        setLogs(prev => [...prev, 
+                            `✅ Bulk download completed!`,
+                            `📊 Total symbols: ${result.total_symbols}`,
+                            `📈 Common stocks: ${result.common_stocks}`,
+                            `✅ Successful downloads: ${result.successful_downloads}`,
+                            `❌ Errors: ${result.errors}`,
+                            `📁 Data saved to: ${result.data_location}`
+                        ]);
+                        loadCompanies(); // Refresh company list
+                    } else {
+                        setLogs(prev => [...prev, `❌ Bulk download failed: ${data.error}`]);
+                    }
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ Bulk download error: ${error.message}`]);
+                } finally {
+                    setIsBulkDownloading(false);
+                }
+            };
+
+            const comprehensiveDownload = async (maxCompanies = null) => {
+                setIsBulkDownloading(true);
+                setLogs([`🚀 Starting COMPREHENSIVE data download...`]);
+                setLogs(prev => [...prev, `📊 This will extract maximum possible data from EODHD`]);
+                
+                try {
+                    const response = await fetch('/api/comprehensive-download', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            exchange: 'US',
+                            max_companies: maxCompanies
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        const result = data.result;
+                        setLogs(prev => [...prev, 
+                            `✅ Comprehensive download completed!`,
+                            `📊 Total attempted: ${result.total_attempted}`,
+                            `✅ Successful downloads: ${result.successful_downloads}`,
+                            `❌ Errors: ${result.errors}`,
+                            `📈 Data points collected:`
+                        ]);
+                        
+                        // Add data points breakdown
+                        for (const [source, count] of Object.entries(result.data_points)) {
+                            setLogs(prev => [...prev, `  ${source}: ${count} companies`]);
+                        }
+                        
+                        setLogs(prev => [...prev, `📁 Data saved to: ${settings.data_dir}`]);
+                        loadCompanies(); // Refresh company list
+                    } else {
+                        setLogs(prev => [...prev, `❌ Comprehensive download failed: ${data.error}`]);
+                    }
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ Comprehensive download error: ${error.message}`]);
+                } finally {
+                    setIsBulkDownloading(false);
+                }
+            };
+
+            const showDataCoverageAnalysis = async () => {
+                try {
+                    const response = await fetch('/api/data-coverage-analysis');
+                    const data = await response.json();
+                    
+                    setLogs(prev => [...prev, `📊 Data Coverage Analysis:`]);
+                    const totalAvailable = data.available_from_eodhd.basic_company_info.length + 
+                                        data.available_from_eodhd.financial_statements.length + 
+                                        data.available_from_eodhd.market_data.length + 
+                                        data.available_from_eodhd.valuation_metrics.length +
+                                        data.available_from_eodhd.news_and_sentiment.length;
+                    setLogs(prev => [...prev, `✅ Available from EODHD: ${totalAvailable} metrics (including news & sentiment)`]);
+                    setLogs(prev => [...prev, `❌ Missing from current sources: ${Object.values(data.missing_from_current_sources).flat().length} metrics`]);
+                    setLogs(prev => [...prev, `🎯 Current capabilities: ${data.current_capabilities.total_metrics_available} financial/market/sentiment metrics`]);
+                    setLogs(prev => [...prev, `📈 Coverage: ${data.current_capabilities.coverage} US securities`]);
+                    setLogs(prev => [...prev, `📅 Historical depth: ${data.current_capabilities.historical_depth}`]);
+                    setLogs(prev => [...prev, `⚡ Update frequency: ${data.current_capabilities.update_frequency}`]);
+                    setLogs(prev => [...prev, `📰 News capabilities: Latest headlines, sentiment analysis, word frequency`]);
+                    
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ Failed to load coverage analysis: ${error.message}`]);
+                }
+            };
+
+            const newsDownload = async (maxSymbols = 100, daysBack = 30, marketNews = false) => {
+                setIsBulkDownloading(true);
+                setLogs([`📰 Starting news and sentiment download...`]);
+                setLogs(prev => [...prev, `📊 Downloading last ${daysBack} days of news for up to ${maxSymbols} companies`]);
+                
+                try {
+                    const response = await fetch('/api/news-download', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            max_symbols: maxSymbols,
+                            days_back: daysBack,
+                            market_news: marketNews
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        const results = data.results;
+                        setLogs(prev => [...prev, `✅ News download completed!`]);
+                        
+                        if (results.market_news !== undefined) {
+                            setLogs(prev => [...prev, `📰 Market news: ${results.market_news} articles`]);
+                        }
+                        
+                        if (results.company_news) {
+                            const companyNews = results.company_news;
+                            setLogs(prev => [...prev, 
+                                `📊 Company news results:`,
+                                `  Total attempted: ${companyNews.total_attempted}`,
+                                `  ✅ Successful downloads: ${companyNews.successful_downloads}`,
+                                `  ❌ Errors: ${companyNews.errors}`
+                            ]);
+                            
+                            // Add data points breakdown
+                            for (const [source, count] of Object.entries(companyNews.data_points)) {
+                                setLogs(prev => [...prev, `  ${source}: ${count} companies`]);
+                            }
+                        }
+                        
+                        setLogs(prev => [...prev, `📁 News data saved with sentiment analysis and word weights`]);
+                    } else {
+                        setLogs(prev => [...prev, `❌ News download failed: ${data.error}`]);
+                    }
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ News download error: ${error.message}`]);
+                } finally {
+                    setIsBulkDownloading(false);
+                }
+            };
+
+            const loadResults = async () => {
+                try {
+                    const response = await fetch('/api/results');
+                    const data = await response.json();
+                    setResults(data);
+                } catch (error) {
+                    console.error('Failed to load results:', error);
+                }
+            };
+
+            const runPipeline = async (pipelineId, options = {}) => {
+                setIsRunning(true);
+                const config = configs[selectedConfig] || configs.balanced;
+                setLogs([`Starting pipeline: ${pipelineId} with ${selectedConfig} configuration`]);
+                setLogs(prev => [...prev, `Analyzing up to ${config.max_stocks} stocks`]);
+                
+                try {
+                    const response = await fetch('/api/run-pipeline', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            pipeline_id: pipelineId,
+                            config_name: selectedConfig,
+                            ...options
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        setLogs(prev => [...prev, '✅ Pipeline completed successfully!']);
+                        loadResults();
+                    } else {
+                        setLogs(prev => [...prev, `❌ Pipeline failed: ${data.error}`]);
+                        if (data.results) {
+                            data.results.forEach(result => {
+                                setLogs(prev => [...prev, `Script: ${result.script} - ${result.success ? '✅' : '❌'}`]);
+                                if (result.stderr) {
+                                    setLogs(prev => [...prev, `Error: ${result.stderr}`]);
+                                }
+                            });
+                        }
+                    }
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ Error: ${error.message}`]);
+                } finally {
+                    setIsRunning(false);
+                }
+            };
+
+            const loadRanking = async (snapshotName, date) => {
+                try {
+                    const response = await fetch(`/api/ranking/${snapshotName}/${date}`);
+                    const data = await response.json();
+                    if (data.error) {
+                        setLogs(prev => [...prev, `❌ Failed to load ranking: ${data.error}`]);
+                        return;
+                    }
+                    setRankingData(data);
+                    setSelectedResult({ snapshotName, date });
+                    setActiveTab('results');
+                } catch (error) {
+                    console.error('Failed to load ranking:', error);
+                    setLogs(prev => [...prev, `❌ Failed to load ranking: ${error.message}`]);
+                }
+            };
+
+            const PipelineCard = ({ pipeline }) => {
+                const getUniverseInfo = () => {
+                    if (pipeline.id === 'free_us_demo') return universes.free_demo;
+                    if (pipeline.id === 'eodhd_us_sample') return universes.eodhd_us;
+                    if (pipeline.id === 'public_us_phase0') return universes.sec_public;
+                    return null;
+                };
+                
+                const universe = getUniverseInfo();
+                const config = configs[selectedConfig] || {};
+                
+                return (
+                <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow">
+                    <div className="flex justify-between items-start mb-4">
+                        <div className="flex-1">
+                            <div className="flex items-center mb-2">
+                                <h3 className="text-lg font-semibold text-gray-900">{pipeline.name}</h3>
+                                <div className="tooltip ml-2">
+                                    <span className="text-blue-500 cursor-help">ℹ️</span>
+                                    <span className="tooltiptext">
+                                        {universe?.description || pipeline.description}
+                                    </span>
+                                </div>
+                            </div>
+                            <p className="text-sm text-gray-600 mb-3">{pipeline.description}</p>
+                            
+                            <div className="space-y-2 text-sm">
+                                <div className="flex items-center">
+                                    <span className="font-medium text-gray-700">Stock Universe:</span>
+                                    <span className="ml-2 text-gray-600">
+                                        {universe ? `${universe.name} (${universe.total_securities} securities)` : 'Unknown'}
+                                    </span>
+                                </div>
+                                <div className="flex items-center">
+                                    <span className="font-medium text-gray-700">Analysis Scope:</span>
+                                    <span className="ml-2 text-gray-600">
+                                        Up to {config.max_stocks || 1000} stocks with {selectedConfig} strategy
+                                    </span>
+                                </div>
+                                <div className="flex items-center">
+                                    <span className="font-medium text-gray-700">Data Sources:</span>
+                                    <span className="ml-2 text-gray-600">
+                                        {universe?.data_sources?.join(' + ') || 'Various sources'}
+                                    </span>
+                                </div>
+                                <div className="flex items-center">
+                                    <span className="font-medium text-gray-700">Est. Time:</span>
+                                    <span className="ml-2 text-gray-600">{pipeline.estimated_time}</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        {pipeline.requires_api_key && (
+                            <span className="ml-4 px-3 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+                                API Key Required
+                            </span>
+                        )}
+                    </div>
+                    
+                    <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                        <div className="flex items-center space-x-3">
+                            <select
+                                value={selectedConfig}
+                                onChange={(e) => setSelectedConfig(e.target.value)}
+                                className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                disabled={isRunning}
+                            >
+                                <option value="conservative">Conservative</option>
+                                <option value="balanced">Balanced</option>
+                                <option value="growth">Growth</option>
+                                <option value="value">Value</option>
+                            </select>
+                            <button
+                                onClick={() => setShowConfigModal(true)}
+                                className="text-blue-600 hover:text-blue-800 text-sm"
+                                disabled={isRunning}
+                            >
+                                Configure →
+                            </button>
+                        </div>
+                        <button
+                            onClick={() => runPipeline(pipeline.id)}
+                            disabled={isRunning || (pipeline.requires_api_key && !status?.eodhd_configured)}
+                            className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+                        >
+                            {isRunning ? 'Running...' : 'Run Analysis'}
+                        </button>
+                    </div>
+                </div>
+                );
+            };
+
+            const ResultCard = ({ result }) => (
+                <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200 hover:shadow-lg transition-all cursor-pointer group"
+                     onClick={() => loadRanking(result.snapshot_name, result.date)}>
+                    <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                            <div className="flex items-center mb-1">
+                                <h4 className="font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+                                    {result.snapshot_name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                </h4>
+                                <div className="tooltip ml-2">
+                                    <span className="text-blue-500 cursor-help">ℹ️</span>
+                                    <span className="tooltiptext">
+                                        Analysis Type: {result.snapshot_name.includes('free') ? 'Free Data Sources' : 
+                                                      result.snapshot_name.includes('eodhd') ? 'EODHD API Data' : 
+                                                      'Public SEC Data'}<br/>
+                                        Date: {result.date}<br/>
+                                        Click to view detailed ranking results
+                                    </span>
+                                </div>
+                            </div>
+                            <p className="text-sm text-gray-600">Analysis Date: {result.date}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Last Updated: {new Date(result.modified).toLocaleString()}
+                            </p>
+                        </div>
+                        <div className="text-right ml-4">
+                            <p className="text-sm font-medium text-gray-900">
+                                {(result.size / 1024).toFixed(1)} KB
+                            </p>
+                            <button className="text-blue-600 hover:text-blue-800 text-sm mt-1 font-medium">
+                                View Results →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const getScoreClass = (score) => {
+                if (score >= 0.7) return 'score-high';
+                if (score >= 0.4) return 'score-medium';
+                return 'score-low';
+            };
+
+            const formatScore = (score) => {
+                if (score === null || score === undefined) return 'N/A';
+                return (score * 100).toFixed(0);
+            };
+
+            const RankingTable = ({ data }) => {
+                if (!data || !data.data || data.data.length === 0) {
+                    return (
+                        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+                            <div className="text-gray-500 mb-4">
+                                <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                </svg>
+                            </div>
+                            <h3 className="text-lg font-medium text-gray-900 mb-2">No Ranking Data Available</h3>
+                            <p className="text-gray-500 mb-4">
+                                This analysis didn't generate any ranking results. This could happen if:
+                            </p>
+                            <ul className="text-left text-sm text-gray-600 max-w-md mx-auto space-y-1">
+                                <li>• No companies met the minimum data quality requirements</li>
+                                <li>• Market data was unavailable for the analysis date</li>
+                                <li>• The pipeline encountered errors during execution</li>
+                                <li>• The analysis is still running in the background</li>
+                            </ul>
+                            <button
+                                onClick={() => setActiveTab('dashboard')}
+                                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                            >
+                                Run New Analysis
+                            </button>
+                        </div>
+                    );
+                }
+
+                const rankings = data.data.slice(0, 25);
+
+                return (
+                    <div className="space-y-4">
+                        <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                            <div className="flex justify-between items-center mb-4">
+                                <div>
+                                    <h3 className="text-lg font-semibold text-gray-900">
+                                        {data.snapshot_name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                    </h3>
+                                    <p className="text-sm text-gray-600">
+                                        Analysis Date: {data.date} | Showing Top 25 of {data.total_count} Companies
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => {setSelectedResult(null); setRankingData(null);}}
+                                    className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                                >
+                                    ← Back to All Results
+                                </button>
+                            </div>
+                            
+                            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <h4 className="font-medium text-blue-900 mb-2">Understanding the Scores</h4>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                    <div>
+                                        <span className="font-medium text-blue-800">GARP Score:</span>
+                                        <p className="text-blue-700">Overall investment attractiveness (0-100)</p>
+                                    </div>
+                                    <div>
+                                        <span className="font-medium text-blue-800">Quality:</span>
+                                        <p className="text-blue-700">Profitability and financial health</p>
+                                    </div>
+                                    <div>
+                                        <span className="font-medium text-blue-800">Value:</span>
+                                        <p className="text-blue-700">Price relative to fundamentals</p>
+                                    </div>
+                                    <div>
+                                        <span className="font-medium text-blue-800">Growth:</span>
+                                        <p className="text-blue-700">Revenue and earnings growth trends</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Rank
+                                                <div className="tooltip">
+                                                    <span className="text-blue-500 cursor-help ml-1">ℹ️</span>
+                                                    <span className="tooltiptext">
+                                                        Position in GARP ranking. #1 = Most attractive based on combined quality, value, and growth metrics.
+                                                    </span>
+                                                </div>
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticker</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sector</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                                Market Cap
+                                                <div className="tooltip">
+                                                    <span className="text-blue-500 cursor-help ml-1">ℹ️</span>
+                                                    <span className="tooltiptext">
+                                                        Company market capitalization in USD. Used for size filtering and liquidity assessment.
+                                                    </span>
+                                                </div>
+                                            </th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GARP Score</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quality</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Growth</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Key Factors</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {rankings.map((company, index) => (
+                                            <tr key={index} className="hover:bg-gray-50 transition-colors">
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="flex items-center">
+                                                        <span className="text-lg font-bold text-gray-900">#{company.rank || index + 1}</span>
+                                                        {(company.rank || index + 1) <= 3 && (
+                                                            <span className="ml-2 text-yellow-500">🏆</span>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <div className="text-sm font-medium text-gray-900">
+                                                        {company.company_name || 'N/A'}
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        {company.country || 'N/A'}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded">
+                                                        {company.ticker || 'N/A'}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                                    {company.sector || 'N/A'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {company.market_cap_usd ? 
+                                                        `$${(company.market_cap_usd / 1e9).toFixed(1)}B` : 'N/A'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className={`score-badge ${getScoreClass(company.total_garp_score)}`}>
+                                                        {formatScore(company.total_garp_score)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className={`score-badge ${getScoreClass(company.quality_score)}`}>
+                                                        {formatScore(company.quality_score)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className={`score-badge ${getScoreClass(company.value_score)}`}>
+                                                        {formatScore(company.value_score)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                    <span className={`score-badge ${getScoreClass(company.growth_score)}`}>
+                                                        {formatScore(company.growth_score)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-600">
+                                                    <div className="max-w-xs">
+                                                        {company.top_positive_factors && (
+                                                            <div className="text-green-600 mb-1">
+                                                                ✓ {company.top_positive_factors}
+                                                            </div>
+                                                        )}
+                                                        {company.red_flags && (
+                                                            <div className="text-red-600">
+                                                                ⚠ {company.red_flags}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {/* Header */}
+                    <header className="bg-white shadow-sm border-b border-gray-200">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between items-center py-4">
+                                <div className="flex items-center">
+                                    <h1 className="text-2xl font-bold text-gray-900">Equity Sorter</h1>
+                                    <span className="ml-4 px-3 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
+                                        GARP Investment Strategy
+                                    </span>
+                                    <button
+                                        onClick={() => setShowHelp(!showHelp)}
+                                        className="ml-4 text-blue-600 hover:text-blue-800 text-sm font-medium"
+                                    >
+                                        {showHelp ? 'Hide' : 'Show'} Help
+                                    </button>
+                                </div>
+                                <div className="flex items-center space-x-4">
+                                    {status && (
+                                        <div className="flex items-center text-sm text-gray-600">
+                                            <span className={`status-indicator ${status.eodhd_configured ? 'status-online' : 'status-offline'}`}></span>
+                                            EODHD API: {status.eodhd_configured ? 'Connected' : 'Not Connected'}
+                                        </div>
+                                    )}
+                                    <div className="text-sm text-gray-500">
+                                        {new Date().toLocaleString()}
+                                    </div>
+                                    <div className="text-sm text-gray-600">
+                                        Current: {selectedConfig} strategy
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Help Section */}
+                    {showHelp && (
+                        <div className="bg-blue-50 border-b border-blue-200">
+                            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                                <div className="bg-blue-100 rounded-lg p-4">
+                                    <h3 className="font-semibold text-blue-900 mb-2">📖 How to Use Equity Sorter</h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-blue-800">
+                                        <div>
+                                            <h4 className="font-medium mb-1">1. Choose Analysis Type</h4>
+                                            <p>Select a pipeline based on your data sources and requirements.</p>
+                                        </div>
+                                        <div>
+                                            <h4 className="font-medium mb-1">2. Run Analysis</h4>
+                                            <p>Click "Run Analysis" to execute the GARP ranking pipeline. Monitor progress in the Logs tab.</p>
+                                        </div>
+                                        <div>
+                                            <h4 className="font-medium mb-1">3. Review Results</h4>
+                                            <p>View ranked companies with detailed scores. Higher scores indicate more attractive investments.</p>
+                                        </div>
+                                    </div>
+                                    <div className="mt-3 pt-3 border-t border-blue-200">
+                                        <p className="text-sm text-blue-700">
+                                            <strong>GARP Strategy:</strong> Growth At a Reasonable Price combines quality fundamentals with attractive valuations. 
+                                            Scores range from 0-100, with higher values indicating better investment opportunities.
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Navigation */}
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+                        <div className="border-b border-gray-200">
+                            <nav className="-mb-px flex space-x-8">
+                                {['dashboard', 'companies', 'results', 'logs'].map((tab) => (
+                                    <button
+                                        key={tab}
+                                        onClick={() => setActiveTab(tab)}
+                                        className={`py-2 px-1 border-b-2 font-medium text-sm capitalize ${
+                                            activeTab === tab
+                                                ? 'border-blue-500 text-blue-600'
+                                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                        }`}
+                                    >
+                                        {tab === 'dashboard' && '📊 Analysis Dashboard'}
+                                        {tab === 'companies' && '🏢 Company Browser'}
+                                        {tab === 'results' && '📈 Ranking Results'}
+                                        {tab === 'logs' && '📝 Execution Logs'}
+                                    </button>
+                                ))}
+                            </nav>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-8">
+                                {/* System Status */}
+                                {status && (
+                                    <div>
+                                        <h2 className="text-lg font-semibold text-gray-900 mb-4">System Status</h2>
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                            <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200">
+                                                <h3 className="text-sm font-medium text-gray-500 mb-1">Data Directory</h3>
+                                                <p className="text-sm font-semibold text-gray-900 truncate">
+                                                    {status.data_dir.split('\\').pop() || 'data'}
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-1">Raw and processed data storage</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200">
+                                                <h3 className="text-sm font-medium text-gray-500 mb-1">Output Directory</h3>
+                                                <p className="text-sm font-semibold text-gray-900 truncate">
+                                                    {status.output_dir.split('\\').pop() || 'outputs'}
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-1">Analysis results and rankings</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200">
+                                                <h3 className="text-sm font-medium text-gray-500 mb-1">Demo Tickers</h3>
+                                                <p className="text-sm font-semibold text-gray-900">
+                                                    {status.free_us_sample_tickers.join(', ')}
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-1">Sample companies for testing</p>
+                                            </div>
+                                            <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200">
+                                                <h3 className="text-sm font-medium text-gray-500 mb-1">SEC User Agent</h3>
+                                                <p className="text-sm font-semibold text-gray-900 truncate">
+                                                    {status.sec_user_agent.split(' ')[0]}...
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-1">For SEC data requests</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Analysis Pipelines */}
+                                <div>
+                                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Available Analysis Pipelines</h2>
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                        {pipelines.map((pipeline) => (
+                                            <PipelineCard key={pipeline.id} pipeline={pipeline} />
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Recent Results */}
+                                <div>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-lg font-semibold text-gray-900">Recent Analysis Results</h2>
+                                        <button
+                                            onClick={() => setActiveTab('results')}
+                                            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                                        >
+                                            View All Results →
+                                        </button>
+                                    </div>
+                                    {results.length > 0 ? (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {results.slice(0, 6).map((result, index) => (
+                                                <ResultCard key={index} result={result} />
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="bg-white rounded-lg shadow-md p-8 text-center border border-gray-200">
+                                            <div className="text-gray-500 mb-4">
+                                                <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                                                </svg>
+                                            </div>
+                                            <h3 className="text-lg font-medium text-gray-900 mb-2">No Analysis Results Yet</h3>
+                                            <p className="text-gray-500 mb-4">Run your first analysis pipeline to see ranking results here.</p>
+                                                                                    </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'companies' && (
+                            <div className="space-y-6">
+                                <div className="flex justify-between items-center">
+                                    <h2 className="text-lg font-semibold text-gray-900">Company Browser & Data Management</h2>
+                                    <div className="flex flex-wrap gap-3">
+                                        <button
+                                            onClick={() => loadCompanies()}
+                                            className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                                        >
+                                            Refresh List
+                                        </button>
+                                        <button
+                                            onClick={() => showDataCoverageAnalysis()}
+                                            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                                        >
+                                            📊 Data Coverage Analysis
+                                        </button>
+                                        <button
+                                            onClick={() => newsDownload(100, 7, true)}
+                                            disabled={isBulkDownloading || !status?.eodhd_configured}
+                                            className="px-4 py-2 text-sm bg-orange-600 text-white rounded-md hover:bg-orange-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                        >
+                                            {isBulkDownloading ? 'Downloading...' : '📰 News + Sentiment (7d)'}
+                                        </button>
+                                        <button
+                                            onClick={() => bulkDownload(1000)}
+                                            disabled={isBulkDownloading || !status?.eodhd_configured}
+                                            className="px-4 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                        >
+                                            {isBulkDownloading ? 'Downloading...' : '🚀 Download 1,000 Companies'}
+                                        </button>
+                                        <button
+                                            onClick={() => comprehensiveDownload(1000)}
+                                            disabled={isBulkDownloading || !status?.eodhd_configured}
+                                            className="px-4 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                        >
+                                            {isBulkDownloading ? 'Downloading...' : '🔬 Comprehensive 1,000'}
+                                        </button>
+                                        <button
+                                            onClick={() => comprehensiveDownload(5000)}
+                                            disabled={isBulkDownloading || !status?.eodhd_configured}
+                                            className="px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                        >
+                                            {isBulkDownloading ? 'Downloading...' : '🔬 Comprehensive 5,000'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {!status?.eodhd_configured && (
+                                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                        <p className="text-sm text-yellow-800">
+                                            ⚠️ EODHD API key required for bulk downloads. Configure your API key in the environment variables.
+                                        </p>
+                                    </div>
+                                )}
+
+                                {companyDetails ? (
+                                    <div className="space-y-4">
+                                        <div className="flex justify-between items-center">
+                                            <div>
+                                                <h3 className="text-xl font-bold text-gray-900">
+                                                    {companyDetails.symbol} - {companyDetails.exchange}
+                                                </h3>
+                                                <p className="text-gray-600">Detailed company analysis and price data</p>
+                                            </div>
+                                            <button
+                                                onClick={() => setCompanyDetails(null)}
+                                                className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                                            >
+                                                ← Back to List
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                            {/* Price Chart */}
+                                            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                                <h4 className="text-lg font-semibold text-gray-900 mb-4">Price Chart</h4>
+                                                <canvas id="priceChart" width="400" height="200"></canvas>
+                                            </div>
+
+                                            {/* Key Metrics */}
+                                            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                                <h4 className="text-lg font-semibold text-gray-900 mb-4">Key Metrics</h4>
+                                                <div className="space-y-3">
+                                                    {companyDetails.fundamentals && Object.keys(companyDetails.fundamentals).length > 0 ? (
+                                                        Object.entries(companyDetails.fundamentals).slice(0, 8).map(([key, value]) => (
+                                                            <div key={key} className="flex justify-between">
+                                                                <span className="text-sm text-gray-600 capitalize">{key.replace(/_/g, ' ')}:</span>
+                                                                <span className="text-sm font-medium text-gray-900">
+                                                                    {typeof value === 'number' ? value.toLocaleString() : value}
+                                                                </span>
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <p className="text-gray-500">No fundamental data available</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Corporate Actions */}
+                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                                <h4 className="text-lg font-semibold text-gray-900 mb-4">Dividends</h4>
+                                                <div className="space-y-2 max-h-64 overflow-y-auto">
+                                                    {companyDetails.dividends && companyDetails.dividends.length > 0 ? (
+                                                        companyDetails.dividends.slice(0, 10).map((dividend, index) => (
+                                                            <div key={index} className="text-sm">
+                                                                <span className="font-medium">{dividend.date}:</span> ${dividend.value}
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <p className="text-gray-500">No dividend data available</p>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                                <h4 className="text-lg font-semibold text-gray-900 mb-4">Stock Splits</h4>
+                                                <div className="space-y-2 max-h-64 overflow-y-auto">
+                                                    {companyDetails.splits && companyDetails.splits.length > 0 ? (
+                                                        companyDetails.splits.slice(0, 10).map((split, index) => (
+                                                            <div key={index} className="text-sm">
+                                                                <span className="font-medium">{split.date}:</span> {split.split} : 1
+                                                            </div>
+                                                        ))
+                                                    ) : (
+                                                        <p className="text-gray-500">No split data available</p>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div>
+                                        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                            <h3 className="font-medium text-blue-900 mb-2">📊 Company Data Management</h3>
+                                            <p className="text-sm text-blue-800 mb-3">
+                                                Download comprehensive data for thousands of companies including prices, fundamentals, and corporate actions.
+                                                Once downloaded, you can browse individual companies with detailed charts and metrics.
+                                            </p>
+                                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                                                <div>
+                                                    <span className="font-medium text-blue-900">Price Data:</span>
+                                                    <p className="text-blue-800">Daily historical prices (5+ years)</p>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-blue-900">Fundamentals:</span>
+                                                    <p className="text-blue-800">Financial statements and metrics</p>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-blue-900">Corporate Actions:</span>
+                                                    <p className="text-blue-800">Splits, dividends, and other events</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                                            <div className="px-6 py-4 border-b border-gray-200">
+                                                <h3 className="text-lg font-semibold text-gray-900">
+                                                    Available Companies ({companies.length})
+                                                </h3>
+                                                <p className="text-sm text-gray-600">Click any company to view detailed information</p>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="min-w-full divide-y divide-gray-200">
+                                                    <thead className="bg-gray-50">
+                                                        <tr>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticker</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company Name</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Exchange</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Country</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Currency</th>
+                                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="bg-white divide-y divide-gray-200">
+                                                        {companies.slice(0, 100).map((company, index) => (
+                                                            <tr key={index} className="hover:bg-gray-50">
+                                                                <td className="px-6 py-4 whitespace-nowrap">
+                                                                    <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded">
+                                                                        {company.ticker}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                                    {company.company_name}
+                                                                </td>
+                                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                                                    {company.exchange}
+                                                                </td>
+                                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                                                    {company.country}
+                                                                </td>
+                                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                                                                    {company.currency}
+                                                                </td>
+                                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                                    <button
+                                                                        onClick={() => loadCompanyDetails(company.security_id)}
+                                                                        className="text-blue-600 hover:text-blue-800 font-medium"
+                                                                    >
+                                                                        View Details →
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            {companies.length > 100 && (
+                                                <div className="px-6 py-4 border-t border-gray-200 text-center">
+                                                    <p className="text-sm text-gray-500">
+                                                        Showing first 100 of {companies.length} companies. Use bulk download to access more.
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'results' && (
+                            <div className="space-y-6">
+                                <div className="flex justify-between items-center">
+                                    <h2 className="text-lg font-semibold text-gray-900">Investment Ranking Results</h2>
+                                    <button
+                                        onClick={() => {setSelectedResult(null); setRankingData(null);}}
+                                        className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                                    >
+                                        ← Back to All Results
+                                    </button>
+                                </div>
+
+                                {rankingData && selectedResult ? (
+                                    <RankingTable data={rankingData} />
+                                ) : (
+                                    <div>
+                                        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                            <h3 className="font-medium text-yellow-900 mb-2">📊 Understanding GARP Rankings</h3>
+                                            <p className="text-sm text-yellow-800 mb-3">
+                                                GARP (Growth At a Reasonable Price) identifies companies with strong growth potential trading at reasonable valuations. 
+                                                Rankings combine multiple factors:
+                                            </p>
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                                <div>
+                                                    <span className="font-medium text-yellow-900">Quality Score:</span>
+                                                    <p className="text-yellow-800">Profitability, margins, debt levels</p>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-yellow-900">Value Score:</span>
+                                                    <p className="text-yellow-800">P/E, P/B ratios vs fundamentals</p>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-yellow-900">Growth Score:</span>
+                                                    <p className="text-yellow-800">Revenue/earnings growth rates</p>
+                                                </div>
+                                                <div>
+                                                    <span className="font-medium text-yellow-900">GARP Score:</span>
+                                                    <p className="text-yellow-800">Weighted combination of all factors</p>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {results.map((result, index) => (
+                                                <ResultCard key={index} result={result} />
+                                            ))}
+                                        </div>
+                                        
+                                        {results.length === 0 && (
+                                            <div className="bg-white rounded-lg shadow-md p-8 text-center border border-gray-200">
+                                                <h3 className="text-lg font-medium text-gray-900 mb-2">No Analysis Results Available</h3>
+                                                <p className="text-gray-500 mb-4">Complete an analysis pipeline to see investment rankings here.</p>
+                                                <button
+                                                    onClick={() => setActiveTab('dashboard')}
+                                                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                                                >
+                                                    Go to Dashboard
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'logs' && (
+                            <div className="space-y-6">
+                                <h2 className="text-lg font-semibold text-gray-900">Pipeline Execution Logs</h2>
+                                <div className="bg-white rounded-lg shadow-md border border-gray-200">
+                                    <div className="p-4 border-b border-gray-200">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center">
+                                                {isRunning && <div className="loading-spinner mr-3"></div>}
+                                                <span className="font-medium">
+                                                    {isRunning ? 'Pipeline Running...' : 'Ready for Analysis'}
+                                                </span>
+                                            </div>
+                                            <button
+                                                onClick={() => setLogs([])}
+                                                className="text-sm text-gray-500 hover:text-gray-700"
+                                            >
+                                                Clear Logs
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div className="p-4 bg-gray-900 text-green-400 font-mono text-sm max-h-96 overflow-y-auto">
+                                        {logs.length > 0 ? (
+                                            logs.map((log, index) => (
+                                                <div key={index} className="mb-1">{log}</div>
+                                            ))
+                                        ) : (
+                                            <div className="text-gray-500">
+                                                No execution logs yet. Run a pipeline to see detailed logs here.
+                                                <br /><br />
+                                                Typical pipeline steps:
+                                                <br />• Data ingestion from selected sources
+                                                <br />• Data normalization and validation
+                                                <br />• Financial metric calculation
+                                                <br />• GARP scoring and ranking
+                                                <br />• Results generation
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

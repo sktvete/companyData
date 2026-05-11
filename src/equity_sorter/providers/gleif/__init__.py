@@ -1,0 +1,1 @@
+"""GLEIF research adapter placeholder."""

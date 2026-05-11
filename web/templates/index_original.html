@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Equity Sorter - GARP Investment Strategy Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #10b981; }
+        .status-offline { background-color: #ef4444; }
+        .status-warning { background-color: #f59e0b; }
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 300px;
+            background-color: #1f2937;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 1;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -150px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+        .score-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .score-high { background-color: #dcfce7; color: #166534; }
+        .score-medium { background-color: #fef3c7; color: #92400e; }
+        .score-low { background-color: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            const [status, setStatus] = useState(null);
+            const [pipelines, setPipelines] = useState([]);
+            const [results, setResults] = useState([]);
+            const [selectedResult, setSelectedResult] = useState(null);
+            const [rankingData, setRankingData] = useState(null);
+            const [isRunning, setIsRunning] = useState(false);
+            const [logs, setLogs] = useState([]);
+            const [activeTab, setActiveTab] = useState('dashboard');
+
+            useEffect(() => {
+                loadStatus();
+                loadPipelines();
+                loadResults();
+                
+                // Auto-refresh every 30 seconds
+                const interval = setInterval(() => {
+                    loadResults();
+                }, 30000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const loadStatus = async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const data = await response.json();
+                    setStatus(data);
+                } catch (error) {
+                    console.error('Failed to load status:', error);
+                }
+            };
+
+            const loadPipelines = async () => {
+                try {
+                    const response = await fetch('/api/pipelines');
+                    const data = await response.json();
+                    setPipelines(data);
+                } catch (error) {
+                    console.error('Failed to load pipelines:', error);
+                }
+            };
+
+            const loadResults = async () => {
+                try {
+                    const response = await fetch('/api/results');
+                    const data = await response.json();
+                    setResults(data);
+                } catch (error) {
+                    console.error('Failed to load results:', error);
+                }
+            };
+
+            const runPipeline = async (pipelineId, options = {}) => {
+                setIsRunning(true);
+                setLogs([`Starting pipeline: ${pipelineId}`]);
+                
+                try {
+                    const response = await fetch('/api/run-pipeline', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            pipeline_id: pipelineId,
+                            ...options
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        setLogs(prev => [...prev, '✅ Pipeline completed successfully!']);
+                        loadResults();
+                    } else {
+                        setLogs(prev => [...prev, `❌ Pipeline failed: ${data.error}`]);
+                        if (data.results) {
+                            data.results.forEach(result => {
+                                setLogs(prev => [...prev, `Script: ${result.script} - ${result.success ? '✅' : '❌'}`]);
+                                if (result.stderr) {
+                                    setLogs(prev => [...prev, `Error: ${result.stderr}`]);
+                                }
+                            });
+                        }
+                    }
+                } catch (error) {
+                    setLogs(prev => [...prev, `❌ Error: ${error.message}`]);
+                } finally {
+                    setIsRunning(false);
+                }
+            };
+
+            const loadRanking = async (snapshotName, date) => {
+                try {
+                    const response = await fetch(`/api/ranking/${snapshotName}/${date}`);
+                    const data = await response.json();
+                    setRankingData(data);
+                    setActiveTab('results');
+                } catch (error) {
+                    console.error('Failed to load ranking:', error);
+                }
+            };
+
+            const PipelineCard = ({ pipeline }) => (
+                <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                    <div className="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 className="text-lg font-semibold text-gray-900">{pipeline.name}</h3>
+                            <p className="text-sm text-gray-600 mt-1">{pipeline.description}</p>
+                        </div>
+                        {pipeline.requires_api_key && (
+                            <span className="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded">
+                                API Key Required
+                            </span>
+                        )}
+                    </div>
+                    
+                    <div className="flex items-center justify-between">
+                        <div className="text-sm text-gray-500">
+                            <span className="font-medium">Est. time:</span> {pipeline.estimated_time}
+                        </div>
+                        <button
+                            onClick={() => runPipeline(pipeline.id)}
+                            disabled={isRunning || (pipeline.requires_api_key && !status?.eodhd_configured)}
+                            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                        >
+                            {isRunning ? 'Running...' : 'Run Pipeline'}
+                        </button>
+                    </div>
+                </div>
+            );
+
+            const ResultCard = ({ result }) => (
+                <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200 hover:shadow-lg transition-shadow cursor-pointer"
+                     onClick={() => loadRanking(result.snapshot_name, result.date)}>
+                    <div className="flex justify-between items-start">
+                        <div>
+                            <h4 className="font-semibold text-gray-900">{result.snapshot_name}</h4>
+                            <p className="text-sm text-gray-600">Date: {result.date}</p>
+                            <p className="text-xs text-gray-500 mt-1">
+                                Modified: {new Date(result.modified).toLocaleString()}
+                            </p>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-sm font-medium text-gray-900">
+                                {(result.size / 1024).toFixed(1)} KB
+                            </p>
+                            <button className="text-blue-600 hover:text-blue-800 text-sm mt-1">
+                                View →
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const RankingTable = ({ data }) => {
+                if (!data || !data.data || data.data.length === 0) {
+                    return <div className="text-center py-8 text-gray-500">No ranking data available</div>;
+                }
+
+                const rankings = data.data.slice(0, 20); // Show top 20
+
+                return (
+                    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-200">
+                            <h3 className="text-lg font-semibold text-gray-900">
+                                {data.snapshot_name} - {data.date}
+                            </h3>
+                            <p className="text-sm text-gray-600">Showing top 20 of {data.total_count} companies</p>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Company</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ticker</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Sector</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Market Cap</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">GARP Score</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quality</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Growth</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {rankings.map((company, index) => (
+                                        <tr key={index} className="hover:bg-gray-50">
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                {company.rank || index + 1}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {company.company_name || 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                                                {company.ticker || 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                                {company.sector || 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {company.market_cap_usd ? 
+                                                    `$${(company.market_cap_usd / 1e9).toFixed(1)}B` : 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-green-600">
+                                                {company.total_garp_score ? company.total_garp_score.toFixed(2) : 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {company.quality_score ? company.quality_score.toFixed(2) : 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {company.value_score ? company.value_score.toFixed(2) : 'N/A'}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                {company.growth_score ? company.growth_score.toFixed(2) : 'N/A'}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-50">
+                    {/* Header */}
+                    <header className="bg-white shadow-sm border-b border-gray-200">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                            <div className="flex justify-between items-center py-4">
+                                <div className="flex items-center">
+                                    <h1 className="text-2xl font-bold text-gray-900">Equity Sorter</h1>
+                                    <span className="ml-4 px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded">
+                                        GARP Ranking Engine
+                                    </span>
+                                </div>
+                                <div className="flex items-center space-x-4">
+                                    {status && (
+                                        <div className="flex items-center text-sm text-gray-600">
+                                            <span className={`status-indicator ${status.eodhd_configured ? 'status-online' : 'status-offline'}`}></span>
+                                            EODHD: {status.eodhd_configured ? 'Configured' : 'Not Configured'}
+                                        </div>
+                                    )}
+                                    <div className="text-sm text-gray-500">
+                                        {new Date().toLocaleString()}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    {/* Navigation */}
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+                        <div className="border-b border-gray-200">
+                            <nav className="-mb-px flex space-x-8">
+                                {['dashboard', 'results', 'logs'].map((tab) => (
+                                    <button
+                                        key={tab}
+                                        onClick={() => setActiveTab(tab)}
+                                        className={`py-2 px-1 border-b-2 font-medium text-sm capitalize ${
+                                            activeTab === tab
+                                                ? 'border-blue-500 text-blue-600'
+                                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                        }`}
+                                    >
+                                        {tab}
+                                    </button>
+                                ))}
+                            </nav>
+                        </div>
+                    </div>
+
+                    {/* Main Content */}
+                    <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        {activeTab === 'dashboard' && (
+                            <div className="space-y-6">
+                                {/* Status Cards */}
+                                {status && (
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                            <h3 className="text-sm font-medium text-gray-500">Data Directory</h3>
+                                            <p className="mt-2 text-lg font-semibold text-gray-900">
+                                                {status.data_dir.split('\\').pop()}
+                                            </p>
+                                        </div>
+                                        <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                            <h3 className="text-sm font-medium text-gray-500">Output Directory</h3>
+                                            <p className="mt-2 text-lg font-semibold text-gray-900">
+                                                {status.output_dir.split('\\').pop()}
+                                            </p>
+                                        </div>
+                                        <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+                                            <h3 className="text-sm font-medium text-gray-500">Sample Tickers</h3>
+                                            <p className="mt-2 text-lg font-semibold text-gray-900">
+                                                {status.free_us_sample_tickers.join(', ')}
+                                            </p>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Pipelines */}
+                                <div>
+                                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Available Pipelines</h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                        {pipelines.map((pipeline) => (
+                                            <PipelineCard key={pipeline.id} pipeline={pipeline} />
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Recent Results */}
+                                <div>
+                                    <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Results</h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        {results.slice(0, 6).map((result, index) => (
+                                            <ResultCard key={index} result={result} />
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'results' && (
+                            <div className="space-y-6">
+                                <div className="flex justify-between items-center">
+                                    <h2 className="text-lg font-semibold text-gray-900">Ranking Results</h2>
+                                    <button
+                                        onClick={() => setSelectedResult(null)}
+                                        className="px-4 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700"
+                                    >
+                                        Back to All Results
+                                    </button>
+                                </div>
+
+                                {rankingData ? (
+                                    <RankingTable data={rankingData} />
+                                ) : (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                        {results.map((result, index) => (
+                                            <ResultCard key={index} result={result} />
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {activeTab === 'logs' && (
+                            <div className="space-y-6">
+                                <h2 className="text-lg font-semibold text-gray-900">Execution Logs</h2>
+                                <div className="bg-white rounded-lg shadow-md border border-gray-200">
+                                    <div className="p-4 border-b border-gray-200">
+                                        <div className="flex items-center">
+                                            {isRunning && <div className="loading-spinner mr-3"></div>}
+                                            <span className="font-medium">
+                                                {isRunning ? 'Pipeline Running...' : 'Ready'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="p-4 bg-gray-900 text-green-400 font-mono text-sm max-h-96 overflow-y-auto">
+                                        {logs.length > 0 ? (
+                                            logs.map((log, index) => (
+                                                <div key={index} className="mb-1">{log}</div>
+                                            ))
+                                        ) : (
+                                            <div className="text-gray-500">No logs yet. Run a pipeline to see logs here.</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

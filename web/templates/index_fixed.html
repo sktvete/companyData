@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Equity Analysis Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<style>
+  :root{
+    --bg:#0b0f19;--card:#111827;--muted:#1a2332;--fg:#cbd5e1;
+    --accent:#3b82f6;--accent2:#06b6d4;--accent3:#22c55e;
+    --border:#1e2d3d;--dim:#475569;
+    --pos:#22c55e;--neg:#ef4444;--warn:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:3px}
+  .card:hover{border-color:rgba(59,130,246,.4);transition:border-color .15s}
+  /* Badges */
+  .badge{display:inline-block;padding:.1rem .4rem;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
+  .badge-excellent{background:rgba(34,197,94,.1);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
+  .badge-good     {background:rgba(59,130,246,.1);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
+  .badge-fair     {background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+  .badge-poor     {background:rgba(239,68,68,.1);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+  .badge-risky    {background:rgba(168,85,247,.1);color:#c084fc;border:1px solid rgba(168,85,247,.3)}
+  /* Table */
+  .qvgs span{font-size:9px;padding:1px 4px;white-space:nowrap;border-radius:2px}
+  th{color:var(--dim);font-size:.6rem;text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border);padding:.5rem .5rem;cursor:pointer;user-select:none;white-space:nowrap}
+  th:hover{color:var(--fg)}
+  th.sort-active{color:var(--accent)}
+  td{border-bottom:1px solid rgba(30,45,61,.7);transition:background .1s}
+  tr:hover td{background:var(--muted)}
+  .analyst-bull{color:var(--pos)} .analyst-hold{color:var(--warn)} .analyst-bear{color:var(--neg)}
+  [title]{cursor:help}
+  /* Inputs */
+  input,select{background:var(--card);border:1px solid var(--border);color:var(--fg);padding:.35rem .6rem;font-size:.75rem;font-family:'JetBrains Mono',monospace;border-radius:3px;outline:none}
+  input:focus,select:focus{border-color:rgba(59,130,246,.6)}
+  input[type=range]{padding:0;accent-color:var(--accent);cursor:pointer;height:18px}
+  .inp-wrap{display:inline-flex;align-items:center}
+  /* Scrollbar */
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+  #sentinel{height:1px}
+  /* Progress modal */
+  #progressModal{display:none;position:fixed;inset:0;z-index:50;align-items:center;justify-content:center;background:rgba(0,0,0,.65);backdrop-filter:blur(4px)}
+  #progressModal.open{display:flex}
+  #progressBox{background:var(--card);border:1px solid var(--border);padding:1.75rem;width:min(460px,92vw);border-radius:3px}
+  .prog-bar-track{background:var(--bg);height:4px;overflow:hidden;border-radius:2px}
+  .prog-bar-fill{height:100%;background:var(--accent);transition:width .4s ease}
+  .run-btn{background:transparent;color:var(--accent);border:1px solid rgba(59,130,246,.4);padding:.35rem .85rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;transition:all .15s;border-radius:2px}
+  .run-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .run-btn:disabled{border-color:var(--border);color:var(--dim);cursor:default;background:transparent}
+  /* Weighting panel */
+  .weight-row{display:flex;align-items:center;gap:.6rem;padding:.25rem 0;font-size:.7rem}
+  .weight-label{color:var(--dim);width:64px;flex-shrink:0;letter-spacing:.03em}
+  .weight-val{color:var(--accent);width:18px;text-align:right;flex-shrink:0;font-weight:700}
+  .weight-bar{flex:1}
+  /* Sort arrows */
+  .sort-asc::after{content:' ▲';font-size:.45rem;vertical-align:middle;opacity:.8}
+  .sort-desc::after{content:' ▼';font-size:.45rem;vertical-align:middle;opacity:.8}
+  @keyframes blink{50%{opacity:0}}
+  .blink{animation:blink 1s step-end infinite}
+</style>
+<body class="min-h-screen">
+
+<!-- Nav -->
+<nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
+  <div class="flex items-center gap-3">
+    <svg class="w-4 h-4" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.06em;color:var(--fg)">Equity<span style="color:var(--accent)">OS</span></span>
+    <span id="headerBadge" class="badge badge-good" style="font-size:.58rem"><span class="blink">●</span> LIVE</span>
+  </div>
+  <div class="flex items-center gap-4">
+    <a href="/" style="color:var(--accent);font-size:.72rem;letter-spacing:.05em">Dashboard</a>
+    <a href="/sectors" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
+    <button class="run-btn" id="runBtn" onclick="openRunModal()">Run Analysis</button>
+  </div>
+</nav>
+
+<!-- Hero stats -->
+<div class="px-6 py-6 max-w-screen-2xl mx-auto">
+  <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-6 gap-3 mb-6">
+    <div class="card p-4 col-span-2 md:col-span-1">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Companies</div>
+      <div class="text-2xl font-bold" style="color:var(--fg)" id="statTotal">–</div>
+      <div style="font-size:.65rem;color:var(--dim)" id="statSource"></div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Avg Score</div>
+      <div class="text-2xl font-bold" style="color:var(--accent2)" id="statAvg">–</div>
+      <div style="font-size:.65rem;color:var(--dim)">/ 20.0</div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Top Pick</div>
+      <div class="text-2xl font-bold" style="color:var(--accent)" id="statTop">–</div>
+      <div style="font-size:.65rem;color:var(--dim)" id="statTopScore"></div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Top Growth</div>
+      <div class="text-2xl font-bold" style="color:var(--pos)" id="statGrowth">–</div>
+      <div style="font-size:.65rem;color:var(--dim)" id="statGrowthDetail"></div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Revenue</div>
+      <div class="text-2xl font-bold" style="color:var(--warn)" id="statRevenue">–</div>
+      <div style="font-size:.65rem;color:var(--dim)">combined</div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.25rem">Mkt Cap</div>
+      <div class="text-2xl font-bold" style="color:var(--accent2)" id="statMcap">–</div>
+      <div style="font-size:.65rem;color:var(--dim)">combined</div>
+    </div>
+  </div>
+
+  <!-- Category pills -->
+  <div id="catPills" class="flex flex-wrap gap-2 mb-4"></div>
+
+  <!-- Scoring weights panel -->
+  <div class="card p-3 mb-4" id="weightPanel" style="display:none">
+    <div style="font-size:.65rem;color:var(--dim);letter-spacing:.05em;margin-bottom:.5rem">SCORING WEIGHTS — drag any factor to 0 to exclude it entirely from ranking</div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
+      <div class="weight-row"><span class="weight-label">Quality</span><input type="range" class="weight-bar" id="wQ" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wQv">5</span></div>
+      <div class="weight-row"><span class="weight-label">Value</span><input type="range" class="weight-bar" id="wV" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wVv">5</span></div>
+      <div class="weight-row"><span class="weight-label">Growth</span><input type="range" class="weight-bar" id="wG" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wGv">5</span></div>
+      <div class="weight-row"><span class="weight-label">Safety</span><input type="range" class="weight-bar" id="wS" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wSv">5</span></div>
+      <div class="weight-row"><span class="weight-label" title="Analyst consensus. Set to 0 to ignore entirely.">Analyst</span><input type="range" class="weight-bar" id="wA" min="0" max="10" value="0" oninput="onWeightChange()"><span class="weight-val" id="wAv">0</span></div>
+    </div>
+    <div style="font-size:.62rem;color:var(--dim);margin-top:.4rem" id="weightDesc">Equal weights (default)</div>
+  </div>
+
+  <!-- Filters row -->
+  <div class="flex flex-wrap gap-2 mb-4 items-center">
+    <div class="inp-wrap flex-1" style="min-width:180px;max-width:280px"><input id="searchBox" type="text" placeholder="Search name or symbol…" style="width:100%" oninput="debounceReset()"></div>
+    <div class="inp-wrap"><select id="sectorFilter" onchange="resetAndLoad()"><option value="">All Sectors</option></select></div>
+    <div class="inp-wrap"><select id="catFilter" onchange="resetAndLoad()">
+      <option value="">All Categories</option>
+      <option value="EXCELLENT">Excellent</option><option value="GOOD">Good</option>
+      <option value="FAIR">Fair</option><option value="POOR">Poor</option><option value="RISKY">Risky</option>
+    </select></div>
+    <div class="inp-wrap"><select id="sortBy" onchange="onSortSelect()">
+      <option value="overall_score">Overall Score</option>
+      <option value="quality_score">Quality</option>
+      <option value="value_score">Value</option>
+      <option value="growth_score">Growth</option>
+      <option value="safety_score">Safety</option>
+      <option value="tenx_score">10x Score</option>
+      <option value="oeps_cagr">OEPS CAGR</option>
+      <option value="roic">ROIC</option>
+      <option value="revenue_cagr">Rev CAGR</option>
+      <option value="revenue">Revenue</option>
+      <option value="market_cap">Mkt Cap</option>
+      <option value="roe">ROE</option>
+      <option value="pe_ratio">P/E (asc)</option>
+      <option value="peg_ratio">PEG (asc)</option>
+      <option value="symbol">A → Z</option>
+    </select></div>
+    <button onclick="toggleWeights()" class="run-btn" style="padding:.3rem .6rem;font-size:.65rem" id="weightBtn">Weights</button>
+    <div class="inp-wrap" style="width:96px"><input id="minScore" type="number" placeholder="min score" min="0" max="20" style="width:100%" oninput="debounceReset()"></div>
+    <span style="color:var(--dim);font-size:.68rem" id="resultCount"></span>
+  </div>
+
+  <!-- Table -->
+  <div class="card overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full" style="font-size:.8rem">
+        <thead>
+          <tr>
+            <th id="th_rank" class="px-2 text-left w-6" style="width:28px">#</th>
+            <th id="th_symbol" onclick="thSort('symbol')" class="px-2 text-left" title="Ticker. Click to sort A–Z.">Symbol</th>
+            <th id="th_name" class="px-2 text-left" title="Company name.">Name</th>
+            <th id="th_sector" class="px-2 text-left" title="GICS sector.">Sector</th>
+            <th id="th_score" onclick="thSort('overall_score')" class="px-2 text-center sort-active sort-desc" title="Overall score 0–20. Hover any score cell for full metric breakdown.">Score</th>
+            <th id="th_growth" onclick="thSort('growth_score')" class="px-2 text-center" title="Growth sub-score 0–5. OEPS CAGR 35% + ROIC 20% + Rev CAGR 20% + Gross Margin 10% + Margin Expansion 8% + Rev Acceleration 7%.">Growth</th>
+            <th id="th_qvgs" class="px-2 text-center hidden md:table-cell" title="Quality (ROE, Piotroski, FCF conversion) · Value (P/E, P/B, FCF yield, EV/EBITDA) · Growth (OEPS CAGR, ROIC, Rev CAGR) · Safety (Altman Z, current ratio, D/E)">Q·V·G·S</th>
+            <th id="th_rev" onclick="thSort('revenue')" class="px-2 text-right hidden lg:table-cell" title="Trailing twelve-month revenue (billions USD).">Rev</th>
+            <th id="th_pe" onclick="thSort('pe_ratio')" class="px-2 text-right hidden lg:table-cell" title="P/E ratio. Hover cell for P/B and FCF yield.">P/E</th>
+            <th id="th_roe" onclick="thSort('roe')" class="px-2 text-right hidden xl:table-cell" title="Return on equity. Hover cell for D/E ratio and current ratio.">ROE</th>
+            <th id="th_mcap" onclick="thSort('market_cap')" class="px-2 text-right hidden xl:table-cell" title="Market capitalisation (billions USD).">Mkt Cap</th>
+            <th id="th_tenx" onclick="thSort('tenx_score')" class="px-2 text-center hidden xl:table-cell" title="Multi-bagger candidate score 0–100: ROIC (25) + Rev CAGR (25) + PEG ratio (20) + Margin Expansion (15) + Rev Acceleration (10) + small-cap bonus (5).">10x</th>
+            <th id="th_analyst" onclick="thSort('analyst')" class="px-2 text-center hidden xl:table-cell" title="Analyst consensus rating 1–5 from EODHD. One signal among many — set Analyst weight to 0 in Weights panel to exclude from scoring.">Analysts</th>
+          </tr>
+        </thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+    <div id="loadMore" class="flex justify-center py-5">
+      <div id="spinner" class="hidden" style="color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:.75rem">LOADING<span class="blink">_</span></div>
+      <div id="endMsg" class="hidden" style="color:var(--dim);font-size:.7rem;letter-spacing:.1em">// END OF DATA //</div>
+    </div>
+    <div id="sentinel"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PAGE = 50;
+let offset = 0, loading = false, exhausted = false;
+
+/* ── Sort state ──────────────────────────────────────────── */
+let _sortCol = 'overall_score';
+let _sortDir = 'desc';
+
+const TH_MAP = {
+  'symbol':'th_symbol','overall_score':'th_score','growth_score':'th_growth',
+  'quality_score':'th_qvgs','revenue':'th_rev','pe_ratio':'th_pe',
+  'roe':'th_roe','market_cap':'th_mcap','tenx_score':'th_tenx',
+  'analyst':'th_analyst'
+};
+
+function thSort(col) {
+  if (_sortCol === col) {
+    _sortDir = _sortDir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _sortCol = col;
+    _sortDir = 'desc';
+  }
+  // sync dropdown
+  const sel = $('sortBy');
+  if ([...sel.options].some(o => o.value === col)) sel.value = col;
+  _updateSortUI();
+  resetAndLoad();
+}
+
+function onSortSelect() {
+  _sortCol = $('sortBy').value;
+  _sortDir = ['pe_ratio','peg_ratio','symbol'].includes(_sortCol) ? 'asc' : 'desc';
+  _updateSortUI();
+  resetAndLoad();
+}
+
+function _updateSortUI() {
+  document.querySelectorAll('th').forEach(th => {
+    th.classList.remove('sort-active','sort-asc','sort-desc');
+  });
+  const id = TH_MAP[_sortCol];
+  if (id) {
+    const th = $(id);
+    if (th) { th.classList.add('sort-active', _sortDir === 'asc' ? 'sort-asc' : 'sort-desc'); }
+  }
+}
+
+/* ── Weight panel ─────────────────────────────────────────── */
+function toggleWeights() {
+  const p = $('weightPanel');
+  const visible = p.style.display !== 'none';
+  p.style.display = visible ? 'none' : 'block';
+  $('weightBtn').style.color = visible ? '' : 'var(--fg)';
+}
+
+function onWeightChange() {
+  const labels = ['Q','V','G','S','A'];
+  const vals = labels.map(k => { const v = parseInt($('w'+k).value); $('w'+k+'v').textContent = v; return v; });
+  const allDefault = vals[0]===5 && vals[1]===5 && vals[2]===5 && vals[3]===5 && vals[4]===0;
+  $('weightDesc').textContent = allDefault
+    ? 'Equal weights (default)'
+    : `Q:${vals[0]}  V:${vals[1]}  G:${vals[2]}  S:${vals[3]}  Analyst:${vals[4]}`;
+  debounceReset();
+}
+
+const BADGE = {
+  EXCELLENT: 'badge badge-excellent',
+  GOOD:      'badge badge-good',
+  FAIR:      'badge badge-fair',
+  POOR:      'badge badge-poor',
+  RISKY:     'badge badge-risky',
+};
+
+function badgeHtml(cat) {
+  return `<span class="${BADGE[cat] || 'badge badge-poor'}">${cat}</span>`;
+}
+
+function scoreColor(s){
+  if(s>=15) return 'var(--pos)';
+  if(s>=11) return 'var(--accent2)';
+  if(s>=7)  return 'var(--warn)';
+  if(s>=4)  return 'var(--neg)';
+  return '#c084fc';
+}
+
+function tenxHtml(c) {
+  const tx = c.tenx_score || 0;
+  if (tx <= 0) return '<span style="color:var(--border);font-size:.65rem">\u2013</span>';
+  const clr = tx >= 60 ? 'var(--pos)' : tx >= 35 ? 'var(--warn)' : 'var(--dim)';
+  const peg  = c.peg_ratio > 0 ? `PEG ${c.peg_ratio.toFixed(1)}` : '';
+  const acc  = c.revenue_acceleration_pct ? `Acc ${c.revenue_acceleration_pct > 0 ? '+' : ''}${c.revenue_acceleration_pct.toFixed(0)}%` : '';
+  const tip  = `10x Score: ${tx}/100\n${peg}  ${acc}\nROIC ${(c.roic_pct||0).toFixed(0)}%  Rev CAGR ${(c.revenue_cagr_3y_pct||0).toFixed(0)}%`;
+  return `<div title="${tip}" style="text-align:center">
+    <div style="font-size:.8rem;font-weight:700;color:${clr}">${tx.toFixed(0)}</div>
+    ${peg ? `<div style="color:var(--dim);font-size:.58rem">${peg}</div>` : ''}
+  </div>`;
+}
+
+function subBadge(label, val, color) {
+  const alpha = Math.round(40 + (val/5)*80);
+  return `<span style="background:${color}22;color:${color};border:1px solid ${color}44" title="${label}:${val.toFixed(1)}/5">${label}<b>${val.toFixed(1)}</b></span>`;
+}
+
+function analystHtml(c) {
+  const ar = c.analyst_ratings;
+  if (!ar || !ar.rating) return '<span style="color:var(--dim);font-size:.65rem">–</span>';
+  const r = parseFloat(ar.rating);
+  const cls = r<=2.5?'analyst-bull':r<=3.5?'analyst-hold':'analyst-bear';
+  const label = r<=1.5?'Strong Buy':r<=2.5?'Buy':r<=3.5?'Hold':r<=4.5?'Sell':'Strong Sell';
+  const cnt = ar.total_analysts || 0;
+  return `<div class="${cls}" style="font-size:.7rem;font-weight:600" title="${cnt} analyst${cnt!==1?'s':''}: ${ar.rating_detail||label} (${r.toFixed(1)}/5)">${label}<span style="color:var(--dim);font-size:.58rem;margin-left:.2rem">${cnt>0?cnt:''}</span></div>`;
+}
+
+function fmtNum(n, dec=1) { return n == null ? '–' : n.toFixed(dec); }
+
+function rowHtml(c, rank) {
+  const sc = scoreColor(c.overall_score);
+  const gs = c.growth_score || 0;
+  const gc = scoreColor(gs * 4);
+  const breakdown = `<div class="qvgs flex gap-1 justify-center flex-wrap">
+    ${subBadge('Q',c.quality_score,'#06b6d4')}
+    ${subBadge('V',c.value_score,'#f59e0b')}
+    ${subBadge('G',c.growth_score,'#3b82f6')}
+    ${subBadge('S',c.safety_score,'#22c55e')}
+  </div>`;
+  const growthTip = `Growth ${fmtNum(gs)}/5\nOEPS CAGR: ${fmtNum(c.oeps_cagr_pct)}%\nROIC: ${fmtNum(c.roic_pct)}%\nRev CAGR 3y: ${fmtNum(c.revenue_cagr_3y_pct)}%\nGross Margin: ${fmtNum(c.gross_margin_pct)}%\nMargin Expansion: ${c.gross_margin_expansion_pp > 0 ? '+' : ''}${fmtNum(c.gross_margin_expansion_pp)}pp\nRev Acceleration: ${c.revenue_acceleration_pct > 0 ? '+' : ''}${fmtNum(c.revenue_acceleration_pct)}%`;
+  const scoreTip = `Score ${fmtNum(c.overall_score)}/20\n\nQuality ${fmtNum(c.quality_score)}/5\n  ROE ${fmtNum(c.roe_pct)}%  Piotroski ${c.piotroski||0}/9  FCF conv ${fmtNum(c.fcf_conversion)}x\n\nValue ${fmtNum(c.value_score)}/5\n  P/E ${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : 'N/A'}  P/B ${fmtNum(c.pb_ratio)}  FCF Yield ${fmtNum(c.fcf_yield_pct)}%\n\nGrowth ${fmtNum(c.growth_score)}/5\n  OEPS CAGR ${fmtNum(c.oeps_cagr_pct)}%  ROIC ${fmtNum(c.roic_pct)}%  Rev CAGR ${fmtNum(c.revenue_cagr_3y_pct)}%\n\nSafety ${fmtNum(c.safety_score)}/5\n  Altman Z ${fmtNum(c.altman_z)}  D/E ${fmtNum(c.debt_to_equity)}  Curr Ratio ${fmtNum(c.current_ratio)}`;
+  return `<tr>
+    <td class="px-2 py-1.5" style="color:var(--border);font-size:.62rem">${rank}</td>
+    <td class="px-2 py-1.5">
+      <a href="/company/${c.symbol}" style="color:var(--accent);font-size:.75rem;font-weight:700;letter-spacing:.03em">${c.symbol}</a>
+    </td>
+    <td class="px-2 py-1.5" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.72rem" title="${c.name}">${c.name}</td>
+    <td class="px-2 py-1.5" style="color:var(--dim);font-size:.62rem;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.sector}</td>
+    <td class="px-2 py-1.5 text-center" title="${scoreTip}">
+      <span style="font-size:.9rem;font-weight:700;color:${sc}">${fmtNum(c.overall_score)}</span>
+      <span style="margin-left:.3rem">${badgeHtml(c.category)}</span>
+    </td>
+    <td class="px-2 py-1.5 text-center" title="${growthTip}">
+      <span style="font-size:.88rem;font-weight:600;color:${gc}">${fmtNum(gs)}</span>
+      ${c.roic_pct > 0 ? `<span style="color:var(--dim);font-size:.6rem;margin-left:.25rem">R${fmtNum(c.roic_pct,0)}%</span>` : ''}
+    </td>
+    <td class="px-2 py-1.5 text-center hidden md:table-cell">${breakdown}</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:var(--fg);font-size:.72rem" title="Revenue: $${fmtNum(c.revenue_b)}B TTM">$${fmtNum(c.revenue_b)}B</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:var(--dim);font-size:.72rem" title="P/E: ${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : 'N/A'}  |  P/B: ${fmtNum(c.pb_ratio)}  |  FCF Yield: ${fmtNum(c.fcf_yield_pct)}%">${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : '–'}</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem" title="ROE: ${fmtNum(c.roe_pct)}%  |  D/E: ${fmtNum(c.debt_to_equity)}  |  Curr Ratio: ${fmtNum(c.current_ratio)}">${fmtNum(c.roe_pct)}%</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem">$${fmtNum(c.market_cap_b)}B</td>
+    <td class="px-2 py-1.5 text-center hidden xl:table-cell">${tenxHtml(c)}</td>
+    <td class="px-2 py-1.5 text-center hidden xl:table-cell">${analystHtml(c)}</td>
+  </tr>`;
+}
+
+function getParams() {
+  return new URLSearchParams({
+    limit:      PAGE,
+    offset:     offset,
+    sort_by:    _sortCol,
+    sort_order: _sortDir,
+    sector:     $('sectorFilter').value,
+    category:   $('catFilter').value,
+    min_score:  $('minScore').value || 0,
+    search:     $('searchBox').value,
+    wq: $('wQ').value,
+    wv: $('wV').value,
+    wg: $('wG').value,
+    ws: $('wS').value,
+    wa: $('wA').value,
+  });
+}
+
+async function loadPage() {
+  if (loading || !hasMore) return;
+  loading = true;
+  $('spinner').classList.remove('hidden');
+  $('endMsg').classList.add('hidden');
+
+  try {
+    const r = await fetch('/api/companies?' + getParams());
+    const d = await r.json();
+    total   = d.total;
+    hasMore = d.has_more;
+    $('resultCount').textContent = `${total} result${total !== 1 ? 's' : ''}`;
+
+    const tbody = $('tableBody');
+    d.companies.forEach((c, i) => {
+      tbody.insertAdjacentHTML('beforeend', rowHtml(c, offset + i + 1));
+    });
+
+    offset += d.companies.length;
+
+    if (!hasMore) {
+      $('endMsg').classList.remove('hidden');
+    }
+  } catch (e) {
+    console.error(e);
+  } finally {
+    loading = false;
+    $('spinner').classList.add('hidden');
+  }
+}
+
+function resetAndLoad() {
+  offset = 0; total = 0; hasMore = true;
+  $('tableBody').innerHTML = '';
+  $('endMsg').classList.add('hidden');
+  loadPage();
+}
+
+function debounceReset() {
+  clearTimeout(debTimer);
+  debTimer = setTimeout(resetAndLoad, 350);
+}
+
+/* Infinite scroll via IntersectionObserver */
+const observer = new IntersectionObserver(entries => {
+  if (entries[0].isIntersecting) loadPage();
+}, { rootMargin: '300px' });
+observer.observe($('sentinel'));
+
+/* Summary cards */
+async function loadSummary() {
+  try {
+    const r = await fetch('/api/summary');
+    const d = await r.json();
+
+    $('statTotal').textContent = d.total_companies;
+    $('statSource').textContent = d.data_source;
+    $('statAvg').textContent = d.average_score.toFixed(1);
+    $('statTop').textContent  = d.top_overall?.symbol || '–';
+    $('statTopScore').textContent = d.top_overall?.score?.toFixed(1) + '/20';
+    $('statGrowth').textContent = d.top_growth?.symbol || '–';
+    $('statGrowthDetail').textContent = `Growth ${d.top_growth?.growth_score?.toFixed(1)}/5 · ROIC ${d.top_growth?.roic_pct?.toFixed(0)}%`;
+    $('statRevenue').textContent = '$' + d.total_revenue_b.toFixed(0) + 'B';
+    $('statMcap').textContent   = '$' + d.total_market_cap_t.toFixed(1) + 'T';
+    $('headerBadge').textContent = d.total_companies + ' Companies';
+
+    /* Category pills */
+    const cats = d.investment_categories || {};
+    const order = ['EXCELLENT','GOOD','FAIR','POOR','RISKY'];
+    $('catPills').innerHTML = order.filter(k => cats[k]).map(k =>
+      `<button onclick="setCat('${k}')" data-cat="${k}" class="${BADGE[k]}" style="cursor:pointer;padding:.2rem .7rem;opacity:0.55;transition:opacity .15s">${k} <span style="opacity:.7">(${cats[k]})</span></button>`
+    ).join('');
+
+    /* Sector dropdown */
+    const sel = $('sectorFilter');
+    Object.keys(d.sectors).sort().forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = `${s} (${d.sectors[s]})`;
+      sel.appendChild(o);
+    });
+
+    // Handle ?sector= query param
+    const sp = new URLSearchParams(location.search);
+    if (sp.get('sector')) { sel.value = sp.get('sector'); }
+
+  } catch(e) { console.error(e); }
+}
+
+function setCat(cat) {
+  const cur = $('catFilter').value;
+  $('catFilter').value = (cur === cat) ? '' : cat;
+  // Update pill active states
+  document.querySelectorAll('#catPills button').forEach(btn => {
+    const active = btn.dataset.cat === $('catFilter').value;
+    btn.style.opacity = active ? '1' : '0.55';
+    btn.style.outline = active ? '1px solid currentColor' : 'none';
+    btn.style.outlineOffset = '2px';
+  });
+  resetAndLoad();
+}
+
+loadSummary().then(() => resetAndLoad());
+
+/* ── Progress popup ── */
+function openRunModal() {
+  $('progressModal').classList.add('open');
+  checkProgress();
+}
+function closeProgressModal() {
+  $('progressModal').classList.remove('open');
+}
+
+let _progressTimer = null;
+
+async function startAnalysis() {
+  const btn = $('runBtn');
+  btn.disabled = true;
+  btn.textContent = 'Running…';
+  try {
+    const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:2000, workers:20}) });
+    const d = await r.json();
+    if (d.error) {
+      if (d.error.toLowerCase().includes('already running')) {
+        $('progressModal').classList.add('open');
+        scheduleProgressPoll();
+        btn.disabled = true;
+        btn.textContent = 'Running…';
+      } else {
+        alert(d.error);
+        btn.disabled=false;
+        btn.textContent='Run Analysis';
+      }
+      return;
+    }
+    // Start polling
+    $('progressModal').classList.add('open');
+    scheduleProgressPoll();
+  } catch(e) { alert('Failed to start: '+e); btn.disabled=false; btn.textContent='Run Analysis'; }
+}
+
+function scheduleProgressPoll() {
+  clearTimeout(_progressTimer);
+  _progressTimer = setTimeout(checkProgress, 1200);
+}
+
+async function checkProgress() {
+  try {
+    const r = await fetch('/api/analysis/progress');
+    const d = await r.json();
+    renderProgress(d);
+    if (d.running) scheduleProgressPoll();
+    else {
+      $('runBtn').disabled = false;
+      $('runBtn').textContent = 'Run Analysis';
+      // Auto-reload table when done
+      setTimeout(() => { resetAndLoad(); loadSummary(); }, 800);
+    }
+  } catch(e) { scheduleProgressPoll(); }
+}
+
+function renderProgress(d) {
+  const pct = d.pct || 0;
+  $('progFill').style.width = pct + '%';
+  $('progPct').textContent  = pct.toFixed(1) + '%';
+  $('progDone').textContent = `${d.done || 0} / ${d.total || '?'}`;
+  $('progSuccess').textContent = d.successful || 0;
+  $('progFailed').textContent  = d.failed || 0;
+  if (d.last_sym) {
+    const score = d.last_score > 0 ? ` · ${d.last_score}/20` : '';
+    $('progLast').textContent = d.last_sym + score;
+  }
+  const statusTxt = d.running
+    ? `Scanning universe\u2026 ${d.done}/${d.total} (${(d.pct||0).toFixed(1)}%)`
+    : (d.total > 0
+        ? `Scan complete \u2014 ${d.successful||d.done} analyzed, ${d.failed||0} failed`
+        : 'Ready \u2014 click Execute Scan to begin');
+  $('progStatus').textContent = statusTxt;
+  $('progStatus').style.color = d.running ? 'var(--accent2)' : 'var(--pos)';
+}
+
+// Check on load in case a run is already in progress
+(async () => {
+  const r = await fetch('/api/analysis/progress').catch(()=>null);
+  if (!r) return;
+  const d = await r.json().catch(()=>({}));
+  if (d.running) {
+    $('runBtn').disabled = true;
+    $('runBtn').textContent = 'Running…';
+    $('progressModal').classList.add('open');
+    scheduleProgressPoll();
+  }
+})();
+</script>
+
+<!-- Progress popup modal -->
+<div id="progressModal">
+  <div id="progressBox">
+    <div class="flex items-center justify-between mb-5">
+      <div style="font-size:.8rem;font-weight:700;color:var(--fg);letter-spacing:.04em">Analysis Progress</div>
+      <button onclick="closeProgressModal()" style="color:var(--dim);font-size:.85rem;background:none;border:none;cursor:pointer;padding:.2rem .4rem" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">&#x2715;</button>
+    </div>
+    <div id="progStatus" style="color:var(--pos);font-size:.75rem;margin-bottom:1rem">–</div>
+    <div class="prog-bar-track mb-2">
+      <div class="prog-bar-fill" id="progFill" style="width:0%"></div>
+    </div>
+    <div class="flex justify-between mb-5" style="font-size:.7rem">
+      <span id="progDone" style="color:var(--dim)">0 / ?</span>
+      <span id="progPct" style="color:var(--accent);font-weight:700">0.0%</span>
+    </div>
+    <div class="grid grid-cols-2 gap-3 mb-5">
+      <div style="background:var(--muted);border:1px solid var(--border);padding:.65rem;border-radius:2px">
+        <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;text-transform:uppercase;margin-bottom:.2rem">Analyzed</div>
+        <div style="color:var(--pos);font-weight:700" id="progSuccess">–</div>
+      </div>
+      <div style="background:var(--muted);border:1px solid var(--border);padding:.65rem;border-radius:2px">
+        <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;text-transform:uppercase;margin-bottom:.2rem">Skipped</div>
+        <div style="color:var(--dim);font-weight:700" id="progFailed">–</div>
+      </div>
+    </div>
+    <div style="color:var(--dim);font-size:.65rem;margin-bottom:1.25rem">Last: <span id="progLast" style="color:var(--accent2)">–</span></div>
+    <div class="flex gap-3">
+      <button class="run-btn flex-1" onclick="startAnalysis()" id="startBtn">Execute Scan</button>
+      <button onclick="closeProgressModal()" class="run-btn flex-1" style="border-color:var(--border);color:var(--dim)" onmouseover="this.style.borderColor='var(--dim)'" onmouseout="this.style.borderColor='var(--border)'">Close</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,1 @@
+"""Local CSV source adapters."""

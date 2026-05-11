@@ -1,0 +1,1 @@
+"""Macro enrichment source placeholders."""

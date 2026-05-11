@@ -1,0 +1,1 @@
+"""ESEF research adapter placeholder."""

@@ -1,0 +1,1 @@
+"""Equity sorter package."""

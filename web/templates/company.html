@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>{{ company.symbol }} // Equity OS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<style>
+  :root{
+    --bg:#0a0a0f;--card:#12121a;--muted:#1c1c2e;--fg:#e0e0e0;
+    --accent:#00ff88;--accent2:#ff00ff;--accent3:#00d4ff;
+    --border:#2a2a3a;--dim:#6b7280;
+    --glow-sm:0 0 4px #00ff88,0 0 8px #00ff8840;
+    --glow:0 0 6px #00ff88,0 0 14px #00ff8860;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace;
+    background-image:linear-gradient(rgba(0,255,136,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,136,.02) 1px,transparent 1px);
+    background-size:48px 48px;}
+  .card{background:var(--card);border:1px solid var(--border);
+    clip-path:polygon(0 8px,8px 0,calc(100% - 8px) 0,100% 8px,100% calc(100% - 8px),calc(100% - 8px) 100%,8px 100%,0 calc(100% - 8px));}
+  .card:hover{border-color:var(--accent)50;transition:border-color .2s}
+  .stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.78rem}
+  .stat-row:last-child{border:none}
+  .stat-label{color:var(--dim);letter-spacing:.04em}
+  .tag{display:inline-block;padding:.1rem .5rem;font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    clip-path:polygon(0 3px,3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px));}
+  .bull{color:var(--accent)} .hold{color:#ffaa00} .bear{color:#ff4455}
+  canvas{max-height:220px}
+  [title]{cursor:help}
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--accent)40;border-radius:0}
+  @keyframes blink{50%{opacity:0}}
+  @keyframes rgbShift{0%,100%{text-shadow:-1px 0 var(--accent2),1px 0 var(--accent3)}50%{text-shadow:1px 0 var(--accent2),-1px 0 var(--accent3)}}
+  .cyber-title{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacing:.15em;color:var(--accent);animation:rgbShift 4s ease-in-out infinite}
+  .blink{animation:blink 1s step-end infinite}
+</style>
+<body class="min-h-screen">
+<!-- Nav -->
+<nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(10,10,15,.92);backdrop-filter:blur(12px);border-bottom:1px solid #00ff8830">
+  <div class="flex items-center gap-4">
+    <a href="/" style="color:var(--dim);font-size:.75rem;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;display:flex;align-items:center;gap:.35rem" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--dim)'">
+      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+      &lt; BACK
+    </a>
+    <span style="color:var(--border)">/</span>
+    <span style="font-family:'Orbitron',monospace;font-size:.9rem;color:var(--accent);text-shadow:0 0 8px var(--accent)60;letter-spacing:.1em">{{ company.symbol }}</span>
+    <span style="color:var(--dim);font-size:.72rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="hidden md:inline">{{ company.name }}</span>
+  </div>
+  <div class="flex items-center gap-2">
+    <span class="tag" style="background:#001a33;color:var(--accent3);border:1px solid var(--accent3)40">{{ company.sector }}</span>
+    <span class="tag" style="background:#001a22;color:var(--accent);border:1px solid var(--accent)40">{{ company.data_quality.quality }}</span>
+  </div>
+</nav>
+
+<!-- Main -->
+<main class="px-4 md:px-6 py-6 max-w-screen-xl mx-auto">
+
+  <!-- Top hero row -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+
+    <!-- Left: overview + description -->
+    <div class="card p-5 lg:col-span-2">
+      <div class="flex flex-wrap items-start gap-4 mb-4">
+        <div>
+          <h1 style="font-family:'Orbitron',monospace;font-size:2rem;font-weight:900;color:var(--accent);text-shadow:0 0 12px var(--accent)60;letter-spacing:.08em">{{ company.symbol }}</h1>
+          <div style="color:var(--dim);font-size:.8rem;margin-top:.15rem">{{ company.name }}</div>
+          <div style="color:var(--border);font-size:.68rem;margin-top:.1rem">{{ company.industry or '' }} &nbsp;·&nbsp; {{ company.exchange or 'US' }}</div>
+        </div>
+        <div class="ml-auto text-right">
+          <div id="liveMcap" style="font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:700;color:var(--accent3)">–</div>
+          <div style="color:var(--dim);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase">&gt; MKT.CAP</div>
+          <div id="livePE" style="color:var(--fg);font-size:.8rem;margin-top:.4rem">P/E –</div>
+        </div>
+      </div>
+      <p style="color:var(--dim);font-size:.75rem;line-height:1.65;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden" id="descText">
+        {{ company.company_info.description or 'No description available.' }}
+      </p>
+    </div>
+
+    <!-- Right: score card -->
+    <div class="card p-5 flex flex-col items-center justify-center text-center">
+      {% set sc = company.investment_scores %}
+      {% set cat = sc.investment_category %}
+      <div style="font-family:'Orbitron',monospace;font-size:2.8rem;font-weight:900;margin-bottom:.25rem;
+        {% if cat=='EXCELLENT' %}color:#00ff88;text-shadow:0 0 16px #00ff8880
+        {% elif cat=='GOOD' %}color:#00d4ff;text-shadow:0 0 16px #00d4ff80
+        {% elif cat=='FAIR' %}color:#ffaa00;text-shadow:0 0 16px #ffaa0080
+        {% elif cat=='POOR' %}color:#ff4455;text-shadow:0 0 16px #ff445580
+        {% else %}color:#ff00ff;text-shadow:0 0 16px #ff00ff80{% endif %}">
+        {{ sc.overall_score }}
+      </div>
+      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem">&gt; SCORE / 20</div>
+      <span class="tag mb-5"
+        style="{% if cat=='EXCELLENT' %}background:#003322;color:#00ff88;border:1px solid #00ff8860
+        {% elif cat=='GOOD' %}background:#001a33;color:#00d4ff;border:1px solid #00d4ff60
+        {% elif cat=='FAIR' %}background:#2a1500;color:#ffaa00;border:1px solid #ffaa0060
+        {% elif cat=='POOR' %}background:#1a0000;color:#ff4455;border:1px solid #ff445560
+        {% else %}background:#1a0033;color:#ff00ff;border:1px solid #ff00ff60{% endif %}">
+        {{ cat }}
+      </span>
+      <div class="w-full space-y-2 text-left">
+        {% for label, val, color in [('Quality', sc.quality_score, '#00d4ff'),('Value', sc.value_score, '#ffaa00'),('Growth', sc.growth_score, '#ff00ff'),('Safety', sc.safety_score, '#00ff88')] %}
+        <div class="flex items-center gap-2" style="font-size:.72rem">
+          <span style="color:var(--dim);width:3.2rem">{{ label }}</span>
+          <div style="flex:1;background:var(--muted);height:4px;position:relative">
+            <div style="width:{{ (val/5*100)|int }}%;height:100%;background:{{ color }};box-shadow:0 0 4px {{ color }}80"></div>
+          </div>
+          <span style="color:var(--fg);width:1.4rem;text-align:right">{{ val }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- KPI row -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+    {% set m = company.financial_metrics %}
+    {% set ci = company.company_info %}
+    {% for label, val in [
+        ('REVENUE', '$'+('%.1f'|format(m.revenue_b))+'B'),
+        ('NET INCOME', '$'+('%.1f'|format(m.net_income_b))+'B'),
+        ('GROSS MARGIN', ('%.1f'|format(m.gross_margin_pct))+'%'),
+        ('NET MARGIN', ('%.1f'|format(m.net_margin_pct))+'%'),
+        ('ROE', ('%.1f'|format(m.roe_pct))+'%'),
+        ('ROIC', ('%.1f'|format(m.roic_pct))+'%')
+    ] %}
+    <div class="card p-3 text-center">
+      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:.3rem">&gt; {{ label }}</div>
+      <div style="color:var(--fg);font-weight:700;font-family:'Orbitron',monospace;font-size:.9rem">{{ val }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="card p-4">
+      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; REVENUE &amp; NET_INCOME (annual $B)</div>
+      <canvas id="chartRevenue"></canvas>
+      <div id="revLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; EPS &amp; OWNER_EARNINGS / SHARE (annual)</div>
+      <canvas id="chartEPS"></canvas>
+      <div id="epsLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="card p-4">
+      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; FCF &amp; OWNER_EARNINGS (annual $B)</div>
+      <canvas id="chartFCF"></canvas>
+      <div id="fcfLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+    </div>
+    <div class="card p-4">
+      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; GROSS_MARGIN &amp; NET_MARGIN % (annual)</div>
+      <canvas id="chartMargin"></canvas>
+      <div id="marginLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+    </div>
+  </div>
+
+  <!-- Analyst + Metrics detail -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+
+    <!-- Analyst consensus -->
+    <div class="card p-5">
+      <div class="flex items-center gap-2 mb-4">
+        <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">&gt; ANALYST_CONSENSUS</div>
+        <span style="color:#ffaa00;font-size:.65rem" title="Peter Lynch: When analysts finally discover a stock, the easy money is usually already made.">⚠ LYNCH</span>
+      </div>
+      <div id="analystBlock">
+        <div style="color:var(--border);font-size:.7rem">LOADING<span style="animation:blink 1s step-end infinite">_</span></div>
+      </div>
+    </div>
+
+    <!-- Valuation -->
+    <div class="card p-5">
+      <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-bottom:.75rem">&gt; VALUATION</div>
+      <div class="stat-row"><span class="stat-label">P/E Ratio</span><span>{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">P/B Ratio</span><span>{{ '%.2f'|format(m.pb_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">P/S Ratio</span><span>{{ '%.2f'|format(m.ps_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">–</span></div>
+      <div class="stat-row"><span class="stat-label">OEPS CAGR</span><span class="{{ 'bull' if m.oeps_cagr_pct > 0 else 'bear' }}">{{ '%.1f'|format(m.oeps_cagr_pct) }}%</span></div>
+    </div>
+
+    <!-- Health -->
+    <div class="card p-5">
+      <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-bottom:.75rem">&gt; FINANCIAL_HEALTH</div>
+      <div class="stat-row"><span class="stat-label">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">Altman Z</span><span>{{ '%.1f'|format(m.altman_z_score or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label">Piotroski</span><span>{{ m.piotroski_score or 0 }}/9</span></div>
+      <div class="stat-row"><span class="stat-label">Rev Growth 1Y</span>
+        <span class="{{ 'bull' if m.revenue_growth_1y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_growth_1y_pct) }}%</span>
+      </div>
+      <div class="stat-row"><span class="stat-label">Rev CAGR 3Y</span>
+        <span class="{{ 'bull' if m.revenue_cagr_3y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_cagr_3y_pct) }}%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data quality footer -->
+  <div class="card p-4 flex flex-wrap gap-6" style="font-size:.72rem">
+    <span style="color:var(--dim)">&gt; INCOME_STMT: <b style="color:var(--accent3)">{{ company.data_quality.income_statement }}</b> qtrs</span>
+    <span style="color:var(--dim)">&gt; BALANCE: <b style="color:var(--accent3)">{{ company.data_quality.balance_sheet }}</b> qtrs</span>
+    <span style="color:var(--dim)">&gt; CASHFLOW: <b style="color:var(--accent3)">{{ company.data_quality.cash_flow }}</b> qtrs</span>
+    <span style="color:var(--dim)">&gt; QUALITY: <b style="color:var(--accent)">{{ company.data_quality.quality }}</b></span>
+  </div>
+
+</main>
+
+<script>
+const SYM = '{{ company.symbol }}';
+const CHARTJS_DEFAULTS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: '#6b7280', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
+  scales: {
+    x: { ticks: { color: '#3a3a4a', font: { size: 9 } }, grid: { color: '#1c1c2e' } },
+    y: { ticks: { color: '#3a3a4a', font: { size: 9 } }, grid: { color: '#1c1c2e' } }
+  }
+};
+
+function mkChart(id, type, labels, datasets) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  ctx.style.display = 'block';
+  new Chart(ctx, {
+    type,
+    data: { labels, datasets },
+    options: { ...CHARTJS_DEFAULTS }
+  });
+}
+
+function hideLoader(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+
+function renderAnalyst(ar) {
+  const el = document.getElementById('analystBlock');
+  if (!ar) { el.innerHTML = '<div style="color:var(--border);font-size:.7rem">NO_DATA // NULL</div>'; return; }
+  const r = ar.rating, sb = ar.strong_buy, b = ar.buy, h = ar.hold, s = ar.sell + ar.strong_sell;
+  const total = sb + b + h + s || 1;
+  const bullPct = Math.round((sb + b) / total * 100);
+  const label = r >= 4.5 ? 'STRONG_BUY' : r >= 3.5 ? 'BUY' : r >= 2.5 ? 'HOLD' : 'SELL';
+  const clr = r >= 4 ? 'var(--accent)' : r >= 3 ? '#ffaa00' : '#ff4455';
+  const tp = ar.target_price > 0 ? `<div class="stat-row"><span class="stat-label">Target Price</span><span style="color:var(--fg)">$${ar.target_price.toFixed(2)}</span></div>` : '';
+  el.innerHTML = `
+    <div style="font-family:'Orbitron',monospace;font-size:1.2rem;font-weight:900;color:${clr};text-shadow:0 0 10px ${clr}60;margin-bottom:.25rem">${label}</div>
+    <div style="color:var(--dim);font-size:.65rem;margin-bottom:.75rem">rating ${r.toFixed(2)}/5 &nbsp;·&nbsp; ${total} analysts</div>
+    <div style="background:var(--muted);height:5px;margin-bottom:.75rem;border:1px solid var(--border)">
+      <div style="width:${bullPct}%;height:100%;background:var(--accent);box-shadow:0 0 6px var(--accent)" title="${bullPct}% bullish"></div>
+    </div>
+    <div class="grid grid-cols-4 gap-1 text-center mb-3" style="font-size:.65rem">
+      <div><div style="color:var(--accent);font-weight:700;font-family:'Orbitron',monospace">${sb}</div><div style="color:var(--dim)">S.BUY</div></div>
+      <div><div style="color:#86efac;font-weight:700;font-family:'Orbitron',monospace">${b}</div><div style="color:var(--dim)">BUY</div></div>
+      <div><div style="color:#ffaa00;font-weight:700;font-family:'Orbitron',monospace">${h}</div><div style="color:var(--dim)">HOLD</div></div>
+      <div><div style="color:#ff4455;font-weight:700;font-family:'Orbitron',monospace">${s}</div><div style="color:var(--dim)">SELL</div></div>
+    </div>
+    ${tp}
+    <div style="margin-top:.75rem;padding:.5rem;background:#1a0f00;border:1px solid #ffaa0040;font-size:.65rem;color:#ffaa00">
+      ⚠ LYNCH_WARN: when analysts love a stock, the easy money is already made.
+    </div>`;
+}
+
+async function loadHistory() {
+  try {
+    const r = await fetch(`/api/company/${SYM}/history`);
+    const d = await r.json();
+    if (d.error) return;
+
+    // Update live KPIs
+    if (d.market_cap_b > 0) document.getElementById('liveMcap').textContent = '$' + d.market_cap_b.toFixed(1) + 'B';
+    if (d.pe_ttm > 0) document.getElementById('livePE').textContent = 'P/E ' + d.pe_ttm.toFixed(1);
+    if (d.eps_ttm) document.getElementById('fcfYield').textContent = '$' + d.eps_ttm.toFixed(2) + ' EPS TTM';
+
+    const hist = (d.history || []).slice().reverse(); // oldest first
+    if (!hist.length) return;
+    const yrs  = hist.map(h => h.year);
+    const revs = hist.map(h => h.revenue_b);
+    const nis  = hist.map(h => h.net_income_b);
+    const eps  = hist.map(h => h.eps);
+    const fcfs = hist.map(h => h.fcf_b);
+    const oes  = hist.map(h => h.owner_earnings_b);
+    const gm   = hist.map(h => h.gross_margin_pct);
+    const nm   = hist.map(h => h.net_margin_pct);
+
+    const barDataset = (label, data, color) => ({
+      label, data, backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3
+    });
+    const lineDataset = (label, data, color) => ({
+      label, data, borderColor: color, backgroundColor: color + '22',
+      pointRadius: 3, tension: 0.3, fill: true
+    });
+
+    hideLoader('revLoading');
+    mkChart('chartRevenue', 'bar', yrs, [barDataset('Revenue $B', revs, '#3b82f6'), barDataset('Net Income $B', nis, '#22c55e')]);
+
+    hideLoader('epsLoading');
+    const oepsSeries = hist.map(h => (h.oeps != null && h.oeps > 0) ? h.oeps : null);
+    mkChart('chartEPS', 'line', yrs, [lineDataset('EPS', eps, '#a855f7'), lineDataset('OEPS / share', oepsSeries, '#f59e0b')]);
+
+    hideLoader('fcfLoading');
+    mkChart('chartFCF', 'bar', yrs, [barDataset('FCF $B', fcfs, '#06b6d4'), barDataset('Owner Earnings $B', oes, '#f97316')]);
+
+    hideLoader('marginLoading');
+    mkChart('chartMargin', 'line', yrs, [lineDataset('Gross Margin %', gm, '#34d399'), lineDataset('Net Margin %', nm, '#f472b6')]);
+
+    renderAnalyst(d.analyst_ratings);
+  } catch(e) { console.error(e); }
+}
+
+// Update liveMcap from stored data if API slow
+document.addEventListener('DOMContentLoaded', () => {
+  loadHistory();
+});
+</script>
+</body>
+</html>
