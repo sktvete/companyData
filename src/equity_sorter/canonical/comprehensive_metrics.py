@@ -419,8 +419,9 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
 
     # ── Gross Margin Expansion (trend over 4–8 quarters) ─────────────────────
     if len(income_statement) >= 8:
-        def _gm(stmt): 
-            r = sg(stmt, _I_REVENUE); gp = sg(stmt, _I_GROSS_PROFIT)
+        def _gm(stmt):
+            r = sg(stmt, _I_REVENUE)
+            gp = _adjusted_gross_profit(stmt)
             return sd(gp, r) if r > 0 else None
         gm_now  = _gm(income_statement[0])
         gm_old  = _gm(income_statement[7])  # 2y back

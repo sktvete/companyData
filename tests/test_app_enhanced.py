@@ -704,5 +704,54 @@ class AnalysisRunApiTests(unittest.TestCase):
             _time.sleep(2.3)
 
 
+class EodhdFundamentalsHelpersTests(unittest.TestCase):
+    def test_merged_highlights_from_top_level(self) -> None:
+        d = {"Highlights": {}, "PERatio": 12.5, "EarningsShare": 8.74, "MarketCapitalization": 5e9}
+        h = ae._merged_highlights(d)
+        self.assertEqual(h.get("EarningsShare"), 8.74)
+        self.assertEqual(h.get("PERatio"), 12.5)
+        self.assertEqual(h.get("MarketCapitalization"), 5e9)
+
+    def test_merged_highlights_keeps_nested_when_present(self) -> None:
+        d = {"Highlights": {"PERatio": 10}, "PERatio": 12.0}
+        h = ae._merged_highlights(d)
+        self.assertEqual(h.get("PERatio"), 10)
+
+    def test_eodhd_adjust_gross_profit(self) -> None:
+        self.assertAlmostEqual(ae._eodhd_adjust_gross_profit(100.0, 100.0, 30.0), 70.0)
+        self.assertAlmostEqual(ae._eodhd_adjust_gross_profit(100.0, 50.0, 30.0), 50.0)
+
+    def test_build_ttm_uses_highlights_when_quarterly_eps_incomplete(self) -> None:
+        dates = ["2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31"]
+        q_inc = {}
+        q_cf = {}
+        for i, dt in enumerate(dates):
+            q_inc[dt] = {
+                "totalRevenue": 100.0,
+                "netIncome": 10.0,
+                "grossProfit": 40.0,
+                "costOfRevenue": 20.0,
+            }
+            if i < 2:
+                q_inc[dt]["dilutedEPS"] = 0.25
+            q_cf[dt] = {
+                "totalCashFromOperatingActivities": 25.0,
+                "capitalExpenditures": -2.0,
+                "stockBasedCompensation": 1.0,
+            }
+        out = ae._build_ttm_window(
+            q_inc,
+            q_cf,
+            {"SharesOutstanding": 10.0},
+            10.0,
+            [{"close": 100.0}],
+            trailing_years=1,
+            highlights={"EarningsShare": 4.5},
+        )
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertAlmostEqual(out["eps"], 4.5, places=3)
+
+
 if __name__ == "__main__":
     unittest.main()

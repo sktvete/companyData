@@ -1533,7 +1533,7 @@ def api_company_history(symbol):
     estimates.sort(key=lambda e: e["year"])
 
     analyst = _fmt_analyst(d.get("AnalystRatings", {}))
-    h = d.get("Highlights", {})
+    h = _merged_highlights(d)
     if not history:
         return jsonify({
             **_empty_history_payload(
