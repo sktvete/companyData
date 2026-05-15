@@ -16,6 +16,8 @@
   }
   *{box-sizing:border-box}
   body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace}
+  [title]{cursor:help}
+  th[title],.has-tip[title]{border-bottom:1px dotted rgba(71,85,105,.45)}
   .card{background:var(--card);border:1px solid var(--border);border-radius:3px}
   .card:hover{border-color:rgba(59,130,246,.4);transition:border-color .15s}
   /* Badges */
@@ -76,7 +78,7 @@
   <div class="flex items-center gap-4">
     <a href="/" style="color:var(--accent);font-size:.72rem;letter-spacing:.05em">Dashboard</a>
     <a href="/sectors" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
-    <button class="run-btn" id="runBtn" onclick="openRunModal()">Universe scan</button>
+    <button class="run-btn" id="runBtn" onclick="openRunModal()" title="Re-runs the pipeline on your saved symbol list (thousands of US names). Uses EODHD; can take many minutes. Updates the numbers behind this dashboard.">Universe scan</button>
   </div>
 </nav>
 
@@ -120,7 +122,11 @@
 
   <!-- Scoring weights panel -->
   <div class="card p-3 mb-4" id="weightPanel" style="display:none">
-    <div style="font-size:.65rem;color:var(--dim);letter-spacing:.05em;margin-bottom:.5rem">SCORING WEIGHTS — drag any factor to 0 to exclude it entirely from ranking</div>
+    <label style="display:flex;align-items:flex-start;gap:.55rem;margin-bottom:.75rem;cursor:pointer;font-size:.72rem;color:var(--fg);line-height:1.35">
+      <input type="checkbox" id="weightUseCustom" style="margin-top:.15rem;accent-color:var(--accent);width:15px;height:15px;flex-shrink:0">
+      <span><b style="color:var(--accent)">Use my weights</b> below &mdash; drag any factor to 0 to exclude it from the composite rank.<br>
+      <span style="color:var(--dim);font-size:.62rem">When on, sliders replace <b>Screener rank</b> / <b>Raw model score</b> ordering with your weighted Q·V·G·S (+ optional analyst). Other sort columns (revenue, P/E, …) always sort by that metric.</span></span>
+    </label>
     <div class="grid grid-cols-1 md:grid-cols-2 gap-x-6">
       <div class="weight-row"><span class="weight-label">Quality</span><input type="range" class="weight-bar" id="wQ" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wQv">5</span></div>
       <div class="weight-row"><span class="weight-label">Value</span><input type="range" class="weight-bar" id="wV" min="0" max="10" value="5" oninput="onWeightChange()"><span class="weight-val" id="wVv">5</span></div>
@@ -141,12 +147,13 @@
       <option value="FAIR">Fair</option><option value="POOR">Poor</option><option value="RISKY">Risky</option>
     </select></div>
     <div class="inp-wrap"><select id="sortBy" onchange="onSortSelect()">
-      <option value="overall_score">Overall Score</option>
+      <option value="listing_score" selected>Screener rank (quality + long-term growth)</option>
+      <option value="overall_score">Raw model score</option>
       <option value="quality_score">Quality</option>
       <option value="value_score">Value</option>
-      <option value="growth_score">Growth</option>
+      <option value="growth_score">Growth (score + % tiebreak)</option>
       <option value="safety_score">Safety</option>
-      <option value="tenx_score">10x Score</option>
+      <option value="analyst">Analyst rating</option>
       <option value="oeps_cagr">OEPS CAGR</option>
       <option value="roic">ROIC</option>
       <option value="revenue_cagr">Rev CAGR</option>
@@ -168,19 +175,21 @@
       <table class="w-full" style="font-size:.8rem">
         <thead>
           <tr>
-            <th id="th_rank" class="px-2 text-left w-6" style="width:28px">#</th>
+            <th id="th_rank" class="px-2 text-left" style="width:28px" title="Position in the current table.">#</th>
             <th id="th_symbol" onclick="thSort('symbol')" class="px-2 text-left" title="Ticker. Click to sort A–Z.">Symbol</th>
             <th id="th_name" class="px-2 text-left" title="Company name.">Name</th>
-            <th id="th_sector" class="px-2 text-left" title="GICS sector.">Sector</th>
-            <th id="th_score" onclick="thSort('overall_score')" class="px-2 text-center sort-active sort-desc" title="Overall score 0–20. Hover any score cell for full metric breakdown.">Score</th>
-            <th id="th_growth" onclick="thSort('growth_score')" class="px-2 text-center" title="Growth sub-score 0–5. OEPS CAGR 35% + ROIC 20% + Rev CAGR 20% + Gross Margin 10% + Margin Expansion 8% + Rev Acceleration 7%.">Growth</th>
-            <th id="th_qvgs" class="px-2 text-center hidden md:table-cell" title="Quality (ROE, Piotroski, FCF conversion) · Value (P/E, P/B, FCF yield, EV/EBITDA) · Growth (OEPS CAGR, ROIC, Rev CAGR) · Safety (Altman Z, current ratio, D/E)">Q·V·G·S</th>
-            <th id="th_rev" onclick="thSort('revenue')" class="px-2 text-right hidden lg:table-cell" title="Trailing twelve-month revenue (billions USD).">Rev</th>
-            <th id="th_pe" onclick="thSort('pe_ratio')" class="px-2 text-right hidden lg:table-cell" title="P/E ratio. Hover cell for P/B and FCF yield.">P/E</th>
-            <th id="th_roe" onclick="thSort('roe')" class="px-2 text-right hidden xl:table-cell" title="Return on equity. Hover cell for D/E ratio and current ratio.">ROE</th>
-            <th id="th_mcap" onclick="thSort('market_cap')" class="px-2 text-right hidden xl:table-cell" title="Market capitalisation (billions USD).">Mkt Cap</th>
-            <th id="th_tenx" onclick="thSort('tenx_score')" class="px-2 text-center hidden xl:table-cell" title="Multi-bagger candidate score 0–100: ROIC (25) + Rev CAGR (25) + PEG ratio (20) + Margin Expansion (15) + Rev Acceleration (10) + small-cap bonus (5).">10x</th>
-            <th id="th_analyst" onclick="thSort('analyst')" class="px-2 text-center hidden xl:table-cell" title="Analyst consensus rating 1–5 from EODHD. One signal among many — set Analyst weight to 0 in Weights panel to exclude from scoring.">Analysts</th>
+            <th id="th_score" onclick="thSortScoreColumn()" class="px-2 text-center sort-active sort-desc" title="Composite score (Screener rank / Raw model / Custom blend).">Score</th>
+            <th id="th_qvgs" class="px-2 text-center hidden md:table-cell" title="{{ G.qvgs }}">Q·V·G·S</th>
+            <th id="th_revg1" onclick="thSort('revenue_cagr')" class="px-2 text-right hidden lg:table-cell" title="{{ G.rev_1y }}">Rev 1Y</th>
+            <th id="th_epsg1" class="px-2 text-right hidden lg:table-cell" title="{{ G.eps_1y }}">EPS 1Y</th>
+            <th id="th_revg5" class="px-2 text-right hidden lg:table-cell" title="{{ G.rev_5y }}">Rev 5Y</th>
+            <th id="th_roe" onclick="thSort('roe')" class="px-2 text-right hidden lg:table-cell" title="{{ G.roe }}">ROE</th>
+            <th id="th_de" class="px-2 text-right hidden lg:table-cell" title="{{ G.de }}">D/E</th>
+            <th id="th_fcf" class="px-2 text-right hidden xl:table-cell" title="{{ G.fcf }}">FCF</th>
+            <th id="th_peg" onclick="thSort('peg_ratio')" class="px-2 text-right hidden xl:table-cell" title="{{ G.peg }}">PEG</th>
+            <th id="th_pe" onclick="thSort('pe_ratio')" class="px-2 text-right hidden xl:table-cell" title="{{ G.pe }}">P/E</th>
+            <th id="th_mcap" onclick="thSort('market_cap')" class="px-2 text-right hidden xl:table-cell" title="{{ G.mcap }}">Mkt Cap</th>
+            <th id="th_analyst" onclick="thSort('analyst')" class="px-2 text-center hidden 2xl:table-cell" title="{{ G.analyst }}">Analysts</th>
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
@@ -197,16 +206,37 @@
 <script>
 const $ = id => document.getElementById(id);
 const PAGE = 50;
-let offset = 0, loading = false, exhausted = false;
+let offset = 0, loading = false, hasMore = true, total = 0;
+let debTimer = null;
+
+function fmtUsdB(b) {
+  if (b == null || !Number.isFinite(b) || b === 0) return '$0';
+  const neg = b < 0;
+  const a = Math.abs(b);
+  const sign = neg ? '-' : '';
+  if (a >= 1000) return sign + '$' + (a / 1000).toFixed(1).replace(/\.0$/, '') + 'T';
+  if (a >= 1) return sign + '$' + a.toFixed(1).replace(/\.0$/, '') + 'B';
+  if (a >= 0.001) return sign + '$' + (a * 1000).toFixed(0) + 'M';
+  return sign + '$' + (a * 1e6).toFixed(0) + 'K';
+}
 
 /* ── Sort state ──────────────────────────────────────────── */
-let _sortCol = 'overall_score';
+let _sortCol = 'listing_score';
 let _sortDir = 'desc';
+let _effectiveSort = 'listing_score';
+
+function thSortScoreColumn() {
+  const sel = $('sortBy').value;
+  if (sel === 'overall_score') thSort('overall_score');
+  else thSort('listing_score');
+}
 
 const TH_MAP = {
-  'symbol':'th_symbol','overall_score':'th_score','growth_score':'th_growth',
-  'quality_score':'th_qvgs','revenue':'th_rev','pe_ratio':'th_pe',
-  'roe':'th_roe','market_cap':'th_mcap','tenx_score':'th_tenx',
+  'symbol':'th_symbol','overall_score':'th_score','listing_score':'th_score','custom_score':'th_score','growth_score':'th_qvgs',
+  'quality_score':'th_qvgs','value_score':'th_qvgs','safety_score':'th_qvgs',
+  'revenue':'th_revg1','revenue_cagr':'th_revg1','pe_ratio':'th_pe','peg_ratio':'th_peg',
+  'roe':'th_roe','market_cap':'th_mcap',
+  'oeps_cagr':'th_revg1',
   'analyst':'th_analyst'
 };
 
@@ -245,18 +275,60 @@ function _updateSortUI() {
 /* ── Weight panel ─────────────────────────────────────────── */
 function toggleWeights() {
   const p = $('weightPanel');
-  const visible = p.style.display !== 'none';
-  p.style.display = visible ? 'none' : 'block';
-  $('weightBtn').style.color = visible ? '' : 'var(--fg)';
+  const willShow = p.style.display === 'none';
+  p.style.display = willShow ? 'block' : 'none';
+  $('weightBtn').style.color = willShow ? 'var(--fg)' : '';
+  if (willShow) applyWeightModeUI();
+}
+
+const LS_WEIGHT_CUSTOM = 'equity_use_custom_weights';
+
+function weightCustomEnabled() {
+  const cb = $('weightUseCustom');
+  return cb && cb.checked;
+}
+
+function applyWeightModeUI() {
+  const on = weightCustomEnabled();
+  ['wQ','wV','wG','wS','wA'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.disabled = !on;
+    el.style.opacity = on ? '1' : '0.42';
+    el.style.cursor = on ? 'pointer' : 'not-allowed';
+  });
+  updateWeightDesc();
+}
+
+function updateWeightDesc() {
+  const labels = ['Q','V','G','S','A'];
+  const vals = labels.map(k => {
+    const el = $('w'+k);
+    const v = el ? parseInt(el.value, 10) : 5;
+    const lab = $('w'+k+'v');
+    if (lab) lab.textContent = String(v);
+    return v;
+  });
+  const desc = $('weightDesc');
+  if (!desc) return;
+  if (!weightCustomEnabled()) {
+    desc.textContent = 'Default Screener tilts toward value (cheap vs fundamentals), safety, and 3y revenue growth — not growth at any price. Use Weights for your own blend.';
+    return;
+  }
+  const allDefault = vals[0]===5 && vals[1]===5 && vals[2]===5 && vals[3]===5 && vals[4]===0;
+  desc.textContent = allDefault
+    ? 'Custom mode on: equal Q·V·G·S weights (analyst 0). Reorders Screener / Raw model sorts only; other columns sort literally.'
+    : `Custom blend — Q:${vals[0]}  V:${vals[1]}  G:${vals[2]}  S:${vals[3]}  Analyst:${vals[4]}`;
 }
 
 function onWeightChange() {
-  const labels = ['Q','V','G','S','A'];
-  const vals = labels.map(k => { const v = parseInt($('w'+k).value); $('w'+k+'v').textContent = v; return v; });
-  const allDefault = vals[0]===5 && vals[1]===5 && vals[2]===5 && vals[3]===5 && vals[4]===0;
-  $('weightDesc').textContent = allDefault
-    ? 'Equal weights (default)'
-    : `Q:${vals[0]}  V:${vals[1]}  G:${vals[2]}  S:${vals[3]}  Analyst:${vals[4]}`;
+  updateWeightDesc();
+  debounceReset();
+}
+
+function onWeightCustomToggle() {
+  try { localStorage.setItem(LS_WEIGHT_CUSTOM, weightCustomEnabled() ? '1' : '0'); } catch (_) {}
+  applyWeightModeUI();
   debounceReset();
 }
 
@@ -268,16 +340,46 @@ const BADGE = {
   RISKY:     'badge badge-risky',
 };
 
+function badgeFromScore(s) {
+  if (s >= 16) return 'EXCELLENT';
+  if (s >= 12) return 'GOOD';
+  if (s >= 8)  return 'FAIR';
+  if (s >= 4)  return 'POOR';
+  return 'RISKY';
+}
 function badgeHtml(cat) {
   return `<span class="${BADGE[cat] || 'badge badge-poor'}">${cat}</span>`;
 }
 
-function scoreColor(s){
-  if(s>=15) return 'var(--pos)';
-  if(s>=11) return 'var(--accent2)';
-  if(s>=7)  return 'var(--warn)';
-  if(s>=4)  return 'var(--neg)';
+function scoreColorAny(s){
+  const x = Math.min(25, Math.max(0, s));
+  if(x>=15) return 'var(--pos)';
+  if(x>=11) return 'var(--accent2)';
+  if(x>=7)  return 'var(--warn)';
+  if(x>=4)  return 'var(--neg)';
   return '#c084fc';
+}
+
+function scoreColumnValue(c) {
+  switch (_effectiveSort) {
+    case 'custom_score':
+      return c.custom_score != null ? c.custom_score : c.overall_score;
+    case 'listing_score':
+      return c.listing_score != null ? c.listing_score : c.overall_score;
+    case 'overall_score':
+      return c.overall_score;
+    default:
+      return c.overall_score;
+  }
+}
+
+function scoreColumnLabel() {
+  switch (_effectiveSort) {
+    case 'custom_score': return 'Custom blend (0–25 scale)';
+    case 'listing_score': return 'Screener rank (0–20)';
+    case 'overall_score': return 'Raw model (0–20)';
+    default: return 'Raw model (0–20)';
+  }
 }
 
 function tenxHtml(c) {
@@ -302,26 +404,75 @@ function analystHtml(c) {
   const ar = c.analyst_ratings;
   if (!ar || !ar.rating) return '<span style="color:var(--dim);font-size:.65rem">–</span>';
   const r = parseFloat(ar.rating);
-  const cls = r<=2.5?'analyst-bull':r<=3.5?'analyst-hold':'analyst-bear';
-  const label = r<=1.5?'Strong Buy':r<=2.5?'Buy':r<=3.5?'Hold':r<=4.5?'Sell':'Strong Sell';
+  const cls = r>=3.5?'analyst-bull':r>=2.5?'analyst-hold':'analyst-bear';
+  const label = r>=4.5?'Strong Buy':r>=3.5?'Buy':r>=2.5?'Hold':r>=1.5?'Sell':'Strong Sell';
   const cnt = ar.total_analysts || 0;
   return `<div class="${cls}" style="font-size:.7rem;font-weight:600" title="${cnt} analyst${cnt!==1?'s':''}: ${ar.rating_detail||label} (${r.toFixed(1)}/5)">${label}<span style="color:var(--dim);font-size:.58rem;margin-left:.2rem">${cnt>0?cnt:''}</span></div>`;
 }
 
 function fmtNum(n, dec=1) { return n == null ? '–' : n.toFixed(dec); }
+function pctClr(v) {
+  if (v > 15) return 'var(--pos)';
+  if (v > 5)  return 'var(--accent2)';
+  if (v > 0)  return 'var(--fg)';
+  if (v < -5) return 'var(--neg)';
+  return 'var(--dim)';
+}
+/** Server metric_tones: pos/neu/neg/na — fallback for pre-cache API rows. */
+function metricToneColor(tone, fallbackCss) {
+  if (tone === 'pos') return 'var(--pos)';
+  if (tone === 'neg') return 'var(--neg)';
+  if (tone === 'na') return 'var(--dim)';
+  if (tone === 'neu') return 'var(--fg)';
+  return fallbackCss;
+}
+function fmtPct(v) {
+  if (v == null) return '–';
+  if (v > 999) return '>999%';
+  if (v < -99) return '<-99%';
+  return (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+}
 
 function rowHtml(c, rank) {
-  const sc = scoreColor(c.overall_score);
-  const gs = c.growth_score || 0;
-  const gc = scoreColor(gs * 4);
+  const disp = scoreColumnValue(c);
+  const sc = scoreColorAny(disp);
   const breakdown = `<div class="qvgs flex gap-1 justify-center flex-wrap">
     ${subBadge('Q',c.quality_score,'#06b6d4')}
     ${subBadge('V',c.value_score,'#f59e0b')}
     ${subBadge('G',c.growth_score,'#3b82f6')}
     ${subBadge('S',c.safety_score,'#22c55e')}
   </div>`;
-  const growthTip = `Growth ${fmtNum(gs)}/5\nOEPS CAGR: ${fmtNum(c.oeps_cagr_pct)}%\nROIC: ${fmtNum(c.roic_pct)}%\nRev CAGR 3y: ${fmtNum(c.revenue_cagr_3y_pct)}%\nGross Margin: ${fmtNum(c.gross_margin_pct)}%\nMargin Expansion: ${c.gross_margin_expansion_pp > 0 ? '+' : ''}${fmtNum(c.gross_margin_expansion_pp)}pp\nRev Acceleration: ${c.revenue_acceleration_pct > 0 ? '+' : ''}${fmtNum(c.revenue_acceleration_pct)}%`;
-  const scoreTip = `Score ${fmtNum(c.overall_score)}/20\n\nQuality ${fmtNum(c.quality_score)}/5\n  ROE ${fmtNum(c.roe_pct)}%  Piotroski ${c.piotroski||0}/9  FCF conv ${fmtNum(c.fcf_conversion)}x\n\nValue ${fmtNum(c.value_score)}/5\n  P/E ${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : 'N/A'}  P/B ${fmtNum(c.pb_ratio)}  FCF Yield ${fmtNum(c.fcf_yield_pct)}%\n\nGrowth ${fmtNum(c.growth_score)}/5\n  OEPS CAGR ${fmtNum(c.oeps_cagr_pct)}%  ROIC ${fmtNum(c.roic_pct)}%  Rev CAGR ${fmtNum(c.revenue_cagr_3y_pct)}%\n\nSafety ${fmtNum(c.safety_score)}/5\n  Altman Z ${fmtNum(c.altman_z)}  D/E ${fmtNum(c.debt_to_equity)}  Curr Ratio ${fmtNum(c.current_ratio)}`;
+  const scoreTip = `${scoreColumnLabel()}: ${fmtNum(disp)}\nRaw: ${fmtNum(c.overall_score)}/20  Screener: ${fmtNum(c.listing_score)}\nQ=${fmtNum(c.quality_score)} V=${fmtNum(c.value_score)} G=${fmtNum(c.growth_score)} S=${fmtNum(c.safety_score)}\nROIC ${fmtNum(c.roic_pct)}%  OEPS ${fmtNum(c.oeps_cagr_pct)}%  GM ${fmtNum(c.gross_margin_pct)}%  Piotroski ${c.piotroski||0}/9`;
+  const mcapDisp = (c.market_cap_fmt != null && String(c.market_cap_fmt).length) ? c.market_cap_fmt : ('$' + fmtNum(c.market_cap_b) + 'B');
+  const fcfDisp = c.fcf_ttm_fmt || '–';
+  const rg1 = c.rev_growth_1y_pct, eg1 = c.earnings_growth_1y_pct, rg5 = c.rev_growth_5y_pct;
+  const roe = c.roe_pct, de = c.debt_to_equity, peg = c.peg_ratio, pe = c.pe_ratio;
+  const T = c.metric_tones || {};
+  return `<tr>
+    <td class="px-2 py-1.5" style="color:var(--border);font-size:.62rem">${rank}</td>
+    <td class="px-2 py-1.5"><a href="/company/${c.symbol}" style="color:var(--accent);font-size:.75rem;font-weight:700;letter-spacing:.03em">${c.symbol}</a></td>
+    <td class="px-2 py-1.5" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.7rem" title="${c.name} — ${c.sector}">${c.name}</td>
+    <td class="px-2 py-1.5 text-center" title="${scoreTip}"><span style="font-size:.88rem;font-weight:700;color:${sc}">${fmtNum(disp)}</span> <span style="margin-left:.2rem">${badgeHtml(badgeFromScore(disp))}</span></td>
+    <td class="px-2 py-1.5 text-center hidden md:table-cell">${breakdown}</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:${metricToneColor(T.rev_growth_1y, pctClr(rg1))};font-size:.72rem" title="Revenue growth 1Y TTM (quality: sign)">${fmtPct(rg1)}</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:${metricToneColor(T.eps_growth_1y, pctClr(eg1))};font-size:.72rem" title="EPS growth 1Y TTM (quality: sign)">${fmtPct(eg1)}</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:${metricToneColor(T.rev_growth_5y, pctClr(rg5))};font-size:.72rem" title="Revenue CAGR ~4–5Y (quality: sign)">${fmtPct(rg5)}</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:${metricToneColor(T.roe, roe>=15?'var(--pos)':roe>=8?'var(--fg)':'var(--dim)')};font-size:.72rem" title="ROE vs sector median">${fmtNum(roe)}%</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:${metricToneColor(T.debt_equity, de>2.5?'var(--neg)':de>1.5?'var(--warn)':'var(--fg)')};font-size:.72rem" title="Debt/Equity (muted for financials / REITs)">${fmtNum(de)}</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:${metricToneColor(T.fcf, fcfDisp.startsWith('-')?'var(--neg)':'var(--fg)')};font-size:.72rem" title="Free cash flow TTM (sign)">${fcfDisp}</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:${metricToneColor(T.peg, peg>0&&peg<=1?'var(--pos)':peg>2?'var(--warn)':'var(--fg)')};font-size:.72rem" title="PEG (broad bands)">${peg > 0 ? fmtNum(peg) : '–'}</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:${metricToneColor(T.pe, 'var(--dim)')};font-size:.72rem" title="P/E vs sector median (cheaper → greener)">${pe > 0 ? fmtNum(pe) : '–'}</td>
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem" title="Market cap: ${mcapDisp}">${mcapDisp}</td>
+    <td class="px-2 py-1.5 text-center hidden 2xl:table-cell">${analystHtml(c)}</td>
+  </tr>`;
+}
+
+/* __DEAD_START — blended score (not “Rev CAGR only”)\nBuilt from: OEPS CAGR (~35%), ROIC (~20%), best of 4y/3y/1y revenue growth (~20%), gross margin level (~10%), margin expansion & revenue acceleration, then +0.5 if OEPS CAGR ≥30%.\n\nOEPS CAGR: ${fmtNum(c.oeps_cagr_pct)}%\nROIC: ${fmtNum(c.roic_pct)}%\nRev CAGR 3y: ${fmtNum(c.revenue_cagr_3y_pct)}%\nGross Margin: ${fmtNum(c.gross_margin_pct)}%\nMargin Expansion: ${c.gross_margin_expansion_pp > 0 ? '+' : ''}${fmtNum(c.gross_margin_expansion_pp)}pp\nRev Acceleration: ${c.revenue_acceleration_pct > 0 ? '+' : ''}${fmtNum(c.revenue_acceleration_pct)}%`;
+  const scoreTip = `${scoreColumnLabel()}: ${fmtNum(disp)}\nRaw model: ${fmtNum(c.overall_score)}/20\nScreener rank: ${fmtNum(c.listing_score)}\n${weightCustomEnabled() ? 'Custom blend: '+fmtNum(c.custom_score)+'\n' : ''}\nQuality ${fmtNum(c.quality_score)}/5\n  ROE ${fmtNum(c.roe_pct)}%  Piotroski ${c.piotroski||0}/9  FCF conv ${fmtNum(c.fcf_conversion)}x\n\nValue ${fmtNum(c.value_score)}/5\n  P/E ${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : 'N/A'}  P/B ${fmtNum(c.pb_ratio)}  FCF Yield ${fmtNum(c.fcf_yield_pct)}%\n\nGrowth ${fmtNum(c.growth_score)}/5\n  OEPS CAGR ${fmtNum(c.oeps_cagr_pct)}%  ROIC ${fmtNum(c.roic_pct)}%  Rev CAGR ${fmtNum(c.revenue_cagr_3y_pct)}%\n\nSafety ${fmtNum(c.safety_score)}/5\n  Altman Z ${fmtNum(c.altman_z)}  D/E ${fmtNum(c.debt_to_equity)}  Curr Ratio ${fmtNum(c.current_ratio)}`;
+  const revDisp = (c.revenue_fmt != null && String(c.revenue_fmt).length) ? c.revenue_fmt : ('$' + fmtNum(c.revenue_b) + 'B');
+  const revTip = 'TTM revenue: ' + revDisp;
+  const mcapDisp = (c.market_cap_fmt != null && String(c.market_cap_fmt).length) ? c.market_cap_fmt : ('$' + fmtNum(c.market_cap_b) + 'B');
+  const mcapTip = 'Market cap: ' + mcapDisp;
   return `<tr>
     <td class="px-2 py-1.5" style="color:var(--border);font-size:.62rem">${rank}</td>
     <td class="px-2 py-1.5">
@@ -330,25 +481,23 @@ function rowHtml(c, rank) {
     <td class="px-2 py-1.5" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.72rem" title="${c.name}">${c.name}</td>
     <td class="px-2 py-1.5" style="color:var(--dim);font-size:.62rem;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.sector}</td>
     <td class="px-2 py-1.5 text-center" title="${scoreTip}">
-      <span style="font-size:.9rem;font-weight:700;color:${sc}">${fmtNum(c.overall_score)}</span>
-      <span style="margin-left:.3rem">${badgeHtml(c.category)}</span>
+      <span style="font-size:.9rem;font-weight:700;color:${sc}">${fmtNum(disp)}</span>
+      <span style="margin-left:.3rem">${badgeHtml(badgeFromScore(disp))}</span>
     </td>
     <td class="px-2 py-1.5 text-center" title="${growthTip}">
       <span style="font-size:.88rem;font-weight:600;color:${gc}">${fmtNum(gs)}</span>
       ${c.roic_pct > 0 ? `<span style="color:var(--dim);font-size:.6rem;margin-left:.25rem">R${fmtNum(c.roic_pct,0)}%</span>` : ''}
     </td>
     <td class="px-2 py-1.5 text-center hidden md:table-cell">${breakdown}</td>
-    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:var(--fg);font-size:.72rem" title="Revenue: $${fmtNum(c.revenue_b)}B TTM">$${fmtNum(c.revenue_b)}B</td>
+    <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:var(--fg);font-size:.72rem" title="${revTip}">${revDisp}</td>
     <td class="px-2 py-1.5 text-right hidden lg:table-cell" style="color:var(--dim);font-size:.72rem" title="P/E: ${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : 'N/A'}  |  P/B: ${fmtNum(c.pb_ratio)}  |  FCF Yield: ${fmtNum(c.fcf_yield_pct)}%">${c.pe_ratio > 0 ? fmtNum(c.pe_ratio) : '–'}</td>
     <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem" title="ROE: ${fmtNum(c.roe_pct)}%  |  D/E: ${fmtNum(c.debt_to_equity)}  |  Curr Ratio: ${fmtNum(c.current_ratio)}">${fmtNum(c.roe_pct)}%</td>
-    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem">$${fmtNum(c.market_cap_b)}B</td>
-    <td class="px-2 py-1.5 text-center hidden xl:table-cell">${tenxHtml(c)}</td>
-    <td class="px-2 py-1.5 text-center hidden xl:table-cell">${analystHtml(c)}</td>
-  </tr>`;
-}
+    <td class="px-2 py-1.5 text-right hidden xl:table-cell" style="color:var(--fg);font-size:.72rem" title="${mcapTip}">${mcapDisp}</td>
+__DEAD_END */
 
 function getParams() {
-  return new URLSearchParams({
+  const auto = !weightCustomEnabled();
+  const p = {
     limit:      PAGE,
     offset:     offset,
     sort_by:    _sortCol,
@@ -356,13 +505,15 @@ function getParams() {
     sector:     $('sectorFilter').value,
     category:   $('catFilter').value,
     min_score:  $('minScore').value || 0,
-    search:     $('searchBox').value,
-    wq: $('wQ').value,
-    wv: $('wV').value,
-    wg: $('wG').value,
-    ws: $('wS').value,
-    wa: $('wA').value,
-  });
+    search:     ($('searchBox').value || '').trim(),
+    wq: auto ? '5' : $('wQ').value,
+    wv: auto ? '5' : $('wV').value,
+    wg: auto ? '5' : $('wG').value,
+    ws: auto ? '5' : $('wS').value,
+    wa: auto ? '0' : $('wA').value,
+  };
+  if (!auto) p.wc = '1';
+  return new URLSearchParams(p);
 }
 
 async function loadPage() {
@@ -376,14 +527,16 @@ async function loadPage() {
     const d = await r.json();
     total   = d.total;
     hasMore = d.has_more;
+    _effectiveSort = d.effective_sort || _sortCol;
     $('resultCount').textContent = `${total} result${total !== 1 ? 's' : ''}`;
 
     const tbody = $('tableBody');
+    const baseOff = (typeof d.offset === 'number' && d.offset >= 0) ? d.offset : offset;
     d.companies.forEach((c, i) => {
-      tbody.insertAdjacentHTML('beforeend', rowHtml(c, offset + i + 1));
+      const rk = (typeof c.rank === 'number' && Number.isFinite(c.rank)) ? c.rank : (baseOff + i + 1);
+      tbody.insertAdjacentHTML('beforeend', rowHtml(c, rk));
     });
-
-    offset += d.companies.length;
+    offset = baseOff + d.companies.length;
 
     if (!hasMore) {
       $('endMsg').classList.remove('hidden');
@@ -430,11 +583,17 @@ async function loadSummary() {
     $('statSource').textContent = parts.join(' · ');
     $('statAvg').textContent = d.average_score.toFixed(1);
     $('statTop').textContent  = d.top_overall?.symbol || '–';
-    $('statTopScore').textContent = d.top_overall?.score?.toFixed(1) + '/20';
+    {
+      const raw = d.top_overall?.score;
+      const adj = d.top_overall?.listing_score;
+      $('statTopScore').textContent = (adj != null && raw != null)
+        ? `${adj.toFixed(1)} adj · ${raw.toFixed(1)}/20 raw`
+        : (raw != null ? `${raw.toFixed(1)}/20` : '–');
+    }
     $('statGrowth').textContent = d.top_growth?.symbol || '–';
     $('statGrowthDetail').textContent = `Growth ${d.top_growth?.growth_score?.toFixed(1)}/5 · ROIC ${d.top_growth?.roic_pct?.toFixed(0)}%`;
-    $('statRevenue').textContent = '$' + d.total_revenue_b.toFixed(0) + 'B';
-    $('statMcap').textContent   = '$' + d.total_market_cap_t.toFixed(1) + 'T';
+    $('statRevenue').textContent = d.total_revenue_fmt || fmtUsdB(d.total_revenue_b);
+    $('statMcap').textContent   = d.total_market_cap_fmt || fmtUsdB(d.total_market_cap_b != null ? d.total_market_cap_b : d.total_market_cap_t * 1000);
     $('headerBadge').textContent = d.total_companies + ' in snapshot';
 
     /* Category pills */
@@ -472,6 +631,17 @@ function setCat(cat) {
   resetAndLoad();
 }
 
+(() => {
+  const cb = $('weightUseCustom');
+  if (cb) {
+    try {
+      const s = localStorage.getItem(LS_WEIGHT_CUSTOM);
+      cb.checked = s === '1';
+    } catch (_) {}
+    cb.addEventListener('change', onWeightCustomToggle);
+    applyWeightModeUI();
+  }
+})();
 loadSummary().then(() => resetAndLoad());
 
 /* ── Progress popup ── */
@@ -490,7 +660,7 @@ async function startAnalysis() {
   btn.disabled = true;
   btn.textContent = 'Scanning…';
   try {
-    const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:2000, workers:20}) });
+    const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:3804, workers:48}) });
     const d = await r.json();
     if (d.error) {
       if (d.error.toLowerCase().includes('already running')) {
@@ -542,13 +712,16 @@ function renderProgress(d) {
     const score = d.last_score > 0 ? ` · ${d.last_score}/20` : '';
     $('progLast').textContent = d.last_sym + score;
   }
+  const phase = d.phase ? ` [${d.phase}]` : '';
   const statusTxt = d.running
-    ? `Scanning universe\u2026 ${d.done}/${d.total} (${(d.pct||0).toFixed(1)}%)`
-    : (d.total > 0
-        ? `Scan complete \u2014 ${d.successful||d.done} fetched OK, ${d.failed||0} failed`
-        : 'Ready \u2014 click Execute Scan to begin');
+    ? `${phase} ${d.done}/${d.total} (${(d.pct||0).toFixed(1)}%)`
+    : (d.error
+        ? `Scan stopped: ${d.error}`
+        : (d.total > 0
+            ? `Scan complete \u2014 ${d.successful||d.done} scored OK, ${d.failed||0} failed`
+            : 'Ready \u2014 click Start universe scan to begin'));
   $('progStatus').textContent = statusTxt;
-  $('progStatus').style.color = d.running ? 'var(--accent2)' : 'var(--pos)';
+  $('progStatus').style.color = d.running ? 'var(--accent2)' : (d.error ? 'var(--neg)' : 'var(--pos)');
 }
 
 // Check on load in case a run is already in progress
@@ -568,10 +741,13 @@ function renderProgress(d) {
 <!-- Progress popup modal -->
 <div id="progressModal">
   <div id="progressBox">
-    <div class="flex items-center justify-between mb-5">
+    <div class="flex items-center justify-between mb-2">
       <div style="font-size:.8rem;font-weight:700;color:var(--fg);letter-spacing:.04em">Universe scan progress</div>
       <button onclick="closeProgressModal()" style="color:var(--dim);font-size:.85rem;background:none;border:none;cursor:pointer;padding:.2rem .4rem" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">&#x2715;</button>
     </div>
+    <p style="margin:0 0 .85rem;font-size:.78rem;color:var(--muted);line-height:1.45">
+      Rescores your <strong>saved universe</strong>: async fetch for stale/missing (~200 concurrent, batched cache writes), then parallel rescore (~10–15s for ~5k).
+    </p>
     <div id="progStatus" style="color:var(--pos);font-size:.75rem;margin-bottom:1rem">–</div>
     <div class="prog-bar-track mb-2">
       <div class="prog-bar-fill" id="progFill" style="width:0%"></div>

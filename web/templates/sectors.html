@@ -3,166 +3,169 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sectors – Equity Analysis</title>
+  <title>Sectors – Equity OS</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: { extend: { colors: { brand: '#3b82f6' } } }
-    };
-  </script>
-  <style>
-    body { background: #0f172a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
-    .card { background: #1e293b; border: 1px solid #334155; border-radius: .75rem; }
-    .badge-excellent { background:#14532d; color:#86efac; }
-    .badge-good      { background:#1e3a5f; color:#93c5fd; }
-    .badge-fair      { background:#422006; color:#fbbf24; }
-    .badge-poor      { background:#3b1212; color:#fca5a5; }
-    .badge-risky     { background:#2d1d4e; color:#d8b4fe; }
-    .score-bar { height:6px; border-radius:3px; background:#334155; }
-    .score-fill { height:100%; border-radius:3px; transition:width .4s ease; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
-<body class="min-h-screen p-6">
+<style>
+  :root{
+    --bg:#0b0f19;--card:#111827;--muted:#1a2332;--fg:#cbd5e1;
+    --accent:#3b82f6;--accent2:#06b6d4;--dim:#475569;
+    --border:#1e2d3d;--pos:#22c55e;--neg:#ef4444;--warn:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:3px}
+  .card:hover{border-color:rgba(59,130,246,.4);transition:border-color .15s}
+  .badge{display:inline-block;padding:.1rem .4rem;font-size:.58rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
+  .badge-excellent{background:rgba(34,197,94,.1);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
+  .badge-good{background:rgba(59,130,246,.1);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
+  .badge-fair{background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+  .badge-poor{background:rgba(239,68,68,.1);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+  .badge-risky{background:rgba(168,85,247,.1);color:#c084fc;border:1px solid rgba(168,85,247,.3)}
+  .score-bar{height:5px;border-radius:2px;background:var(--muted);overflow:hidden}
+  .score-fill{height:100%;border-radius:2px;transition:width .35s ease}
+  .sort-btn{background:transparent;color:var(--dim);border:1px solid var(--border);padding:.35rem .75rem;font-size:.68rem;font-family:'JetBrains Mono',monospace;border-radius:2px;cursor:pointer}
+  .sort-btn:hover{color:var(--fg);border-color:rgba(59,130,246,.5)}
+  .sort-btn.active{background:rgba(59,130,246,.15);color:var(--accent);border-color:rgba(59,130,246,.45)}
+  .run-btn{background:transparent;color:var(--accent);border:1px solid rgba(59,130,246,.4);padding:.35rem .85rem;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;border-radius:2px}
+  .run-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+  a.sector-link{color:var(--accent);font-size:.72rem;font-weight:700}
+  a.sector-link:hover{color:var(--accent2)}
+</style>
+<body class="min-h-screen">
 
-  <!-- Header -->
-  <div class="max-w-7xl mx-auto mb-8">
-    <div class="flex items-center justify-between mb-4">
-      <div>
-        <a href="/" class="text-blue-400 hover:text-blue-300 text-sm mb-2 inline-block">← Dashboard</a>
-        <h1 class="text-3xl font-bold text-white">Sector Analysis</h1>
-        <p class="text-slate-400 mt-1">Investment quality ranked by sector</p>
-      </div>
-      <div id="totalBadge" class="card px-6 py-4 text-center">
-        <div class="text-2xl font-bold text-blue-400" id="totalSectors">–</div>
-        <div class="text-sm text-slate-400">Sectors</div>
-      </div>
+<nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
+  <div class="flex items-center gap-3">
+    <svg class="w-4 h-4" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+    <span style="font-weight:700;font-size:.85rem;letter-spacing:.06em">Equity<span style="color:var(--accent)">OS</span></span>
+    <a href="/" class="run-btn" style="padding:.25rem .55rem;font-size:.62rem">&larr; Dashboard</a>
+  </div>
+</nav>
+
+<div class="px-6 py-6 max-w-screen-2xl mx-auto">
+  <div class="flex flex-wrap items-start justify-between gap-4 mb-6">
+    <div>
+      <h1 style="font-size:1.35rem;font-weight:800;letter-spacing:.04em;color:var(--fg)">Sector analysis</h1>
+      <p style="color:var(--dim);font-size:.72rem;margin-top:.35rem">Average scores and scale by GICS sector (snapshot data).</p>
     </div>
-
-    <!-- Sort controls -->
-    <div class="flex gap-3 flex-wrap">
-      <button onclick="setSortKey('average_score')" class="sort-btn px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white" data-key="average_score">Avg Score</button>
-      <button onclick="setSortKey('company_count')" class="sort-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300" data-key="company_count">Company Count</button>
-      <button onclick="setSortKey('total_revenue_b')" class="sort-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300" data-key="total_revenue_b">Revenue</button>
-      <button onclick="setSortKey('total_market_cap_b')" class="sort-btn px-4 py-2 rounded-lg text-sm font-medium bg-slate-700 text-slate-300" data-key="total_market_cap_b">Market Cap</button>
+    <div class="card px-5 py-3 text-center min-w-[120px]">
+      <div id="totalSectors" style="font-size:1.75rem;font-weight:800;color:var(--accent2)">–</div>
+      <div style="font-size:.62rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em">Sectors</div>
     </div>
   </div>
 
-  <!-- Sector grid -->
-  <div id="sectorsGrid" class="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-    <!-- Loading skeleton -->
-    <div class="card p-5 animate-pulse col-span-full text-center text-slate-500 py-12">
-      Loading sector data…
-    </div>
+  <div class="flex gap-2 flex-wrap mb-6">
+    <button type="button" class="sort-btn active" data-key="average_score" onclick="setSortKey('average_score')">Avg score</button>
+    <button type="button" class="sort-btn" data-key="company_count" onclick="setSortKey('company_count')">Company count</button>
+    <button type="button" class="sort-btn" data-key="total_revenue_b" onclick="setSortKey('total_revenue_b')">Revenue</button>
+    <button type="button" class="sort-btn" data-key="total_market_cap_b" onclick="setSortKey('total_market_cap_b')">Market cap</button>
   </div>
 
-  <script>
-    let allSectors = [];
-    let sortKey = 'average_score';
+  <div id="sectorsGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+    <div class="card p-8 col-span-full text-center" style="color:var(--dim);font-size:.75rem">Loading sector data…</div>
+  </div>
+</div>
 
-    function categoryBadge(cat) {
-      const cls = { EXCELLENT:'badge-excellent', GOOD:'badge-good', FAIR:'badge-fair', POOR:'badge-poor', RISKY:'badge-risky' }[cat] || 'badge-poor';
-      return `<span class="${cls} text-xs px-2 py-0.5 rounded-full font-medium">${cat}</span>`;
+<script>
+  let allSectors = [];
+  let sortKey = 'average_score';
+
+  function categoryBadge(cat) {
+    const cls = { EXCELLENT:'badge-excellent', GOOD:'badge-good', FAIR:'badge-fair', POOR:'badge-poor', RISKY:'badge-risky' }[cat] || 'badge-poor';
+    return `<span class="badge ${cls}">${cat}</span>`;
+  }
+
+  function scoreColor(score) {
+    if (score >= 14) return 'var(--pos)';
+    if (score >= 10) return 'var(--accent)';
+    if (score >= 7)  return 'var(--warn)';
+    return 'var(--neg)';
+  }
+
+  function renderSectors(data) {
+    const grid = document.getElementById('sectorsGrid');
+    document.getElementById('totalSectors').textContent = data.length;
+
+    if (!data.length) {
+      grid.innerHTML = '<div class="card p-8 col-span-full text-center" style="color:var(--dim)">No sector data available.</div>';
+      return;
     }
 
-    function scoreColor(score) {
-      if (score >= 14) return '#22c55e';
-      if (score >= 10) return '#3b82f6';
-      if (score >= 7)  return '#f59e0b';
-      return '#ef4444';
-    }
+    grid.innerHTML = data.map(s => {
+      const fillPct = Math.min((s.average_score / 20) * 100, 100);
+      const color = scoreColor(s.average_score);
+      const topHtml = s.top_companies.map(c =>
+        `<div class="flex items-center justify-between gap-2" style="font-size:.72rem">
+          <a href="/company/${c.symbol}" class="sector-link">${c.symbol}</a>
+          <div class="flex items-center gap-2">
+            ${categoryBadge(c.category)}
+            <span style="color:var(--fg);font-weight:600">${c.score.toFixed(1)}</span>
+          </div>
+        </div>`
+      ).join('');
 
-    function renderSectors(data) {
-      const grid = document.getElementById('sectorsGrid');
-      document.getElementById('totalSectors').textContent = data.length;
-
-      if (!data.length) {
-        grid.innerHTML = '<div class="col-span-full text-center text-slate-500 py-12">No sector data available.</div>';
-        return;
-      }
-
-      grid.innerHTML = data.map(s => {
-        const fillPct = Math.min((s.average_score / 20) * 100, 100);
-        const color   = scoreColor(s.average_score);
-        const topHtml = s.top_companies.map(c =>
-          `<div class="flex items-center justify-between text-sm">
-            <a href="/company/${c.symbol}" class="font-medium text-white hover:text-blue-300">${c.symbol}</a>
-            <div class="flex items-center gap-2">
-              ${categoryBadge(c.category)}
-              <span class="text-slate-300 font-mono">${c.score.toFixed(1)}</span>
-            </div>
-          </div>`
-        ).join('');
-
-        return `
-        <div class="card p-5 hover:border-blue-500 transition-colors">
-          <div class="flex items-start justify-between mb-3">
+      return `
+        <div class="card p-5">
+          <div class="flex items-start justify-between gap-3 mb-3">
             <div>
-              <h2 class="font-bold text-white text-lg leading-tight">${s.name}</h2>
-              <div class="text-slate-400 text-sm mt-0.5">${s.company_count} ${s.company_count === 1 ? 'company' : 'companies'}</div>
+              <h2 style="font-weight:800;font-size:1rem;color:var(--fg);line-height:1.25">${s.name}</h2>
+              <div style="color:var(--dim);font-size:.68rem;margin-top:.2rem">${s.company_count} ${s.company_count === 1 ? 'company' : 'companies'}</div>
             </div>
             <div class="text-right">
-              <div class="text-2xl font-bold" style="color:${color}">${s.average_score.toFixed(1)}</div>
-              <div class="text-xs text-slate-500">avg / 20</div>
+              <div style="font-size:1.5rem;font-weight:800;color:${color}">${s.average_score.toFixed(1)}</div>
+              <div style="font-size:.58rem;color:var(--dim);text-transform:uppercase">avg / 20</div>
             </div>
           </div>
-
-          <div class="score-bar mb-4">
-            <div class="score-fill" style="width:${fillPct}%;background:${color}"></div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-3 mb-4 text-sm">
-            <div class="bg-slate-800 rounded-lg p-2 text-center">
-              <div class="text-white font-medium">$${fmt(s.total_revenue_b)}B</div>
-              <div class="text-slate-500 text-xs">Revenue</div>
+          <div class="score-bar mb-4"><div class="score-fill" style="width:${fillPct}%;background:${color}"></div></div>
+          <div class="grid grid-cols-2 gap-2 mb-4" style="font-size:.7rem">
+            <div class="text-center" style="padding:.55rem;background:var(--muted);border:1px solid var(--border);border-radius:3px">
+              <div style="font-weight:700;color:var(--fg)">${s.total_revenue_fmt || fmtB(s.total_revenue_b)}</div>
+              <div style="color:var(--dim);font-size:.58rem;margin-top:.15rem">Revenue</div>
             </div>
-            <div class="bg-slate-800 rounded-lg p-2 text-center">
-              <div class="text-white font-medium">$${fmt(s.total_market_cap_b)}B</div>
-              <div class="text-slate-500 text-xs">Market Cap</div>
+            <div class="text-center" style="padding:.55rem;background:var(--muted);border:1px solid var(--border);border-radius:3px">
+              <div style="font-weight:700;color:var(--fg)">${s.total_market_cap_fmt || fmtB(s.total_market_cap_b)}</div>
+              <div style="color:var(--dim);font-size:.58rem;margin-top:.15rem">Market cap</div>
             </div>
           </div>
-
-          <div class="border-t border-slate-700 pt-3">
-            <div class="text-xs text-slate-500 mb-2 font-medium uppercase tracking-wide">Top Companies</div>
+          <div style="border-top:1px solid var(--border);padding-top:.75rem">
+            <div style="font-size:.58rem;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem">Top companies</div>
             <div class="space-y-1.5">${topHtml}</div>
           </div>
-
-          <div class="mt-3 pt-3 border-t border-slate-700">
-            <a href="/?sector=${encodeURIComponent(s.name)}"
-               class="block text-center text-blue-400 hover:text-blue-300 text-sm">
-              View all in ${s.name} →
-            </a>
+          <div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border)">
+            <a href="/?sector=${encodeURIComponent(s.name)}" class="sector-link" style="display:inline-block">View all in ${s.name} →</a>
           </div>
         </div>`;
-      }).join('');
-    }
+    }).join('');
+  }
 
-    function fmt(n) {
-      if (n >= 1000) return (n / 1000).toFixed(1) + 'T';
-      return n.toFixed(0);
-    }
+  function fmtB(n) {
+    if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'T';
+    return '$' + n.toFixed(0) + 'B';
+  }
 
-    function setSortKey(key) {
-      sortKey = key;
-      document.querySelectorAll('.sort-btn').forEach(b => {
-        const active = b.dataset.key === key;
-        b.className = `sort-btn px-4 py-2 rounded-lg text-sm font-medium ${active ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`;
-      });
-      const sorted = [...allSectors].sort((a, b) => b[key] - a[key]);
-      renderSectors(sorted);
-    }
+  function setSortKey(key) {
+    sortKey = key;
+    document.querySelectorAll('.sort-btn').forEach(b => {
+      const active = b.dataset.key === key;
+      b.classList.toggle('active', active);
+    });
+    const sorted = [...allSectors].sort((a, b) => b[key] - a[key]);
+    renderSectors(sorted);
+  }
 
-    async function load() {
-      try {
-        const r = await fetch('/api/sectors');
-        allSectors = await r.json();
-        renderSectors(allSectors);
-      } catch (e) {
-        document.getElementById('sectorsGrid').innerHTML =
-          `<div class="col-span-full text-center text-red-400 py-12">Error loading data: ${e.message}</div>`;
-      }
+  async function load() {
+    try {
+      const r = await fetch('/api/sectors');
+      allSectors = await r.json();
+      setSortKey(sortKey);
+    } catch (e) {
+      document.getElementById('sectorsGrid').innerHTML =
+        `<div class="card p-8 col-span-full text-center" style="color:var(--neg)">Error loading data: ${e.message}</div>`;
     }
+  }
 
-    load();
-  </script>
+  load();
+</script>
 </body>
 </html>

@@ -219,7 +219,7 @@
                 
                 document.getElementById('total-companies').textContent = data.total_companies.toLocaleString();
                 document.getElementById('avg-score').textContent = data.average_score.toFixed(1);
-                document.getElementById('total-revenue').textContent = `$${data.total_revenue_b.toFixed(0)}B`;
+                document.getElementById('total-revenue').textContent = data.total_revenue_fmt || (data.total_revenue_b >= 1000 ? `$${(data.total_revenue_b/1000).toFixed(1)}T` : `$${data.total_revenue_b.toFixed(0)}B`);
                 
                 const excellent = data.data_quality.excellent || 0;
                 const total = data.total_companies || 1;

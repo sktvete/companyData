@@ -9,6 +9,9 @@ from __future__ import annotations
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, date
 import math
+import statistics
+
+from .ttm_periods import ttm_flow_period_count
 
 # EODHD quarterly field name mappings (actual API response keys)
 # Income Statement
@@ -70,14 +73,40 @@ def safe_divide(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
+def rate_as_decimal(x: float) -> float:
+    """Return a return rate as a decimal (0.18 = 18%). Some feeds store 18.0 instead of 0.18."""
+    if not isinstance(x, (int, float)) or x == 0:
+        return 0.0
+    ax = abs(float(x))
+    if ax > 1.25:
+        return float(x) / 100.0
+    return float(x)
+
+
 # Short aliases used throughout this module
 sg = safe_get
 sd = safe_divide
 
 
+def _adjusted_gross_profit(stmt: Dict[str, Any]) -> float:
+    """EODHD sometimes sets grossProfit == totalRevenue while costOfRevenue is non-zero."""
+    rev = sg(stmt, _I_REVENUE)
+    gp = sg(stmt, _I_GROSS_PROFIT)
+    cor = sg(stmt, _I_COST_REVENUE)
+    if rev > 0 and cor > 0 and gp >= rev * 0.999:
+        return rev - cor
+    return gp
+
+
 def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
-                                    price_data: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Calculate all comprehensive financial metrics from EODHD data."""
+                                    price_data: List[Dict[str, Any]],
+                                    highlights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Calculate all comprehensive financial metrics from EODHD data.
+
+    ``highlights`` — raw EODHD ``Highlights`` dict.  When provided, its
+    currency-correct P/E and PEG override our calculated ratios (which can
+    be wrong for non-USD reporting currencies).
+    """
 
     metrics: Dict[str, Any] = {}
 
@@ -95,28 +124,100 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
     prev_income    = income_statement[1] if len(income_statement) > 1 else {}
     prev_balance   = balance_sheet[1]    if len(balance_sheet)    > 1 else {}
 
-    # ── Income Statement ──────────────────────────────────────────────────────
-    metrics['revenue']          = sg(latest_income, _I_REVENUE)
-    metrics['gross_profit']     = sg(latest_income, _I_GROSS_PROFIT)
-    metrics['operating_income'] = sg(latest_income, _I_OP_INCOME)
-    metrics['ebit']             = sg(latest_income, _I_EBIT)   or sg(latest_income, _I_OP_INCOME)
-    metrics['ebitda']           = sg(latest_income, _I_EBITDA)
-    metrics['pretax_income']    = sg(latest_income, _I_PRETAX)
-    metrics['net_income']       = sg(latest_income, _I_NET_INCOME)
-    metrics['eps_basic']        = sg(latest_income, _I_EPS_BASIC)
-    metrics['eps_diluted']      = sg(latest_income, _I_EPS_DILUTED)
-    # diluted shares: not in quarterly income → use balance sheet shares outstanding
+    # ── TTM (Trailing Twelve Months) aggregation ──────────────────────────────
+    # Flow periods: 4 quarters, 2 semi-annual halves, or 1 fiscal year (EODHD mix).
+    def _ttm_sum(stmts: list, key: str, n: int) -> float:
+        """Sum a field across the last n flow periods (most recent first)."""
+        total = 0.0
+        for stmt in stmts[:n]:
+            total += sg(stmt, key)
+        return total
+
+    inc_dates = [str(s.get("date") or "")[:10] for s in income_statement if s.get("date")]
+    cf_dates = [str(s.get("date") or "")[:10] for s in cash_flow if s.get("date")]
+    n_inc = ttm_flow_period_count(inc_dates)
+    n_cf = ttm_flow_period_count(cf_dates) if cf_dates else n_inc
+    n_flow = min(n_inc, n_cf) if cf_dates else n_inc
+
+    have_flow_income = len(income_statement) >= n_flow and n_flow > 0
+    have_flow_cf = len(cash_flow) >= n_flow and n_flow > 0
+
+    # ── Income Statement (TTM) ────────────────────────────────────────────────
+    if have_flow_income:
+        metrics['revenue']          = _ttm_sum(income_statement, _I_REVENUE, n_flow)
+        metrics['gross_profit']     = sum(
+            _adjusted_gross_profit(income_statement[i]) for i in range(n_flow)
+        )
+        metrics['operating_income'] = _ttm_sum(income_statement, _I_OP_INCOME, n_flow)
+        metrics['ebit']             = _ttm_sum(income_statement, _I_EBIT, n_flow) or _ttm_sum(income_statement, _I_OP_INCOME, n_flow)
+        metrics['ebitda']           = _ttm_sum(income_statement, _I_EBITDA, n_flow)
+        metrics['pretax_income']    = _ttm_sum(income_statement, _I_PRETAX, n_flow)
+        metrics['net_income']       = _ttm_sum(income_statement, _I_NET_INCOME, n_flow)
+    else:
+        metrics['revenue']          = sg(latest_income, _I_REVENUE)
+        metrics['gross_profit']     = _adjusted_gross_profit(latest_income)
+        metrics['operating_income'] = sg(latest_income, _I_OP_INCOME)
+        metrics['ebit']             = sg(latest_income, _I_EBIT) or sg(latest_income, _I_OP_INCOME)
+        metrics['ebitda']           = sg(latest_income, _I_EBITDA)
+        metrics['pretax_income']    = sg(latest_income, _I_PRETAX)
+        metrics['net_income']       = sg(latest_income, _I_NET_INCOME)
+
+    hl_eps = 0.0
+    if highlights:
+        hl_eps = sg(highlights, "DilutedEpsTTM") or sg(highlights, "EarningsShare")
+
+    def _stmt_has_diluted_eps(stmt: Dict[str, Any]) -> bool:
+        v = stmt.get(_I_EPS_DILUTED) if isinstance(stmt, dict) else None
+        if v is None:
+            return False
+        if isinstance(v, str):
+            t = v.strip().lower()
+            if t in ("", "none", "n/a", "nan"):
+                return False
+        return True
+
+    # EPS: full quarterly TTM sum when every period reports dilutedEPS; else Highlights TTM; else NI/shares.
+    if have_flow_income:
+        metrics['eps_basic'] = _ttm_sum(income_statement, _I_EPS_BASIC, n_flow)
+        ttm_eps_sum = _ttm_sum(income_statement, _I_EPS_DILUTED, n_flow)
+        q_with_eps = sum(1 for i in range(n_flow) if _stmt_has_diluted_eps(income_statement[i]))
+        eps_complete = q_with_eps == n_flow and ttm_eps_sum > 0
+        if eps_complete:
+            metrics['eps_diluted'] = ttm_eps_sum
+        elif hl_eps > 0:
+            metrics['eps_diluted'] = hl_eps
+        else:
+            metrics['eps_diluted'] = 0.0
+    else:
+        metrics['eps_basic'] = sg(latest_income, _I_EPS_BASIC)
+        leps = sg(latest_income, _I_EPS_DILUTED)
+        if _stmt_has_diluted_eps(latest_income) and leps > 0:
+            metrics['eps_diluted'] = leps
+        elif hl_eps > 0:
+            metrics['eps_diluted'] = hl_eps
+        else:
+            metrics['eps_diluted'] = 0.0
+
     metrics['diluted_shares']   = (sg(latest_balance, _B_SHARES_OUT)
                                    or sg(latest_income, _I_DILUTED_SHARES))
-    # SBC lives in cash flow statement (confirmed for EODHD)
-    metrics['sbc']              = sg(latest_cash, _I_SBC) or sg(latest_income, _I_SBC)
+    # SBC: TTM sum from cash flow (where EODHD reports it)
+    if have_flow_cf:
+        metrics['sbc'] = _ttm_sum(cash_flow, _I_SBC, n_flow) or _ttm_sum(income_statement, _I_SBC, n_flow)
+    else:
+        metrics['sbc'] = sg(latest_cash, _I_SBC) or sg(latest_income, _I_SBC)
 
-    # ── Cash Flow ─────────────────────────────────────────────────────────────
-    metrics['operating_cash_flow'] = sg(latest_cash, _C_OCF)
-    raw_capex                      = sg(latest_cash, _C_CAPEX)
-    metrics['capital_expenditure'] = abs(raw_capex) if raw_capex else 0.0
-    # FCF = reported or derived
-    reported_fcf = sg(latest_cash, _C_FCF)
+    # ── Cash Flow (TTM) ───────────────────────────────────────────────────────
+    if have_flow_cf:
+        metrics['operating_cash_flow'] = _ttm_sum(cash_flow, _C_OCF, n_flow)
+        raw_capex = _ttm_sum(cash_flow, _C_CAPEX, n_flow)
+        metrics['capital_expenditure'] = abs(raw_capex) if raw_capex else 0.0
+        reported_fcf = _ttm_sum(cash_flow, _C_FCF, n_flow)
+    else:
+        metrics['operating_cash_flow'] = sg(latest_cash, _C_OCF)
+        raw_capex = sg(latest_cash, _C_CAPEX)
+        metrics['capital_expenditure'] = abs(raw_capex) if raw_capex else 0.0
+        reported_fcf = sg(latest_cash, _C_FCF)
+
     if reported_fcf:
         metrics['free_cash_flow'] = reported_fcf
     else:
@@ -172,14 +273,14 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
     # ── Return Metrics ────────────────────────────────────────────────────────
     eq = metrics['shareholders_equity']
     if eq > 0:
-        metrics['roe'] = sd(metrics['net_income'], eq)
+        metrics['roe'] = rate_as_decimal(sd(metrics['net_income'], eq))
     if metrics['total_assets'] > 0:
-        metrics['roa'] = sd(metrics['net_income'], metrics['total_assets'])
+        metrics['roa'] = rate_as_decimal(sd(metrics['net_income'], metrics['total_assets']))
 
     invested_capital = metrics['total_debt'] + eq
     if invested_capital > 0:
         nopat = metrics['operating_income'] * 0.79   # rough NOPAT (21% tax)
-        metrics['roic'] = sd(nopat, invested_capital)
+        metrics['roic'] = rate_as_decimal(sd(nopat, invested_capital))
 
     # ── Leverage Ratios ───────────────────────────────────────────────────────
     metrics['debt_to_equity'] = sd(metrics['total_debt'], eq) if eq > 0 else 0.0
@@ -231,23 +332,45 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
 
     if metrics['net_income'] > 0:
         metrics['fcf_conversion'] = sd(metrics['free_cash_flow'], metrics['net_income'])
+        # Mixed units / restatements can produce absurd FCF > NI; do not leak into scoring.
+        if metrics['fcf_conversion'] > 1.15:
+            metrics['fcf_conversion'] = 0.0
     if metrics['operating_cash_flow'] > 0:
         metrics['ocf_to_fcf'] = sd(metrics['free_cash_flow'], metrics['operating_cash_flow'])
 
     # ── Growth Rates ─────────────────────────────────────────────────────────
-    prev_rev = sg(prev_income, _I_REVENUE)
-    if prev_rev > 0 and rev > 0:
-        metrics['revenue_growth_1y'] = sd(rev - prev_rev, prev_rev)
+    # Use TTM revenue for growth comparisons (sum of last 4Q vs sum of prior 4Q, etc.)
+    ttm_rev = rev  # already TTM from above
 
-    if len(income_statement) >= 5:
+    # YoY: TTM now vs TTM one year ago (quarters 4-7)
+    if len(income_statement) >= 8:
+        rev_1ya_ttm = sum(sg(income_statement[i], _I_REVENUE) for i in range(4, 8))
+        if rev_1ya_ttm > 0 and ttm_rev > 0:
+            metrics['revenue_growth_1y'] = sd(ttm_rev - rev_1ya_ttm, rev_1ya_ttm)
+    elif len(income_statement) >= 2:
+        prev_rev = sg(prev_income, _I_REVENUE)
+        if prev_rev > 0 and ttm_rev > 0:
+            metrics['revenue_growth_1y'] = sd(ttm_rev - prev_rev, prev_rev)
+
+    # 4-year CAGR: TTM now vs TTM 4 years ago (quarters 16-19)
+    if len(income_statement) >= 20:
+        rev_4ya_ttm = sum(sg(income_statement[i], _I_REVENUE) for i in range(16, 20))
+        if rev_4ya_ttm > 0 and ttm_rev > 0:
+            metrics['revenue_cagr_4y'] = (ttm_rev / rev_4ya_ttm) ** (1/4) - 1
+    elif len(income_statement) >= 5:
         rev_4ya = sg(income_statement[4], _I_REVENUE)
-        if rev_4ya > 0 and rev > 0:
-            metrics['revenue_cagr_4y'] = (rev / rev_4ya) ** (1/4) - 1
+        if rev_4ya > 0 and ttm_rev > 0:
+            metrics['revenue_cagr_4y'] = (ttm_rev / (rev_4ya * 4)) ** (1/4) - 1 if rev_4ya > 0 else 0.0
 
-    if len(income_statement) >= 13:
+    # 3-year CAGR: TTM now vs TTM 3 years ago (quarters 12-15)
+    if len(income_statement) >= 16:
+        rev_3ya_ttm = sum(sg(income_statement[i], _I_REVENUE) for i in range(12, 16))
+        if rev_3ya_ttm > 0 and ttm_rev > 0:
+            metrics['revenue_cagr_3y'] = (ttm_rev / rev_3ya_ttm) ** (1/3) - 1
+    elif len(income_statement) >= 13:
         rev_3ya = sg(income_statement[12], _I_REVENUE)
-        if rev_3ya > 0 and rev > 0:
-            metrics['revenue_cagr_3y'] = (rev / rev_3ya) ** (1/3) - 1
+        if rev_3ya > 0 and ttm_rev > 0:
+            metrics['revenue_cagr_3y'] = (ttm_rev / (rev_3ya * 4)) ** (1/3) - 1 if rev_3ya > 0 else 0.0
 
     # ── Revenue Acceleration (QoQ trend) ─────────────────────────────────────
     # Compare last 4q growth vs prior 4q growth — positive = accelerating
@@ -266,6 +389,34 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
             else:
                 metrics['revenue_acceleration'] = 0.0
 
+    # ── Revenue Growth Consistency ───────────────────────────────────────────
+    # Compute rolling annual (TTM) revenue growth rates across available years.
+    # A low coefficient of variation (stddev / |mean|) signals stable compounders;
+    # high CoV signals cyclical or lumpy businesses.  Output: 0.0 (no data) to 1.0
+    # (perfectly stable).  Inversely related to CoV.
+    if len(income_statement) >= 12:
+        annual_growths = []
+        n_windows = min((len(income_statement) - 4) // 4, 4)  # up to 4 annual growth observations
+        for w in range(n_windows):
+            start = w * 4
+            ttm_cur = sum(sg(income_statement[i], _I_REVENUE) for i in range(start, start + 4))
+            ttm_prev = sum(sg(income_statement[i], _I_REVENUE) for i in range(start + 4, start + 8))
+            if ttm_prev > 0 and ttm_cur > 0:
+                annual_growths.append((ttm_cur - ttm_prev) / ttm_prev)
+        if len(annual_growths) >= 2:
+            mean_g = statistics.mean(annual_growths)
+            std_g = statistics.stdev(annual_growths)
+            if abs(mean_g) > 0.01:
+                cov = std_g / abs(mean_g)
+            else:
+                cov = std_g / 0.01
+            # Convert CoV to 0–1 consistency score: CoV=0 → 1.0, CoV>=2 → 0.0
+            metrics['revenue_growth_consistency'] = max(0.0, min(1.0, 1.0 - cov / 2.0))
+            # Also flag if growth is consistently positive (all windows > 0)
+            metrics['growth_all_positive'] = all(g > 0 for g in annual_growths)
+        else:
+            metrics['revenue_growth_consistency'] = 0.5  # neutral with insufficient data
+
     # ── Gross Margin Expansion (trend over 4–8 quarters) ─────────────────────
     if len(income_statement) >= 8:
         def _gm(stmt): 
@@ -276,13 +427,25 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
         if gm_now is not None and gm_old is not None and gm_old > 0:
             metrics['gross_margin_expansion'] = gm_now - gm_old  # positive = expanding
 
-    prev_ni = sg(prev_income, _I_NET_INCOME)
-    if prev_ni > 0 and metrics['net_income'] > 0:
-        metrics['net_income_growth'] = sd(metrics['net_income'] - prev_ni, prev_ni)
+    # Net income growth: TTM vs prior TTM
+    if len(income_statement) >= 8:
+        ni_1ya_ttm = sum(sg(income_statement[i], _I_NET_INCOME) for i in range(4, 8))
+        if ni_1ya_ttm > 0 and metrics['net_income'] > 0:
+            metrics['net_income_growth'] = sd(metrics['net_income'] - ni_1ya_ttm, ni_1ya_ttm)
+    else:
+        prev_ni = sg(prev_income, _I_NET_INCOME)
+        if prev_ni > 0 and metrics['net_income'] > 0:
+            metrics['net_income_growth'] = sd(metrics['net_income'] - prev_ni, prev_ni)
 
-    prev_eps = sg(prev_income, _I_EPS_DILUTED)
-    if prev_eps > 0 and metrics['eps_diluted'] > 0:
-        metrics['eps_growth'] = sd(metrics['eps_diluted'] - prev_eps, prev_eps)
+    # EPS growth: TTM vs prior TTM
+    if len(income_statement) >= 8:
+        eps_1ya_ttm = sum(sg(income_statement[i], _I_EPS_DILUTED) for i in range(4, 8))
+        if eps_1ya_ttm > 0 and metrics['eps_diluted'] > 0:
+            metrics['eps_growth'] = sd(metrics['eps_diluted'] - eps_1ya_ttm, eps_1ya_ttm)
+    else:
+        prev_eps = sg(prev_income, _I_EPS_DILUTED)
+        if prev_eps > 0 and metrics['eps_diluted'] > 0:
+            metrics['eps_growth'] = sd(metrics['eps_diluted'] - prev_eps, prev_eps)
 
     # ── Owner Earnings (Buffett) ───────────────────────────────────────────────
     # owner_earnings = OCF - CapEx - SBC
@@ -305,8 +468,33 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
     if metrics.get('roic', 0) > 0 and metrics.get('revenue_cagr_4y', 0) > 0:
         metrics['reinvestment_rate'] = metrics['revenue_cagr_4y'] / metrics['roic']
 
+    # Inject EPS growth from Highlights BEFORE computing growth_score_raw
+    # (EODHD quarterly data doesn't have per-share EPS, so our computed value is always 0).
+    hl = highlights or {}
+    _hl_eps_g_raw = hl.get("QuarterlyEarningsGrowthYOY")
+    if _hl_eps_g_raw is not None and _hl_eps_g_raw != "":
+        _hl_eps_g = float(_hl_eps_g_raw) if isinstance(_hl_eps_g_raw, (int, float)) else 0.0
+        if _hl_eps_g != 0.0 or not metrics.get('eps_growth'):
+            metrics['eps_growth'] = _hl_eps_g
+
     # Final Growth Score  (0-1 continuous, then used in scoring)
     metrics['growth_score_raw'] = _calculate_growth_score(metrics)
+
+    # If last-quote price disagrees wildly with market_cap / diluted shares, trust the
+    # latter for USD mega-caps (bad close scale or stale feed otherwise blows up P/E).
+    mktcap_hint = float(metrics.get("market_cap") or 0.0)
+    sh_hint = float(
+        metrics.get("diluted_shares")
+        or metrics.get("shares_outstanding")
+        or 0.0
+    )
+    raw_px = float(metrics.get("current_price") or 0.0)
+    if mktcap_hint > 0 and sh_hint > 0 and raw_px > 0:
+        implied_px = mktcap_hint / sh_hint
+        if implied_px > 0:
+            ratio = raw_px / implied_px
+            if ratio > 4.0 or ratio < 0.25:
+                metrics["current_price"] = implied_px
 
     # ── Valuation ─────────────────────────────────────────────────────────────
     price = metrics['current_price']
@@ -316,11 +504,25 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
 
     if price > 0 and eps_d > 0:
         metrics['pe_ratio'] = sd(price, eps_d)
-    # PEG = P/E ÷ growth_rate_pct; use best available growth rate
+    # PEG = P/E ÷ growth_rate_pct; use BEST positive growth rate available.
+    # OEPS CAGR can be depressed by CapEx/SBC surges (MSFT, META), so also consider
+    # EPS growth and revenue CAGR — pick whichever is highest and positive.
     pe = metrics.get('pe_ratio', 0)
-    growth_for_peg = (metrics.get('oeps_cagr', 0) or
-                      metrics.get('revenue_cagr_4y', 0) or
-                      metrics.get('revenue_cagr_3y', 0)) * 100  # convert to %
+    _oeps_g = metrics.get('oeps_cagr', 0) or 0
+    _eps_g  = metrics.get('eps_growth', 0) or 0
+    _ni_g   = metrics.get('net_income_growth', 0) or 0
+    _rev4   = metrics.get('revenue_cagr_4y', 0) or 0
+    _rev3   = metrics.get('revenue_cagr_3y', 0) or 0
+
+    # Gate: if revenue is flat (<5% CAGR) but NI growth is extreme, the NI
+    # spike is likely one-time (asset sale, tax reversal).  Exclude NI growth
+    # from PEG candidates so PEG reflects durable growth only.
+    _rev_best = max(_rev4, _rev3)
+    _peg_candidates = [_oeps_g, _eps_g, _rev4, _rev3]
+    if _rev_best >= 0.05 or _ni_g <= 0.22:
+        _peg_candidates.append(_ni_g)
+
+    growth_for_peg = max((g for g in _peg_candidates if g > 0), default=0) * 100
     if pe > 0 and growth_for_peg > 0:
         metrics['peg_ratio'] = pe / growth_for_peg
     if mktcap > 0 and rev > 0:
@@ -329,6 +531,10 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
         metrics['pb_ratio'] = sd(mktcap, metrics['book_value'])
     if ev > 0 and metrics['ebitda'] > 0:
         metrics['ev_ebitda'] = sd(ev, metrics['ebitda'])
+        # Tiny EV/EBITDA ratios are usually scale/units artifacts, not deep value.
+        ev_e = metrics['ev_ebitda']
+        if 0 < ev_e < 0.5 or ev_e > 120:
+            metrics['ev_ebitda'] = 0.0
     if ev > 0 and metrics['ebit'] > 0:
         metrics['ev_ebit'] = sd(ev, metrics['ebit'])
     if ev > 0 and metrics['free_cash_flow'] > 0:
@@ -338,11 +544,50 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
     fcfps = metrics['free_cash_flow_per_share']
     if price > 0 and fcfps > 0:
         metrics['fcf_yield'] = sd(fcfps, price)
+        # Per-share FCF vs price should sit in single digits for almost all liquid names.
+        if metrics['fcf_yield'] > 0.35:
+            metrics['fcf_yield'] = 0.0
+
+    # ── Prefer EODHD Highlights ratios (currency-correct) ───────────────────
+    # For non-USD reporters our computed P/E and PEG are USD÷local-currency
+    # nonsense.  EODHD already handles the conversion, so trust their numbers.
+    hl = highlights or {}
+    _hl_pe = safe_get(hl, "PERatio")
+    _hl_peg = safe_get(hl, "PEGRatio")
+
+    if _hl_pe and _hl_pe > 0:
+        our_pe = metrics.get('pe_ratio', 0)
+        if our_pe > 0:
+            ratio = our_pe / _hl_pe
+            # If our P/E is wildly different (>3x or <0.33x), trust Highlights
+            if ratio > 3.0 or ratio < 0.33:
+                metrics['pe_ratio'] = _hl_pe
+                metrics['earnings_yield'] = sd(1.0, _hl_pe)
+        else:
+            metrics['pe_ratio'] = _hl_pe
+            metrics['earnings_yield'] = sd(1.0, _hl_pe)
+
+    if _hl_peg and 0 < _hl_peg < 10:
+        our_peg = metrics.get('peg_ratio', 0)
+        if our_peg <= 0 or our_peg > 10:
+            metrics['peg_ratio'] = _hl_peg
+        else:
+            ratio = our_peg / _hl_peg
+            if ratio > 3.0 or ratio < 0.33:
+                metrics['peg_ratio'] = _hl_peg
+
+    # Revenue growth fallback from Highlights (if quarterly-computed value is missing)
+    _hl_rev_g_raw = hl.get("QuarterlyRevenueGrowthYOY")
+    if _hl_rev_g_raw is not None and _hl_rev_g_raw != "":
+        _hl_rev_g = float(_hl_rev_g_raw) if isinstance(_hl_rev_g_raw, (int, float)) else 0.0
+        if _hl_rev_g != 0.0 and not metrics.get('revenue_growth_1y'):
+            metrics['revenue_growth_1y'] = _hl_rev_g
 
     # ── Piotroski F-Score (9 pts) ─────────────────────────────────────────────
     ps = 0
+    roa = metrics.get('roa', 0.0)
     if metrics['net_income'] > 0:           ps += 1
-    if metrics['roa'] > 0:                  ps += 1  # type: ignore[operator]
+    if roa > 0:                             ps += 1
     if metrics['operating_cash_flow'] > 0:  ps += 1
     if metrics['operating_cash_flow'] > metrics['net_income']: ps += 1  # accruals
     prev_td = sg(prev_balance, _B_ST_DEBT) + sg(prev_balance, _B_LT_DEBT)
@@ -421,41 +666,49 @@ def _annualise_quarters(statement: List[Dict], value_key: str, n_quarters: int =
 def _calculate_oeps_cagr(income_stmts: List[Dict], cash_stmts: List[Dict],
                          balance_stmts: List[Dict] | None = None) -> float:
     """
-    Compute Owner Earnings Per Share CAGR over available history.
-    oeps = (OCF - CapEx - SBC) / shares_outstanding
-    SBC lives in cash flow statement; shares in balance sheet.
+    Compute Owner Earnings Per Share CAGR over available history (TTM-based).
+    oeps = (OCF - CapEx - SBC) / shares_outstanding  (all TTM annualized)
     cagr = (oeps_end / oeps_start) ** (1/years) - 1
     """
     if len(cash_stmts) < 8:
         return 0.0
     bal = balance_stmts or []
 
-    def _oeps_at(i: int) -> float:
-        cas = cash_stmts[i]   if i < len(cash_stmts)   else {}
-        bs  = bal[i]          if i < len(bal)           else {}
-        ocf   = sg(cas, _C_OCF)
-        capex = abs(sg(cas, _C_CAPEX))
-        # SBC is in cash flow statement (not income)
-        sbc   = sg(cas, _I_SBC)
-        # Shares from balance sheet; fall back to income statement
-        inc   = income_stmts[i] if i < len(income_stmts) else {}
+    def _oeps_ttm(start_idx: int) -> float:
+        """Compute annualized OEPS from 4 quarters starting at start_idx."""
+        if start_idx + 4 > len(cash_stmts):
+            return 0.0
+        ocf = sum(sg(cash_stmts[start_idx + j], _C_OCF) for j in range(4))
+        capex = abs(sum(sg(cash_stmts[start_idx + j], _C_CAPEX) for j in range(4)))
+        sbc = sum(sg(cash_stmts[start_idx + j], _I_SBC) for j in range(4))
+        # Shares from latest balance sheet in the window
+        bs = bal[start_idx] if start_idx < len(bal) else {}
+        inc = income_stmts[start_idx] if start_idx < len(income_stmts) else {}
         shares = sg(bs, _B_SHARES_OUT) or sg(inc, _I_DILUTED_SHARES)
         oe = ocf - capex - sbc
         return sd(oe, shares) if shares > 0 else 0.0
 
-    # Use most-recent quarter vs quarter 4 years back (16 quarters)
-    years = 4
-    lookback = min(len(income_stmts) - 1, years * 4)
-    oeps_end   = _oeps_at(0)
-    oeps_start = _oeps_at(lookback)
+    # TTM now (quarters 0-3) vs TTM N years ago
+    oeps_end = _oeps_ttm(0)
+
+    # Try 4-year lookback first (quarters 16-19), fall back to 3-year (12-15)
+    lookback_q = 16
+    if lookback_q + 4 > len(cash_stmts):
+        lookback_q = 12
+    if lookback_q + 4 > len(cash_stmts):
+        lookback_q = 8
+    if lookback_q + 4 > len(cash_stmts):
+        return 0.0
+
+    oeps_start = _oeps_ttm(lookback_q)
 
     if oeps_start <= 0 or oeps_end <= 0:
         return 0.0
 
-    actual_years = lookback / 4.0
+    actual_years = lookback_q / 4.0
     try:
         cagr = (oeps_end / oeps_start) ** (1 / actual_years) - 1
-        return max(-1.0, min(cagr, 5.0))   # clamp to [-100%, +500%]
+        return max(-1.0, min(cagr, 5.0))
     except (ZeroDivisionError, ValueError):
         return 0.0
 
@@ -473,18 +726,47 @@ def _calculate_growth_score(m: Dict[str, Any]) -> float:
     Multipliers (penalty factors):
       - debt: net debt / EBITDA high penalises
     """
-    oeps_cagr  = m.get('oeps_cagr', 0.0)
-    roic       = m.get('roic', 0.0)
-    rev_cagr   = m.get('revenue_cagr_4y', m.get('revenue_cagr_3y', m.get('revenue_growth_1y', 0.0)))
+    oeps_cagr  = float(m.get('oeps_cagr', 0.0) or 0.0)
+    # For CapEx/SBC-heavy compounders (MSFT, META), OEPS CAGR understates true
+    # earnings power growth. Use the best of OEPS, EPS growth, and NI growth.
+    eps_g      = float(m.get('eps_growth', 0.0) or 0.0)
+    ni_g       = float(m.get('net_income_growth', 0.0) or 0.0)
+    earnings_growth = max(oeps_cagr, eps_g, ni_g)
+    roic       = float(m.get('roic', 0.0) or 0.0)
+    rev_4y     = float(m.get('revenue_cagr_4y', 0.0) or 0.0)
+    rev_3y     = float(m.get('revenue_cagr_3y', 0.0) or 0.0)
+    rev_1y     = float(m.get('revenue_growth_1y', 0.0) or 0.0)
+    # Prefer a durable top-line signal: do not let a weak 4y print erase a healthy 3y trend.
+    rev_cagr   = max(rev_4y, rev_3y, rev_1y)
     gm         = m.get('gross_margin', 0.0)
     gm_exp     = m.get('gross_margin_expansion', 0.0)   # pp gained over 2y
     rev_accel  = m.get('revenue_acceleration', 0.0)     # recent 4q growth - older 4q growth
 
+    # Gross margin from filings is not comparable for many banks / specialty finance /
+    # some biotech (gross profit vs revenue can exceed 100% or be meaningless). Do not
+    # let that dominate the growth composite.
+    if gm > 0.85 or gm < 0.0:
+        gm = 0.36
+        gm_exp = 0.0
+    else:
+        gm_exp = max(-0.18, min(0.18, gm_exp))
+
+    # If revenue is flat but NI growth is extreme, the spike is likely one-time
+    # (asset sale, tax reversal, litigation win).  Hard-cap the earnings_growth
+    # contribution so it can't dominate the growth score or game PEG.
+    rev_lo = min(rev_4y, rev_3y) if (rev_4y or rev_3y) and (rev_3y or rev_4y) else rev_cagr
+    if rev_lo < 0.035 and earnings_growth > 0.22:
+        earnings_growth = min(0.12, rev_lo * 3 + 0.05)
+
     # Normalise each component to 0-1 range
-    # Raised ceilings: 50% OEPS CAGR, 40% rev CAGR = perfect score (10x territory)
-    oeps_norm  = min(max(oeps_cagr / 0.50, 0.0), 1.0)   # 50% CAGR = perfect
+    # Raised ceilings: 50% earnings growth, 40% rev CAGR = perfect score (10x territory)
+    oeps_norm  = min(max(earnings_growth / 0.50, 0.0), 1.0)   # 50% growth = perfect
     roic_norm  = min(max(roic / 0.30, 0.0), 1.0)         # 30% ROIC = perfect
     rev_norm   = min(max(rev_cagr / 0.40, 0.0), 1.0)     # 40% rev CAGR = perfect
+    # Modest lift for "boring" durable growers: healthy mid‑single‑digit+ revenue with ROIC.
+    rev_head = max(rev_4y, rev_3y)
+    if 0.055 <= rev_head <= 0.30 and roic >= 0.12:
+        rev_norm = min(1.0, rev_norm + 0.10)
     gm_norm    = min(max(gm / 0.60, 0.0), 1.0)           # 60% GM = perfect
     # Margin expansion: +10pp over 2y = perfect; negative = small penalty
     gm_exp_norm = min(max((gm_exp + 0.05) / 0.15, 0.0), 1.0)
@@ -498,8 +780,17 @@ def _calculate_growth_score(m: Dict[str, Any]) -> float:
            gm_exp_norm* 0.08 +
            accel_norm * 0.07)
 
+    # Stability multiplier: reward consistent growers, penalize volatile ones.
+    # consistency=1.0 → +12% bonus; consistency=0.5 → neutral; consistency=0 → -15% penalty.
+    _raw_con = m.get('revenue_growth_consistency')
+    consistency = float(_raw_con) if _raw_con is not None else 0.5
+    all_positive = m.get('growth_all_positive', False)
+    stability_mult = 0.85 + 0.27 * consistency  # range: 0.85 (CoV=high) to 1.12 (CoV=0)
+    if all_positive and consistency >= 0.7 and rev_cagr >= 0.08:
+        stability_mult += 0.05  # extra reward for never-negative revenue growth + decent rate
+
     # Debt penalty
     nd_ebitda = m.get('net_debt_to_ebitda', 0.0)
     debt_mult = max(0.5, 1.0 - max(0.0, nd_ebitda - 1.0) * 0.1)
 
-    return min(raw * debt_mult, 1.0)
+    return min(raw * debt_mult * stability_mult, 1.0)

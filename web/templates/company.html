@@ -10,74 +10,92 @@
 </head>
 <style>
   :root{
-    --bg:#0a0a0f;--card:#12121a;--muted:#1c1c2e;--fg:#e0e0e0;
-    --accent:#00ff88;--accent2:#ff00ff;--accent3:#00d4ff;
-    --border:#2a2a3a;--dim:#6b7280;
-    --glow-sm:0 0 4px #00ff88,0 0 8px #00ff8840;
-    --glow:0 0 6px #00ff88,0 0 14px #00ff8860;
+    --bg:#0b0f19;--card:#111827;--muted:#1a2332;--fg:#cbd5e1;
+    --accent:#3b82f6;--accent2:#06b6d4;--accent3:#22c55e;
+    --border:#1e2d3d;--dim:#475569;
+    --pos:#22c55e;--neg:#ef4444;--warn:#f59e0b;
   }
   *{box-sizing:border-box}
-  body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace;
-    background-image:linear-gradient(rgba(0,255,136,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,136,.02) 1px,transparent 1px);
-    background-size:48px 48px;}
-  .card{background:var(--card);border:1px solid var(--border);
-    clip-path:polygon(0 8px,8px 0,calc(100% - 8px) 0,100% 8px,100% calc(100% - 8px),calc(100% - 8px) 100%,8px 100%,0 calc(100% - 8px));}
-  .card:hover{border-color:var(--accent)50;transition:border-color .2s}
-  .stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.78rem}
+  body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:3px}
+  .card:hover{border-color:rgba(59,130,246,.4);transition:border-color .15s}
+  .stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid rgba(30,45,61,.7);font-size:.78rem}
   .stat-row:last-child{border:none}
   .stat-label{color:var(--dim);letter-spacing:.04em}
-  .tag{display:inline-block;padding:.1rem .5rem;font-size:.62rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
-    clip-path:polygon(0 3px,3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px));}
-  .bull{color:var(--accent)} .hold{color:#ffaa00} .bear{color:#ff4455}
-  canvas{max-height:220px}
+  .has-tip,[title].stat-label,.section-h[title],.tech-tag[title]{cursor:help;border-bottom:1px dotted rgba(71,85,105,.55)}
+  .badge{display:inline-block;padding:.1rem .4rem;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
+  .badge-excellent{background:rgba(34,197,94,.1);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
+  .badge-good     {background:rgba(59,130,246,.1);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
+  .badge-fair     {background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.3)}
+  .badge-poor     {background:rgba(239,68,68,.1);color:#f87171;border:1px solid rgba(239,68,68,.3)}
+  .badge-risky    {background:rgba(168,85,247,.1);color:#c084fc;border:1px solid rgba(168,85,247,.3)}
+  .bull{color:var(--pos)} .hold{color:var(--warn)} .bear{color:var(--neg)}
+  canvas{max-height:240px}
+  #chartPrice,#chartVolume,#chartPE{max-height:none!important}
   [title]{cursor:help}
+  input,textarea{background:var(--muted);border:1px solid var(--border);color:var(--fg);border-radius:3px}
   ::-webkit-scrollbar{width:4px;height:4px}
   ::-webkit-scrollbar-track{background:var(--bg)}
-  ::-webkit-scrollbar-thumb{background:var(--accent)40;border-radius:0}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
   @keyframes blink{50%{opacity:0}}
-  @keyframes rgbShift{0%,100%{text-shadow:-1px 0 var(--accent2),1px 0 var(--accent3)}50%{text-shadow:1px 0 var(--accent2),-1px 0 var(--accent3)}}
-  .cyber-title{font-family:'Orbitron',monospace;text-transform:uppercase;letter-spacing:.15em;color:var(--accent);animation:rgbShift 4s ease-in-out infinite}
   .blink{animation:blink 1s step-end infinite}
-  #gchat-panel{position:fixed;right:1rem;bottom:1rem;z-index:60;width:min(100%,22rem);max-height:70vh;display:flex;flex-direction:column;
-    background:var(--card);border:1px solid var(--accent)40;box-shadow:0 0 24px #000a;font-size:.72rem;font-family:'JetBrains Mono',monospace}
-  #gchat-panel.collapsed .gchat-body,#gchat-panel.collapsed .gchat-foot{display:none}
-  #gchat-panel.collapsed{width:auto;max-height:none}
-  .gchat-head{display:flex;align-items:center;justify-content:space-between;padding:.5rem .65rem;border-bottom:1px solid var(--border);cursor:pointer;background:#0d1520}
+  #gchat-panel{position:fixed;right:1rem;bottom:1rem;z-index:60;width:min(100%,var(--gchat-w,22rem));max-height:70vh;display:flex;flex-direction:column;
+    background:var(--card);border:1px solid var(--border);box-shadow:0 8px 32px #000a;font-size:.72rem;font-family:'JetBrains Mono',monospace;border-radius:3px}
+  #gchat-panel.gchat-sized{height:var(--gchat-h,24rem);max-height:min(90vh,var(--gchat-h,24rem))}
+  #gchat-panel.gchat-sized .gchat-body{max-height:none;flex:1;min-height:0}
+  #gchat-panel.collapsed .gchat-body,#gchat-panel.collapsed .gchat-foot,#gchat-panel.collapsed .gchat-resize{display:none}
+  #gchat-panel.collapsed{width:auto;max-height:none;height:auto}
+  .gchat-resize{position:absolute;left:0;top:0;width:16px;height:16px;z-index:4;cursor:nwse-resize;touch-action:none;
+    background:linear-gradient(135deg,transparent 50%,var(--accent) 50%);opacity:.55;border-radius:3px 0 0 0}
+  .gchat-resize:hover{opacity:.95}
+  .gchat-head{display:flex;align-items:center;justify-content:space-between;padding:.5rem .65rem .5rem 1.1rem;border-bottom:1px solid var(--border);cursor:pointer;background:rgba(11,15,25,.95)}
   .gchat-body{flex:1;overflow-y:auto;padding:.5rem;min-height:8rem;max-height:42vh;color:var(--fg)}
   .gchat-msg{margin-bottom:.5rem;line-height:1.45}
-  .gchat-msg.user{text-align:right;color:var(--accent3)}
-  .gchat-msg.bot{text-align:left;color:var(--fg)}
+  .gchat-msg.user{text-align:right;color:var(--accent2)}
+  .gchat-msg.bot{text-align:left;color:var(--fg);white-space:pre-wrap;word-break:break-word}
+  .gchat-msg.bot.gchat-streaming::after{content:'';display:inline-block;width:6px;height:1em;margin-left:2px;background:var(--accent);vertical-align:text-bottom;animation:gchatCursor .9s step-end infinite}
   .gchat-msg.bot.typing .gchat-typing-dots{display:inline-flex;gap:5px;align-items:center;padding:.15rem 0}
   .gchat-msg.bot.typing .gchat-typing-dots span{width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.35;animation:gchatDot 1s ease-in-out infinite}
   .gchat-msg.bot.typing .gchat-typing-dots span:nth-child(2){animation-delay:.15s}
   .gchat-msg.bot.typing .gchat-typing-dots span:nth-child(3){animation-delay:.3s}
   @keyframes gchatDot{0%,70%,100%{opacity:.25;transform:translateY(0)}35%{opacity:1;transform:translateY(-2px)}}
+  @keyframes gchatCursor{50%{opacity:0}}
   .gchat-foot{padding:.45rem;border-top:1px solid var(--border);display:flex;gap:.35rem;flex-direction:column}
-  .gchat-foot textarea{width:100%;min-height:3.2rem;background:var(--muted);border:1px solid var(--border);color:var(--fg);padding:.35rem;font-size:.72rem;resize:vertical}
-  .gchat-foot button{background:var(--accent);color:#000;font-weight:700;padding:.35rem .6rem;border:none;cursor:pointer;font-size:.65rem;letter-spacing:.05em}
+  .gchat-foot textarea{width:100%;min-height:3.2rem;padding:.35rem;font-size:.72rem;resize:vertical}
+  .gchat-foot button{background:var(--accent);color:#fff;font-weight:700;padding:.35rem .6rem;border:none;cursor:pointer;font-size:.65rem;letter-spacing:.05em;border-radius:3px}
   .gchat-foot button:disabled{opacity:.4;cursor:not-allowed}
   .gchat-hint{font-size:.58rem;color:var(--dim);line-height:1.35}
+  .gchat-auth{padding:.5rem .65rem;border-bottom:1px solid var(--border);display:none}
+  .gchat-auth.show{display:block}
+  .gchat-auth button{width:100%;background:linear-gradient(135deg,#10a37f,#0d8a6a);color:#fff;font-weight:700;padding:.45rem;border:none;border-radius:4px;cursor:pointer;font-size:.68rem;letter-spacing:.04em}
+  .gchat-auth button:disabled{opacity:.5;cursor:not-allowed}
+  .gchat-signed{font-size:.58rem;color:var(--pos);margin-top:.35rem;display:none}
+  .gchat-signed.show{display:block}
+  .section-h{color:var(--dim);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.65rem;font-family:'JetBrains Mono',monospace}
+  .run-btn{background:transparent;color:var(--accent);border:1px solid rgba(59,130,246,.4);padding:.35rem .85rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;border-radius:2px}
+  .run-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.58rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
+  .rbtn:hover{color:var(--fg);background:var(--muted)}
+  .rbtn.active{color:var(--accent);background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
 </style>
 <body class="min-h-screen">
-<!-- Nav -->
-<nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(10,10,15,.92);backdrop-filter:blur(12px);border-bottom:1px solid #00ff8830">
-  <div class="flex items-center gap-4">
-    <a href="/" style="color:var(--dim);font-size:.75rem;font-family:'JetBrains Mono',monospace;letter-spacing:.05em;display:flex;align-items:center;gap:.35rem" onmouseover="this.style.color='var(--accent)'" onmouseout="this.style.color='var(--dim)'">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-      &lt; BACK
-    </a>
-    <span style="color:var(--border)">/</span>
-    <span style="font-family:'Orbitron',monospace;font-size:.9rem;color:var(--accent);text-shadow:0 0 8px var(--accent)60;letter-spacing:.1em">{{ company.symbol }}</span>
-    <span style="color:var(--dim);font-size:.72rem;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="hidden md:inline">{{ company.name }}</span>
+<nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
+  <div class="flex items-center gap-3 flex-wrap">
+    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.06em;color:var(--fg)">Equity<span style="color:var(--accent)">OS</span></span>
+    <a href="/" class="run-btn" style="padding:.25rem .55rem;font-size:.62rem">&larr; Dashboard</a>
+    <span style="color:var(--border);font-size:.7rem">/</span>
+    <span style="font-weight:700;font-size:.8rem;color:var(--accent);letter-spacing:.04em">{{ company.symbol }}</span>
+    <span style="color:var(--dim);font-size:.72rem;max-width:min(280px,40vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="hidden sm:inline">{{ company.name }}</span>
   </div>
-  <div class="flex items-center gap-2">
-    <span class="tag" style="background:#001a33;color:var(--accent3);border:1px solid var(--accent3)40">{{ company.sector }}</span>
-    <span class="tag" style="background:#001a22;color:var(--accent);border:1px solid var(--accent)40">{{ company.data_quality.quality }}</span>
+  <div class="flex items-center gap-2 flex-shrink-0">
+    <a href="/sectors" style="color:var(--dim);font-size:.72rem" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
+    <span class="badge badge-good" style="font-size:.55rem;max-width:120px;overflow:hidden;text-overflow:ellipsis">{{ company.sector }}</span>
+    <span class="badge badge-fair" style="font-size:.55rem">{{ company.data_quality.quality }}</span>
   </div>
 </nav>
 
-<!-- Main -->
-<main class="px-4 md:px-6 py-6 max-w-screen-xl mx-auto">
+<main class="px-6 py-6 max-w-screen-2xl mx-auto">
 
   <!-- Top hero row -->
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
@@ -86,14 +104,14 @@
     <div class="card p-5 lg:col-span-2">
       <div class="flex flex-wrap items-start gap-4 mb-4">
         <div>
-          <h1 style="font-family:'Orbitron',monospace;font-size:2rem;font-weight:900;color:var(--accent);text-shadow:0 0 12px var(--accent)60;letter-spacing:.08em">{{ company.symbol }}</h1>
+          <h1 style="font-size:1.75rem;font-weight:800;color:var(--fg);letter-spacing:.04em">{{ company.symbol }}</h1>
           <div style="color:var(--dim);font-size:.8rem;margin-top:.15rem">{{ company.name }}</div>
-          <div style="color:var(--border);font-size:.68rem;margin-top:.1rem">{{ company.industry or '' }} &nbsp;·&nbsp; {{ company.exchange or 'US' }}</div>
+          <div style="color:var(--dim);font-size:.68rem;margin-top:.1rem">{{ company.industry or '' }} &nbsp;·&nbsp; {{ company.exchange or 'US' }}</div>
         </div>
         <div class="ml-auto text-right">
-          <div id="liveMcap" style="font-family:'Orbitron',monospace;font-size:1.4rem;font-weight:700;color:var(--accent3)">–</div>
-          <div style="color:var(--dim);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase">&gt; MKT.CAP</div>
-          <div id="livePE" style="color:var(--fg);font-size:.8rem;margin-top:.4rem">P/E –</div>
+          <div id="liveMcap" style="font-size:1.35rem;font-weight:700;color:var(--accent2)">–</div>
+          <div style="color:var(--dim);font-size:.58rem;letter-spacing:.08em;text-transform:uppercase" title="{{ G.mcap }}">Market cap</div>
+          <div id="livePE" style="color:var(--fg);font-size:.78rem;margin-top:.35rem" title="{{ G.pe }}">P/E –</div>
         </div>
       </div>
       <p style="color:var(--dim);font-size:.75rem;line-height:1.65;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden" id="descText">
@@ -105,171 +123,238 @@
     <div class="card p-5 flex flex-col items-center justify-center text-center">
       {% set sc = company.investment_scores %}
       {% set cat = sc.investment_category %}
-      <div style="font-family:'Orbitron',monospace;font-size:2.8rem;font-weight:900;margin-bottom:.25rem;
-        {% if cat=='EXCELLENT' %}color:#00ff88;text-shadow:0 0 16px #00ff8880
-        {% elif cat=='GOOD' %}color:#00d4ff;text-shadow:0 0 16px #00d4ff80
-        {% elif cat=='FAIR' %}color:#ffaa00;text-shadow:0 0 16px #ffaa0080
-        {% elif cat=='POOR' %}color:#ff4455;text-shadow:0 0 16px #ff445580
-        {% else %}color:#ff00ff;text-shadow:0 0 16px #ff00ff80{% endif %}">
+      {% set cat_cls = 'badge-excellent' if cat=='EXCELLENT' else 'badge-good' if cat=='GOOD' else 'badge-fair' if cat=='FAIR' else 'badge-poor' if cat=='POOR' else 'badge-risky' %}
+      <div style="font-size:2.5rem;font-weight:800;margin-bottom:.2rem;color:{% if cat=='EXCELLENT' %}var(--pos){% elif cat=='GOOD' %}var(--accent){% elif cat=='FAIR' %}var(--warn){% elif cat=='POOR' %}var(--neg){% else %}#c084fc{% endif %}">
         {{ sc.overall_score }}
       </div>
-      <div style="color:var(--dim);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem">&gt; SCORE / 20</div>
-      <span class="tag mb-5"
-        style="{% if cat=='EXCELLENT' %}background:#003322;color:#00ff88;border:1px solid #00ff8860
-        {% elif cat=='GOOD' %}background:#001a33;color:#00d4ff;border:1px solid #00d4ff60
-        {% elif cat=='FAIR' %}background:#2a1500;color:#ffaa00;border:1px solid #ffaa0060
-        {% elif cat=='POOR' %}background:#1a0000;color:#ff4455;border:1px solid #ff445560
-        {% else %}background:#1a0033;color:#ff00ff;border:1px solid #ff00ff60{% endif %}">
-        {{ cat }}
-      </span>
+      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.65rem" title="{{ G.score_20 }}">Score / 20</div>
+      <span class="badge {{ cat_cls }} mb-5">{{ cat }}</span>
       <div class="w-full space-y-2 text-left">
-        {% for label, val, color in [('Quality', sc.quality_score, '#00d4ff'),('Value', sc.value_score, '#ffaa00'),('Growth', sc.growth_score, '#ff00ff'),('Safety', sc.safety_score, '#00ff88')] %}
+        {% set sub_tips = {'Quality': G.quality, 'Value': G.value, 'Growth': G.growth, 'Safety': G.safety} %}
+        {% for label, val, color in [('Quality', sc.quality_score, '#06b6d4'),('Value', sc.value_score, '#f59e0b'),('Growth', sc.growth_score, '#3b82f6'),('Safety', sc.safety_score, '#22c55e')] %}
+        {% set v = (val or 0)|float %}
         <div class="flex items-center gap-2" style="font-size:.72rem">
-          <span style="color:var(--dim);width:3.2rem">{{ label }}</span>
-          <div style="flex:1;background:var(--muted);height:4px;position:relative">
-            <div style="width:{{ (val/5*100)|int }}%;height:100%;background:{{ color }};box-shadow:0 0 4px {{ color }}80"></div>
+          <span style="color:var(--dim);width:3.2rem" title="{{ sub_tips[label] }}">{{ label }}</span>
+          <div style="flex:1;background:var(--muted);height:4px;position:relative;border-radius:2px">
+            <div style="width:{{ (v/5*100)|int }}%;height:100%;background:{{ color }};border-radius:2px"></div>
           </div>
-          <span style="color:var(--fg);width:1.4rem;text-align:right">{{ val }}</span>
+          <span style="color:var(--fg);min-width:3.25rem;text-align:right" title="Sub-score 0–5 from the model rubric (0 = none of the cheapness buckets hit, not missing data)">{{ '%.1f'|format(v) }}/5</span>
         </div>
         {% endfor %}
       </div>
     </div>
   </div>
 
-  <!-- KPI row -->
-  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-    {% set m = company.financial_metrics %}
-    {% set ci = company.company_info %}
-    {% for label, val in [
-        ('REVENUE', '$'+('%.1f'|format(m.revenue_b))+'B'),
-        ('NET INCOME', '$'+('%.1f'|format(m.net_income_b))+'B'),
-        ('GROSS MARGIN', ('%.1f'|format(m.gross_margin_pct))+'%'),
-        ('NET MARGIN', ('%.1f'|format(m.net_margin_pct))+'%'),
-        ('ROE', ('%.1f'|format(m.roe_pct))+'%'),
-        ('ROIC', ('%.1f'|format(m.roic_pct))+'%')
-    ] %}
-    <div class="card p-3 text-center">
-      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.12em;text-transform:uppercase;margin-bottom:.3rem">&gt; {{ label }}</div>
-      <div style="color:var(--fg);font-weight:700;font-family:'Orbitron',monospace;font-size:.9rem">{{ val }}</div>
+  <!-- Stock price + Financials row -->
+  {% set m = company.financial_metrics %}
+  {% set ci = company.company_info %}
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+
+    <!-- Left: Stock price chart (2 cols wide) -->
+    <div class="card lg:col-span-2" style="padding:0;overflow:hidden">
+      <!-- Price header -->
+      <div class="flex items-center justify-between px-4 pt-4 pb-2">
+        <div>
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.25rem">
+            <span class="section-h" style="margin-bottom:0">{{ company.symbol }}</span>
+            <div id="rangeBar" style="display:flex;gap:2px">
+              <button class="rbtn" data-r="1d">1D</button>
+              <button class="rbtn" data-r="1w">1W</button>
+              <button class="rbtn" data-r="1m">1M</button>
+              <button class="rbtn" data-r="3m">3M</button>
+              <button class="rbtn" data-r="6m">6M</button>
+              <button class="rbtn" data-r="ytd" title="{{ G.ytd }}">YTD</button>
+              <button class="rbtn active" data-r="1y">1Y</button>
+              <button class="rbtn" data-r="3y">3Y</button>
+              <button class="rbtn" data-r="5y">5Y</button>
+              <button class="rbtn" data-r="10y">10Y</button>
+              <button class="rbtn" data-r="max">Max</button>
+            </div>
+          </div>
+          <div id="priceHeader" style="display:flex;align-items:baseline;gap:.6rem">
+            <span id="priceNow" style="font-size:1.4rem;font-weight:800;color:var(--fg)">–</span>
+            <span id="priceChange" style="font-size:.78rem;font-weight:600">–</span>
+          </div>
+        </div>
+        <div id="priceHover" style="text-align:right;font-size:.62rem;color:var(--dim);min-width:14rem;display:none">
+          <div id="hoverDate" style="color:var(--fg);font-weight:600;margin-bottom:1px"></div>
+          <div id="hoverPrice" style="color:var(--fg);letter-spacing:.02em"></div>
+          <div id="hoverVol" style="color:var(--dim)"></div>
+        </div>
+      </div>
+      <!-- Chart area -->
+      <div style="position:relative;height:260px;padding:0 .5rem">
+        <canvas id="chartPrice"></canvas>
+      </div>
+      <!-- Volume bars -->
+      <div style="position:relative;height:60px;padding:0 .5rem">
+        <canvas id="chartVolume"></canvas>
+      </div>
+      <div id="priceLoading" style="display:none;color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+      <!-- Technicals bar -->
+      <div class="flex flex-wrap gap-x-5 gap-y-1 px-4 py-2" style="font-size:.62rem;color:var(--dim);border-top:1px solid var(--border)">
+        <span class="tech-tag" title="{{ G.w52_high }}">52W High <b style="color:var(--pos)">{{ company.technicals.high_52w or '–' }}</b></span>
+        <span class="tech-tag" title="{{ G.w52_low }}">52W Low <b style="color:var(--neg)">{{ company.technicals.low_52w or '–' }}</b></span>
+        <span class="tech-tag" title="{{ G.dma50 }}">50 DMA <b>{{ company.technicals.ma_50 or '–' }}</b></span>
+        <span class="tech-tag" title="{{ G.dma200 }}">200 DMA <b>{{ company.technicals.ma_200 or '–' }}</b></span>
+        <span class="tech-tag" title="{{ G.beta }}">Beta <b>{{ company.technicals.beta or '–' }}</b></span>
+      </div>
     </div>
-    {% endfor %}
+
+    <!-- Right: Financials summary -->
+    <div class="card p-5">
+      <div class="section-h">Financials</div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.revenue }}">Revenue</span><span style="font-weight:600">{{ m.revenue_fmt }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.net_income }}">Net Income</span><span style="font-weight:600">{{ m.net_income_fmt }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.cfo }}">Operating CF (CFO)</span><span style="font-weight:600;color:var(--accent2)">{{ m.operating_cash_flow_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.capex }}">CapEx</span><span>{{ m.capital_expenditure_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.fcf }}">Free Cash Flow</span><span style="font-weight:600">{{ m.free_cash_flow_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.gross_margin }}">Gross Margin</span><span>{{ '%.1f'|format(m.gross_margin_pct) }}%</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.net_margin }}">Net Margin</span><span>{{ '%.1f'|format(m.net_margin_pct) }}%</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.roe }}">ROE</span><span class="{{ 'bull' if m.roe_pct > 12 else '' }}">{{ '%.1f'|format(m.roe_pct) }}%</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.roic }}">ROIC</span><span class="{{ 'bull' if m.roic_pct > 12 else '' }}">{{ '%.1f'|format(m.roic_pct) }}%</span></div>
+      <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span><span>{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
+      <div class="stat-row">
+        <span class="stat-label" title="{{ G.peg }}">PEG</span>
+        {% if m.lynch_peg %}
+        <span title="P/E {{ '%.1f'|format(m.pe_ratio or 0) }} ÷ {{ m.lynch_peg.growth_pct }}% — {{ m.lynch_peg.basis }}">{{ '%.2f'|format(m.lynch_peg.value) }}</span>
+        {% else %}
+        <span style="color:var(--dim)">N/A</span>
+        {% endif %}
+      </div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.ev_ebitda }}">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.fcf_yield }}">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">–</span></div>
+      <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.de }}">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.current_ratio }}">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.altman_z }}">Altman Z</span><span>{{ '%.1f'|format(m.altman_z_score or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.piotroski }}">Piotroski</span><span>{{ m.piotroski_score or 0 }}/9</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.rev_growth_1y }}">Rev Growth 1Y</span>
+        <span class="{{ 'bull' if m.revenue_growth_1y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_growth_1y_pct) }}%</span>
+      </div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.oeps_cagr }}">OEPS CAGR</span><span class="{{ 'bull' if m.oeps_cagr_pct > 0 else 'bear' }}">{{ '%.1f'|format(m.oeps_cagr_pct) }}%</span></div>
+    </div>
   </div>
 
-  <!-- Charts row -->
+  <!-- Financial charts range bar -->
+  <div class="flex items-center gap-2 mb-3" style="font-size:.62rem">
+    <span class="section-h" style="margin-bottom:0">Financials</span>
+    <div id="finRangeBar" style="display:flex;gap:2px">
+      <button class="rbtn" data-fy="5">5Y</button>
+      <button class="rbtn active" data-fy="10">10Y</button>
+      <button class="rbtn" data-fy="15">15Y</button>
+      <button class="rbtn" data-fy="99">All</button>
+    </div>
+  </div>
+
+  <!-- Charts row 1 -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
     <div class="card p-4">
-      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; REVENUE &amp; NET_INCOME (annual $B)</div>
+      <div class="section-h has-tip" id="revNIHeading" title="{{ G.revenue }} · {{ G.net_income }}">Revenue &amp; net income</div>
       <canvas id="chartRevenue"></canvas>
       <div id="revLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
     </div>
     <div class="card p-4">
-      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; EPS &amp; OWNER_EARNINGS / SHARE (annual)</div>
+      <div class="section-h has-tip" title="{{ G.eps }} · {{ G.oeps }}">EPS &amp; owner earnings / share</div>
       <canvas id="chartEPS"></canvas>
       <div id="epsLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
     </div>
   </div>
 
+  <!-- Charts row 2 -->
   <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
     <div class="card p-4">
-      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; FCF &amp; OWNER_EARNINGS (annual $B)</div>
+      <div class="section-h has-tip" id="fcfOEHeading" title="{{ G.cfo }} · {{ G.capex }} · {{ G.fcf }}">CFO, CapEx &amp; FCF</div>
       <canvas id="chartFCF"></canvas>
       <div id="fcfLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
     </div>
     <div class="card p-4">
-      <div style="color:var(--accent);font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;margin-bottom:.75rem;font-family:'JetBrains Mono',monospace">&gt; GROSS_MARGIN &amp; NET_MARGIN % (annual)</div>
+      <div class="section-h has-tip" title="{{ G.gross_margin }} · {{ G.net_margin }}">Gross &amp; net margin %</div>
       <canvas id="chartMargin"></canvas>
       <div id="marginLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
     </div>
   </div>
 
-  <!-- Analyst + Metrics detail -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+  <!-- Charts row 3: P/E -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+    <div class="card p-4">
+      <div class="section-h has-tip" title="{{ G.pe }}">Historical P/E ratio</div>
+      <canvas id="chartPE"></canvas>
+      <div id="peLoading" style="color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
+    </div>
+  </div>
 
-    <!-- Analyst consensus -->
+  <!-- Analyst -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
     <div class="card p-5">
       <div class="flex items-center gap-2 mb-4">
-        <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace">&gt; ANALYST_CONSENSUS</div>
-        <span style="color:#ffaa00;font-size:.65rem" title="Peter Lynch: When analysts finally discover a stock, the easy money is usually already made.">⚠ LYNCH</span>
+        <div class="section-h has-tip" style="margin-bottom:0" title="{{ G.analyst }}">Analyst consensus</div>
+        <span style="color:var(--warn);font-size:.62rem" title="Peter Lynch: When analysts finally discover a stock, the easy money is usually already made.">⚠ Lynch</span>
       </div>
       <div id="analystBlock">
         <div style="color:var(--border);font-size:.7rem">LOADING<span style="animation:blink 1s step-end infinite">_</span></div>
-      </div>
-    </div>
-
-    <!-- Valuation -->
-    <div class="card p-5">
-      <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-bottom:.75rem">&gt; VALUATION</div>
-      <div class="stat-row"><span class="stat-label">P/E Ratio</span><span>{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">P/B Ratio</span><span>{{ '%.2f'|format(m.pb_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">P/S Ratio</span><span>{{ '%.2f'|format(m.ps_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">–</span></div>
-      <div class="stat-row"><span class="stat-label">OEPS CAGR</span><span class="{{ 'bull' if m.oeps_cagr_pct > 0 else 'bear' }}">{{ '%.1f'|format(m.oeps_cagr_pct) }}%</span></div>
-    </div>
-
-    <!-- Health -->
-    <div class="card p-5">
-      <div style="color:var(--accent);font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;font-family:'JetBrains Mono',monospace;margin-bottom:.75rem">&gt; FINANCIAL_HEALTH</div>
-      <div class="stat-row"><span class="stat-label">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">Altman Z</span><span>{{ '%.1f'|format(m.altman_z_score or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label">Piotroski</span><span>{{ m.piotroski_score or 0 }}/9</span></div>
-      <div class="stat-row"><span class="stat-label">Rev Growth 1Y</span>
-        <span class="{{ 'bull' if m.revenue_growth_1y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_growth_1y_pct) }}%</span>
-      </div>
-      <div class="stat-row"><span class="stat-label">Rev CAGR 3Y</span>
-        <span class="{{ 'bull' if m.revenue_cagr_3y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_cagr_3y_pct) }}%</span>
       </div>
     </div>
   </div>
 
   <!-- Data quality footer -->
   <div class="card p-4 flex flex-wrap gap-6" style="font-size:.72rem">
-    <span style="color:var(--dim)">&gt; INCOME_STMT: <b style="color:var(--accent3)">{{ company.data_quality.income_statement }}</b> qtrs</span>
-    <span style="color:var(--dim)">&gt; BALANCE: <b style="color:var(--accent3)">{{ company.data_quality.balance_sheet }}</b> qtrs</span>
-    <span style="color:var(--dim)">&gt; CASHFLOW: <b style="color:var(--accent3)">{{ company.data_quality.cash_flow }}</b> qtrs</span>
-    <span style="color:var(--dim)">&gt; QUALITY: <b style="color:var(--accent)">{{ company.data_quality.quality }}</b></span>
+    <span style="color:var(--dim)">Income stmt: <b style="color:var(--accent2)">{{ company.data_quality.income_statement }}</b> qtrs</span>
+    <span style="color:var(--dim)">Balance: <b style="color:var(--accent2)">{{ company.data_quality.balance_sheet }}</b> qtrs</span>
+    <span style="color:var(--dim)">Cash flow: <b style="color:var(--accent2)">{{ company.data_quality.cash_flow }}</b> qtrs</span>
+    <span style="color:var(--dim)">Quality: <b style="color:var(--accent)">{{ company.data_quality.quality }}</b></span>
   </div>
 
 </main>
 
-<!-- On-page AI chat (OpenAI + server EODHD tool; keys in .env only) -->
+<!-- On-page AI chat (ChatGPT subscription via OAuth) -->
 <div id="gchat-panel" class="collapsed" aria-label="Stock chat">
+  <div class="gchat-resize" id="gchatResize" title="Drag to resize" aria-hidden="true"></div>
   <div class="gchat-head" id="gchatToggle" title="Open / close">
-    <span style="color:var(--accent);font-family:'Orbitron',monospace;font-size:.68rem;letter-spacing:.08em">&gt; ASK AI · <span id="gchatSym">{{ company.symbol }}</span></span>
+    <span style="color:var(--accent);font-size:.68rem;font-weight:700;letter-spacing:.06em">Ask AI · <span id="gchatSym">{{ company.symbol }}</span></span>
     <span style="color:var(--dim);font-size:.6rem" id="gchatChev">▲</span>
+  </div>
+  <div id="gchatAuth" class="gchat-auth show">
+    <button type="button" id="gchatLoginBtn">Sign in with ChatGPT</button>
+    <div class="gchat-hint" style="margin-top:.4rem">Uses your ChatGPT Plus/Pro subscription. Login is saved on this server.</div>
+    <div id="gchatSigned" class="gchat-signed" style="display:none">Connected · <button type="button" id="gchatLogoutBtn" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:.58rem;text-decoration:underline">Sign out</button></div>
   </div>
   <div class="gchat-body" id="gchatBody"></div>
   <div class="gchat-foot">
-    <div class="gchat-hint">Page: <b style="color:var(--accent3)">{{ company.symbol }}</b>. Replies use a short snapshot + on-demand EODHD (server key). Not financial advice.</div>
-    <textarea id="gchatInput" placeholder="Ask about this stock…" maxlength="12000"></textarea>
-    <button type="button" id="gchatSend">SEND</button>
+    <div class="gchat-hint">Page: <b style="color:var(--accent2)">{{ company.symbol }}</b>. Replies stream as they generate (like ChatGPT). Snapshot + on-demand EODHD. Not financial advice.</div>
+    <textarea id="gchatInput" placeholder="Sign in above to ask about this stock…" maxlength="12000" disabled></textarea>
+    <button type="button" id="gchatSend" disabled>SEND</button>
     <div class="gchat-hint" id="gchatErr" style="color:#f472b6"></div>
   </div>
 </div>
 
 <script>
 const SYM = '{{ company.symbol }}';
+
+function usdFromHistRow(h, keyUsd, keyB) {
+  const u = h[keyUsd];
+  if (u != null && Number.isFinite(Number(u))) return Number(u);
+  return Number(h[keyB] || 0) * 1e9;
+}
+function pickMoneyScale(maxAbsUsd) {
+  const x = Math.max(1e-12, maxAbsUsd);
+  if (x >= 1e12) return { div: 1e12, suffix: 'T' };
+  if (x >= 1e9) return { div: 1e9, suffix: 'B' };
+  if (x >= 1e6) return { div: 1e6, suffix: 'M' };
+  if (x >= 1e3) return { div: 1e3, suffix: 'K' };
+  return { div: 1, suffix: '' };
+}
+
 const CHARTJS_DEFAULTS = {
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { labels: { color: '#6b7280', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
+  plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
   scales: {
-    x: { ticks: { color: '#3a3a4a', font: { size: 9 } }, grid: { color: '#1c1c2e' } },
-    y: { ticks: { color: '#3a3a4a', font: { size: 9 } }, grid: { color: '#1c1c2e' } }
+    x: { ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 30, minRotation: 0 }, grid: { color: 'rgba(30,45,61,.6)' } },
+    y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(30,45,61,.6)' } }
   }
 };
-
-function mkChart(id, type, labels, datasets) {
-  const ctx = document.getElementById(id);
-  if (!ctx) return;
-  ctx.style.display = 'block';
-  new Chart(ctx, {
-    type,
-    data: { labels, datasets },
-    options: { ...CHARTJS_DEFAULTS }
-  });
-}
 
 function hideLoader(id) {
   const el = document.getElementById(id);
@@ -278,29 +363,411 @@ function hideLoader(id) {
 
 function renderAnalyst(ar) {
   const el = document.getElementById('analystBlock');
-  if (!ar) { el.innerHTML = '<div style="color:var(--border);font-size:.7rem">NO_DATA // NULL</div>'; return; }
+  if (!ar) { el.innerHTML = '<div style="color:var(--dim);font-size:.7rem">No analyst data</div>'; return; }
   const r = ar.rating, sb = ar.strong_buy, b = ar.buy, h = ar.hold, s = ar.sell + ar.strong_sell;
   const total = sb + b + h + s || 1;
   const bullPct = Math.round((sb + b) / total * 100);
   const label = r >= 4.5 ? 'STRONG_BUY' : r >= 3.5 ? 'BUY' : r >= 2.5 ? 'HOLD' : 'SELL';
-  const clr = r >= 4 ? 'var(--accent)' : r >= 3 ? '#ffaa00' : '#ff4455';
+  const clr = r >= 4 ? 'var(--pos)' : r >= 3 ? 'var(--warn)' : 'var(--neg)';
   const tp = ar.target_price > 0 ? `<div class="stat-row"><span class="stat-label">Target Price</span><span style="color:var(--fg)">$${ar.target_price.toFixed(2)}</span></div>` : '';
   el.innerHTML = `
-    <div style="font-family:'Orbitron',monospace;font-size:1.2rem;font-weight:900;color:${clr};text-shadow:0 0 10px ${clr}60;margin-bottom:.25rem">${label}</div>
-    <div style="color:var(--dim);font-size:.65rem;margin-bottom:.75rem">rating ${r.toFixed(2)}/5 &nbsp;·&nbsp; ${total} analysts</div>
-    <div style="background:var(--muted);height:5px;margin-bottom:.75rem;border:1px solid var(--border)">
-      <div style="width:${bullPct}%;height:100%;background:var(--accent);box-shadow:0 0 6px var(--accent)" title="${bullPct}% bullish"></div>
+    <div style="font-size:1.05rem;font-weight:800;color:${clr};margin-bottom:.25rem">${label}</div>
+    <div style="color:var(--dim);font-size:.65rem;margin-bottom:.75rem">Rating ${r.toFixed(2)}/5 · ${total} analysts</div>
+    <div style="background:var(--muted);height:5px;margin-bottom:.75rem;border:1px solid var(--border);border-radius:2px">
+      <div style="width:${bullPct}%;height:100%;background:var(--accent);border-radius:2px" title="${bullPct}% bullish"></div>
     </div>
     <div class="grid grid-cols-4 gap-1 text-center mb-3" style="font-size:.65rem">
-      <div><div style="color:var(--accent);font-weight:700;font-family:'Orbitron',monospace">${sb}</div><div style="color:var(--dim)">S.BUY</div></div>
-      <div><div style="color:#86efac;font-weight:700;font-family:'Orbitron',monospace">${b}</div><div style="color:var(--dim)">BUY</div></div>
-      <div><div style="color:#ffaa00;font-weight:700;font-family:'Orbitron',monospace">${h}</div><div style="color:var(--dim)">HOLD</div></div>
-      <div><div style="color:#ff4455;font-weight:700;font-family:'Orbitron',monospace">${s}</div><div style="color:var(--dim)">SELL</div></div>
+      <div><div style="color:var(--accent);font-weight:700">${sb}</div><div style="color:var(--dim)">S.BUY</div></div>
+      <div><div style="color:var(--pos);font-weight:700">${b}</div><div style="color:var(--dim)">BUY</div></div>
+      <div><div style="color:var(--warn);font-weight:700">${h}</div><div style="color:var(--dim)">HOLD</div></div>
+      <div><div style="color:var(--neg);font-weight:700">${s}</div><div style="color:var(--dim)">SELL</div></div>
     </div>
-    ${tp}
-    <div style="margin-top:.75rem;padding:.5rem;background:#1a0f00;border:1px solid #ffaa0040;font-size:.65rem;color:#ffaa00">
-      ⚠ LYNCH_WARN: when analysts love a stock, the easy money is already made.
-    </div>`;
+    ${tp}`;
+}
+
+let _fullHist = [];
+let _ttmData = null;
+let _ttm2Data = null;
+let _estData = [];
+let _finCharts = {};
+let _finYears = 10;
+
+function barDataset(label, data, color, opts) {
+  return { label, data, skipNull: true, backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3, ...(opts || {}) };
+}
+function lineDataset(label, data, color, opts) {
+  return { label, data, borderColor: color, backgroundColor: color + '22', pointRadius: 3, tension: 0.3, fill: true, ...(opts || {}) };
+}
+function estBarDataset(label, data, color) {
+  return {
+    label, data, skipNull: true,
+    backgroundColor: color + '35', borderColor: color + '99',
+    borderWidth: 1.5, borderRadius: 3, borderDash: [4, 3],
+  };
+}
+function ttmBarDataset(label, data, color) {
+  return {
+    label, data, skipNull: true,
+    backgroundColor: color + '85', borderColor: color,
+    borderWidth: 2, borderRadius: 3,
+  };
+}
+
+function parseEstFy(entry) {
+  if (!entry) return null;
+  if (entry.fiscal_year != null) return Number(entry.fiscal_year);
+  const m = String(entry.year || '').match(/FY(\d{4})/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+function rowUsd(row, keyUsd, keyB) {
+  if (!row) return null;
+  return usdFromHistRow(row, keyUsd, keyB);
+}
+
+/** Pick forward estimate to stack with TTM on one x-axis column (actual vs analyst). */
+function pickTtmCompareEstimate(ttm, estimates) {
+  if (!ttm || !estimates.length) return -1;
+  const ttmFy = ttm.fiscal_year != null ? Number(ttm.fiscal_year) : null;
+  if (ttmFy != null) {
+    const exact = estimates.findIndex(e => parseEstFy(e) === ttmFy);
+    if (exact >= 0) return exact;
+    const next = estimates.findIndex(e => parseEstFy(e) === ttmFy + 1);
+    if (next >= 0) return next;
+  }
+  return 0;
+}
+
+/** Historical years + 1Y/2Y TTM each overlapped with a forward estimate column. */
+function buildFinChartPoints(hist, ttm, ttm2, estimates) {
+  const pts = hist.map(h => ({
+    label: String(h.year),
+    hist: h,
+    ttm: null,
+    ttm2: null,
+    est: null,
+    compare: false,
+    compareKind: null,
+  }));
+  const usedEst = new Set();
+
+  const merge1 = pickTtmCompareEstimate(ttm, estimates);
+  if (ttm && merge1 >= 0) {
+    const est = estimates[merge1];
+    pts.push({
+      label: est.year || String(parseEstFy(est) || 'Est'),
+      hist: null, ttm, ttm2: null, est,
+      compare: true, compareKind: '1y',
+    });
+    usedEst.add(merge1);
+  } else if (ttm) {
+    pts.push({
+      label: ttm.year || 'TTM',
+      hist: null, ttm, ttm2: null, est: null,
+      compare: false, compareKind: null,
+    });
+  }
+
+  let merge2 = -1;
+  if (ttm2) {
+    const ttm2Fy = ttm2.fiscal_year != null ? Number(ttm2.fiscal_year) : null;
+    if (ttm2Fy != null) {
+      merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
+      if (merge2 < 0) {
+        merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy + 1);
+      }
+    }
+    if (merge2 < 0) merge2 = estimates.findIndex((_, i) => !usedEst.has(i));
+  }
+  if (ttm2 && merge2 >= 0) {
+    const est = estimates[merge2];
+    pts.push({
+      label: est.year || String(parseEstFy(est) || 'Est'),
+      hist: null, ttm: null, ttm2, est,
+      compare: true, compareKind: '2y',
+    });
+    usedEst.add(merge2);
+  } else if (ttm2) {
+    pts.push({
+      label: ttm2.year || '2Y avg',
+      hist: null, ttm: null, ttm2, est: null,
+      compare: false, compareKind: null,
+    });
+  }
+
+  estimates.forEach((e, i) => {
+    if (usedEst.has(i)) return;
+    pts.push({
+      label: e.year, hist: null, ttm: null, ttm2: null, est: e,
+      compare: false, compareKind: null,
+    });
+  });
+  return pts;
+}
+
+function finChartLabels(pts) {
+  return pts.map(p => {
+    if (p.compareKind === '2y') return `${p.label} · 2Y vs est`;
+    if (p.compare) return `${p.label} · TTM vs est`;
+    return p.label;
+  });
+}
+
+function pctDelta(actual, est) {
+  if (actual == null || est == null || !Number.isFinite(actual) || !Number.isFinite(est) || est === 0) return null;
+  return ((actual - est) / Math.abs(est)) * 100;
+}
+
+/** Bridge a forward line from the last actual point to the next estimate point. */
+function bridgeForwardLine(actual, fwd) {
+  return fwd.map((v, i) => {
+    if (v != null) return v;
+    if (i + 1 < fwd.length && fwd[i + 1] != null && actual[i] != null) return actual[i];
+    return null;
+  });
+}
+
+/** Actual side of compare columns (API already annualizes multi-year TTM). */
+function compareActForEst(_p, usdVal) {
+  return usdVal;
+}
+
+function compareTooltipFooter(pts, idx, pairs) {
+  const p = pts[idx];
+  if (!p || !p.compare) return '';
+  const tag = p.compareKind === '2y' ? '2Y avg' : 'TTM';
+  const lines = [];
+  pairs.forEach(([label, act, est]) => {
+    const actCmp = compareActForEst(p, act);
+    const d = pctDelta(actCmp, est);
+    if (d == null) return;
+    const sign = d >= 0 ? '+' : '';
+    const tone = d >= 0 ? 'ahead of' : 'behind';
+    lines.push(`${label}: ${tag} ${tone} est (${sign}${d.toFixed(1)}%)`);
+  });
+  return lines.join('\n');
+}
+
+const BAR_GROUP_OPTS = {
+  datasets: {
+    bar: {
+      categoryPercentage: 0.82,
+      barPercentage: 0.92,
+      maxBarThickness: 48,
+      skipNull: true,
+    },
+  },
+};
+
+function renderFinancialCharts(years) {
+  _finYears = years;
+  document.querySelectorAll('#finRangeBar .rbtn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.fy) === years);
+  });
+
+  Object.values(_finCharts).forEach(c => c.destroy());
+  _finCharts = {};
+
+  let hist = _fullHist.slice();
+  if (years < 99) hist = hist.slice(-years);
+
+  const pts = buildFinChartPoints(hist, _ttmData, _ttm2Data, _estData);
+  const labels = finChartLabels(pts);
+
+  const revHist = pts.map(p => rowUsd(p.hist, 'revenue_usd', 'revenue_b'));
+  const revTtm  = pts.map(p => rowUsd(p.ttm, 'revenue_usd', 'revenue_b'));
+  const revTtm2 = pts.map(p => rowUsd(p.ttm2, 'revenue_usd', 'revenue_b'));
+  const revEst  = pts.map(p => rowUsd(p.est, 'revenue_usd', 'revenue_b'));
+  const niHist  = pts.map(p => rowUsd(p.hist, 'net_income_usd', 'net_income_b'));
+  const niTtm   = pts.map(p => rowUsd(p.ttm, 'net_income_usd', 'net_income_b'));
+  const niTtm2  = pts.map(p => rowUsd(p.ttm2, 'net_income_usd', 'net_income_b'));
+  const niEst   = pts.map(p => rowUsd(p.est, 'net_income_usd', 'net_income_b'));
+
+  const allRevNi = [...revHist, ...revTtm, ...revTtm2, ...revEst, ...niHist, ...niTtm, ...niTtm2, ...niEst].filter(v => v != null);
+  const maxRN = Math.max(1e-9, ...allRevNi.map(v => Math.abs(v)));
+  const scRN = pickMoneyScale(maxRN);
+  const s = (arr) => arr.map(v => (v == null ? null : v / scRN.div));
+
+  const hRev = document.getElementById('revNIHeading');
+  if (hRev) hRev.textContent = 'Revenue & net income' + (scRN.suffix ? ' ($' + scRN.suffix + ')' : '');
+  hideLoader('revLoading');
+  // Dataset order: annual Rev|NI, then compare column blues (TTM, Est) then greens (TTM, Est).
+  const revDS = [
+    barDataset('Revenue', s(revHist), '#3b82f6'),
+    barDataset('Net Income', s(niHist), '#22c55e'),
+  ];
+  if (revTtm.some(v => v != null)) revDS.push(ttmBarDataset('Rev TTM', s(revTtm), '#3b82f6'));
+  if (revTtm2.some(v => v != null)) revDS.push(ttmBarDataset('Rev 2Y avg', s(revTtm2), '#2563eb'));
+  if (revEst.some(v => v != null)) revDS.push(estBarDataset('Rev Est.', s(revEst), '#60a5fa'));
+  if (niTtm.some(v => v != null)) revDS.push(ttmBarDataset('NI TTM', s(niTtm), '#22c55e'));
+  if (niTtm2.some(v => v != null)) revDS.push(ttmBarDataset('NI 2Y avg', s(niTtm2), '#16a34a'));
+  if (niEst.some(v => v != null)) revDS.push(estBarDataset('NI Est.', s(niEst), '#4ade80'));
+
+  _finCharts.rev = mkChartRet('chartRevenue', 'bar', labels, revDS, {
+    ...BAR_GROUP_OPTS,
+    plugins: {
+      ...CHARTJS_DEFAULTS.plugins,
+      tooltip: {
+        callbacks: {
+          footer: (items) => {
+            if (!items.length) return '';
+            const i = items[0].dataIndex;
+            const actRev = revTtm2[i] != null ? revTtm2[i] : revTtm[i];
+            const actNi = niTtm2[i] != null ? niTtm2[i] : niTtm[i];
+            return compareTooltipFooter(pts, i, [
+              ['Revenue', actRev, revEst[i]],
+              ['Net income', actNi, niEst[i]],
+            ]);
+          },
+        },
+      },
+    },
+  });
+
+  const epsActual = pts.map(p => {
+    if (p.compareKind === '2y' && p.ttm2 && p.ttm2.eps != null) return p.ttm2.eps;
+    if (p.ttm && p.ttm.eps != null) return p.ttm.eps;
+    if (p.hist && p.hist.eps != null) return p.hist.eps;
+    return null;
+  });
+  const oepsActual = pts.map(p => {
+    let v = null;
+    if (p.compareKind === '2y' && p.ttm2) v = p.ttm2.oeps;
+    else if (p.ttm) v = p.ttm.oeps;
+    else if (p.hist) v = p.hist.oeps;
+    return (v != null && v > 0) ? v : null;
+  });
+  const epsEst = pts.map(p => (p.est && p.est.eps != null ? p.est.eps : null));
+  hideLoader('epsLoading');
+  const epsDS = [
+    lineDataset('EPS', epsActual, '#a855f7', { spanGaps: true, pointRadius: 4 }),
+    lineDataset('OEPS', oepsActual, '#f59e0b', { spanGaps: true, pointRadius: 4 }),
+  ];
+  if (epsEst.some(v => v != null)) {
+    epsDS.push(lineDataset('EPS Est.', bridgeForwardLine(epsActual, epsEst), '#a855f7', {
+      borderDash: [5, 3], fill: false, pointStyle: 'rectRot',
+      backgroundColor: 'transparent', spanGaps: true, pointRadius: 4,
+    }));
+  }
+  _finCharts.eps = mkChartRet('chartEPS', 'line', labels, epsDS);
+
+  const ocfHist = pts.map(p => rowUsd(p.hist, 'ocf_usd', 'ocf_b'));
+  const ocfTtm  = pts.map(p => rowUsd(p.ttm, 'ocf_usd', 'ocf_b'));
+  const ocfTtm2 = pts.map(p => rowUsd(p.ttm2, 'ocf_usd', 'ocf_b'));
+  const capHist = pts.map(p => rowUsd(p.hist, 'capex_usd', 'capex_b'));
+  const capTtm  = pts.map(p => rowUsd(p.ttm, 'capex_usd', 'capex_b'));
+  const capTtm2 = pts.map(p => rowUsd(p.ttm2, 'capex_usd', 'capex_b'));
+  const fcfHist = pts.map(p => rowUsd(p.hist, 'fcf_usd', 'fcf_b'));
+  const fcfTtm  = pts.map(p => rowUsd(p.ttm, 'fcf_usd', 'fcf_b'));
+  const fcfTtm2 = pts.map(p => rowUsd(p.ttm2, 'fcf_usd', 'fcf_b'));
+  const allFO = [...ocfHist, ...ocfTtm, ...ocfTtm2, ...capHist, ...capTtm, ...capTtm2, ...fcfHist, ...fcfTtm, ...fcfTtm2].filter(v => v != null);
+  const maxFO = Math.max(1e-9, ...allFO.map(v => Math.abs(v)));
+  const scFO = pickMoneyScale(maxFO);
+  const sf = (arr) => arr.map(v => (v == null ? null : v / scFO.div));
+
+  const hFcf = document.getElementById('fcfOEHeading');
+  if (hFcf) hFcf.textContent = 'CFO, CapEx & FCF' + (scFO.suffix ? ' ($' + scFO.suffix + ')' : '');
+  hideLoader('fcfLoading');
+  const fcfDS = [
+    barDataset('CFO', sf(ocfHist), '#22c55e'),
+    barDataset('FCF', sf(fcfHist), '#06b6d4'),
+    barDataset('CapEx', sf(capHist), '#f87171'),
+  ];
+  if (ocfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO TTM', sf(ocfTtm), '#22c55e'));
+  if (ocfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO 2Y avg', sf(ocfTtm2), '#16a34a'));
+  if (fcfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF TTM', sf(fcfTtm), '#06b6d4'));
+  if (fcfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF 2Y avg', sf(fcfTtm2), '#0891b2'));
+  if (capTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx TTM', sf(capTtm), '#f87171'));
+  if (capTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx 2Y avg', sf(capTtm2), '#ef4444'));
+  _finCharts.fcf = mkChartRet('chartFCF', 'bar', labels, fcfDS, BAR_GROUP_OPTS);
+
+  const gm = pts.map(p => {
+    if (p.compareKind === '2y' && p.ttm2) return p.ttm2.gross_margin_pct;
+    if (p.ttm) return p.ttm.gross_margin_pct;
+    if (p.hist) return p.hist.gross_margin_pct;
+    return null;
+  });
+  const nm = pts.map(p => {
+    if (p.compareKind === '2y' && p.ttm2) return p.ttm2.net_margin_pct;
+    if (p.ttm) return p.ttm.net_margin_pct;
+    if (p.hist) return p.hist.net_margin_pct;
+    return null;
+  });
+  hideLoader('marginLoading');
+  _finCharts.margin = mkChartRet('chartMargin', 'line', labels, [
+    lineDataset('Gross Margin %', gm, '#34d399', { spanGaps: true, pointRadius: 4 }),
+    lineDataset('Net Margin %', nm, '#f472b6', { spanGaps: true, pointRadius: 4 }),
+  ]);
+
+  const peTtm = pts.map(p => (p.ttm ? p.ttm.pe_ratio : null));
+  const peTtm2 = pts.map(p => (p.ttm2 ? p.ttm2.pe_ratio : null));
+  const peHist = pts.map(p => (p.hist ? p.hist.pe_ratio : null));
+  const peEst = pts.map(p => (p.est ? p.est.pe_ratio : null));
+  const peVals = pts.map((p, i) => peTtm2[i] ?? peTtm[i] ?? peHist[i] ?? peEst[i] ?? null);
+
+  hideLoader('peLoading');
+  const peCtx = document.getElementById('chartPE');
+  if (peCtx && peVals.some(v => v != null)) {
+    peCtx.style.display = 'block';
+    const peActual = pts.map((p, i) => {
+      if (p.compareKind === '2y') return peTtm2[i] ?? peHist[i] ?? null;
+      return peTtm[i] ?? peHist[i] ?? null;
+    });
+    const peFwd = pts.map((p, i) => {
+      if (peEst[i] != null) return peEst[i];
+      if (p.compare) return peTtm2[i] ?? peTtm[i] ?? null;
+      return null;
+    });
+    const connectFwd = peActual.map((v, i) => (v != null ? v : (i > 0 && peFwd[i - 1] != null ? peFwd[i - 1] : null)));
+    _finCharts.pe = new Chart(peCtx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'P/E', data: peActual,
+            borderColor: '#f59e0b', backgroundColor: '#f59e0b22',
+            pointRadius: 4, pointBackgroundColor: peActual.map(v =>
+              v == null ? 'transparent' : v > 30 ? '#ef4444' : v > 20 ? '#f59e0b' : '#22c55e'
+            ),
+            tension: 0.25, fill: true, spanGaps: true,
+          },
+          {
+            label: 'Fwd P/E', data: peFwd.map((v, i) => v ?? connectFwd[i]),
+            borderColor: '#f59e0b80', borderDash: [5, 3],
+            pointRadius: 4, pointStyle: 'rectRot',
+            pointBackgroundColor: peFwd.map(v =>
+              v == null ? 'transparent' : v > 30 ? '#ef444488' : v > 20 ? '#f59e0b88' : '#22c55e88'
+            ),
+            tension: 0.25, fill: false, spanGaps: true,
+          },
+          {
+            label: 'Avg (20)', data: labels.map(() => 20),
+            borderColor: 'rgba(148,163,184,.3)', borderDash: [6, 4],
+            borderWidth: 1, pointRadius: 0, fill: false,
+          },
+        ],
+      },
+      options: {
+        ...CHARTJS_DEFAULTS, maintainAspectRatio: true,
+        plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
+      },
+    });
+  } else if (peCtx) {
+    const el = document.getElementById('peLoading');
+    if (el) { el.style.display = 'block'; el.style.color = 'var(--dim)'; el.textContent = 'No P/E data (EPS <= 0 or no price data)'; }
+  }
+}
+
+function mkChartRet(id, type, labels, datasets, extraOpts) {
+  const ctx = document.getElementById(id);
+  if (!ctx) return null;
+  ctx.style.display = 'block';
+  return new Chart(ctx, {
+    type,
+    data: { labels, datasets },
+    options: { ...CHARTJS_DEFAULTS, maintainAspectRatio: true, ...(extraOpts || {}) },
+  });
 }
 
 async function loadHistory() {
@@ -310,58 +777,372 @@ async function loadHistory() {
     const d = await r.json();
     if (d.error) return;
 
-    // Update live KPIs (works even when annual history is empty)
-    if (d.market_cap_b > 0) document.getElementById('liveMcap').textContent = '$' + d.market_cap_b.toFixed(1) + 'B';
+    const mcapEl = document.getElementById('liveMcap');
+    if (mcapEl) {
+      if (d.market_cap_fmt) mcapEl.textContent = d.market_cap_fmt;
+      else if (d.market_cap_b > 0) mcapEl.textContent = '$' + d.market_cap_b.toFixed(1) + 'B';
+    }
     if (d.pe_ttm > 0) document.getElementById('livePE').textContent = 'P/E ' + d.pe_ttm.toFixed(1);
     if (d.eps_ttm) document.getElementById('fcfYield').textContent = '$' + d.eps_ttm.toFixed(2) + ' EPS TTM';
 
-    const hist = (d.history || []).slice().reverse(); // oldest first
-    if (!hist.length) {
+    _fullHist = (d.history || []).slice().reverse();
+    _ttmData = d.ttm || null;
+    _ttm2Data = d.ttm2 || null;
+    _estData = d.estimates || [];
+
+    if (!_fullHist.length) {
       if (d.partial) {
         const msg = (d.message || 'No annual fundamentals for charts.').replace(/</g, '');
-        ['revLoading', 'epsLoading', 'fcfLoading', 'marginLoading'].forEach(id => {
+        ['revLoading', 'epsLoading', 'fcfLoading', 'marginLoading', 'peLoading'].forEach(id => {
           const el = document.getElementById(id);
           if (el) { el.style.display = 'block'; el.style.color = 'var(--dim)'; el.textContent = msg; }
         });
-        renderAnalyst(d.analyst_ratings);
       }
+      renderAnalyst(d.analyst_ratings);
       return;
     }
-    const yrs  = hist.map(h => h.year);
-    const revs = hist.map(h => h.revenue_b);
-    const nis  = hist.map(h => h.net_income_b);
-    const eps  = hist.map(h => h.eps);
-    const fcfs = hist.map(h => h.fcf_b);
-    const oes  = hist.map(h => h.owner_earnings_b);
-    const gm   = hist.map(h => h.gross_margin_pct);
-    const nm   = hist.map(h => h.net_margin_pct);
 
-    const barDataset = (label, data, color) => ({
-      label, data, backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3
-    });
-    const lineDataset = (label, data, color) => ({
-      label, data, borderColor: color, backgroundColor: color + '22',
-      pointRadius: 3, tension: 0.3, fill: true
-    });
-
-    hideLoader('revLoading');
-    mkChart('chartRevenue', 'bar', yrs, [barDataset('Revenue $B', revs, '#3b82f6'), barDataset('Net Income $B', nis, '#22c55e')]);
-
-    hideLoader('epsLoading');
-    const oepsSeries = hist.map(h => (h.oeps != null && h.oeps > 0) ? h.oeps : null);
-    mkChart('chartEPS', 'line', yrs, [lineDataset('EPS', eps, '#a855f7'), lineDataset('OEPS / share', oepsSeries, '#f59e0b')]);
-
-    hideLoader('fcfLoading');
-    mkChart('chartFCF', 'bar', yrs, [barDataset('FCF $B', fcfs, '#06b6d4'), barDataset('Owner Earnings $B', oes, '#f97316')]);
-
-    hideLoader('marginLoading');
-    mkChart('chartMargin', 'line', yrs, [lineDataset('Gross Margin %', gm, '#34d399'), lineDataset('Net Margin %', nm, '#f472b6')]);
-
+    renderFinancialCharts(_finYears);
     renderAnalyst(d.analyst_ratings);
   } catch(e) { console.error(e); }
 }
 
-// —— Stock-aware GPT chat (NDJSON stream: /api/company/:sym/chat/stream) ——
+let priceChart = null;
+let volChart = null;
+let _currentRange = '1y';
+const _priceCache = {};
+let _priceChartBooted = false;
+
+/** Queue price chart after fundamentals — never competes with /history on first paint. */
+function scheduleInitialPriceChart() {
+  if (_priceChartBooted) return;
+  _priceChartBooted = true;
+  const run = () => {
+    const el = document.getElementById('priceLoading');
+    if (el) el.style.display = 'block';
+    loadPriceChart('1y');
+  };
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout: 1200 });
+  } else {
+    setTimeout(run, 50);
+  }
+}
+
+async function loadPriceChart(range) {
+  range = range || _currentRange;
+  _currentRange = range;
+  document.querySelectorAll('.rbtn').forEach(b => {
+    b.classList.toggle('active', b.dataset.r === range);
+  });
+
+  if (priceChart) { priceChart.destroy(); priceChart = null; }
+  if (volChart) { volChart.destroy(); volChart = null; }
+  const cP = document.getElementById('chartPrice');
+  const cV = document.getElementById('chartVolume');
+  if (cP) cP.style.display = 'none';
+  if (cV) cV.style.display = 'none';
+
+  let prices;
+  const loadEl = document.getElementById('priceLoading');
+  if (_priceCache[range]) {
+    prices = _priceCache[range];
+  } else {
+    if (loadEl) { loadEl.style.display = 'block'; loadEl.style.color = 'var(--border)'; loadEl.innerHTML = 'FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span>'; }
+    try {
+      const r = await fetch(`/api/company/${SYM}/price-history?range=${range}`);
+      if (!r.ok) return;
+      const d = await r.json();
+      prices = d.prices || [];
+      if (prices.length) _priceCache[range] = prices;
+    } catch(e) { console.error('Price fetch error:', e); return; }
+  }
+  if (!prices.length) {
+    if (loadEl) { loadEl.textContent = 'No price data for this range'; loadEl.style.color = 'var(--dim)'; }
+    return;
+  }
+  hideLoader('priceLoading');
+  try {
+
+    const labels = prices.map(p => p.date);
+    const closes = prices.map(p => p.close);
+    const opens  = prices.map(p => p.open || p.close);
+    const highs  = prices.map(p => p.high || p.close);
+    const lows   = prices.map(p => p.low || p.close);
+    const volumes = prices.map(p => p.volume || 0);
+    const startPrice = closes[0];
+    const endPrice = closes[closes.length - 1];
+    const pctChange = ((endPrice - startPrice) / startPrice * 100);
+    const dollarChange = endPrice - startPrice;
+    const isUp = endPrice >= startPrice;
+    const lineColor = isUp ? '#22c55e' : '#ef4444';
+
+    const nowEl = document.getElementById('priceNow');
+    const chgEl = document.getElementById('priceChange');
+    if (nowEl) nowEl.textContent = '$' + endPrice.toFixed(2);
+    if (chgEl) {
+      chgEl.textContent = (isUp ? '+' : '') + dollarChange.toFixed(2) + ' (' + (isUp ? '+' : '') + pctChange.toFixed(2) + '%)';
+      chgEl.style.color = isUp ? 'var(--pos)' : 'var(--neg)';
+    }
+
+    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const shortRanges = ['1d','1w','1m'];
+    const longRanges = ['3y','5y','10y','max'];
+    function fmtDateShort(ds) {
+      const parts = ds.split('-');
+      const mon = MONTHS[parseInt(parts[1], 10) - 1];
+      const day = parseInt(parts[2], 10);
+      const yr = parts[0].slice(2);
+      if (shortRanges.includes(range)) return mon + ' ' + day;
+      if (longRanges.includes(range)) return mon + ' ' + parts[0];
+      return mon + " '" + yr;
+    }
+    function fmtDateFull(ds) {
+      const parts = ds.split('-');
+      return MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
+    }
+    function fmtVol(v) {
+      if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+      if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+      return v.toString();
+    }
+    function fmtPrice(v) {
+      if (v >= 1000) return '$' + v.toFixed(0);
+      if (v >= 100) return '$' + v.toFixed(1);
+      return '$' + v.toFixed(2);
+    }
+
+    let hoverIdx = null;
+
+    function updateHover(idx) {
+      hoverIdx = idx;
+      const hoverBox = document.getElementById('priceHover');
+      if (idx == null) {
+        if (hoverBox) hoverBox.style.display = 'none';
+        return;
+      }
+      const hoverDate = document.getElementById('hoverDate');
+      const hoverPr = document.getElementById('hoverPrice');
+      const hoverVol = document.getElementById('hoverVol');
+      if (hoverBox) hoverBox.style.display = 'block';
+      if (hoverDate) hoverDate.textContent = fmtDateFull(labels[idx]);
+      const ohlc = 'O ' + fmtPrice(opens[idx]) + '  H ' + fmtPrice(highs[idx]) + '  L ' + fmtPrice(lows[idx]) + '  C ' + fmtPrice(closes[idx]);
+      if (hoverPr) hoverPr.textContent = ohlc;
+      if (hoverVol) hoverVol.textContent = 'Vol ' + fmtVol(volumes[idx]);
+    }
+
+    const crosshairLine = {
+      id: 'crosshairLine',
+      afterDraw(chart) {
+        if (hoverIdx == null) return;
+        const { ctx, chartArea: { top, bottom } } = chart;
+        const meta = chart.getDatasetMeta(0);
+        if (!meta.data[hoverIdx]) return;
+        const x = meta.data[hoverIdx].x;
+        ctx.save();
+        ctx.beginPath();
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = 'rgba(148,163,184,.3)';
+        ctx.lineWidth = 1;
+        ctx.moveTo(x, top);
+        ctx.lineTo(x, bottom);
+        ctx.stroke();
+        ctx.restore();
+      }
+    };
+
+    // ─── Price chart ───
+    const ctxP = document.getElementById('chartPrice');
+    if (!ctxP) return;
+    ctxP.style.display = 'block';
+    priceChart = new Chart(ctxP, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: closes,
+          borderColor: lineColor,
+          backgroundColor: (ctx) => {
+            const area = ctx.chart.chartArea;
+            if (!area) return lineColor + '15';
+            const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+            g.addColorStop(0, lineColor + '28');
+            g.addColorStop(0.6, lineColor + '0a');
+            g.addColorStop(1, lineColor + '00');
+            return g;
+          },
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          pointHoverBackgroundColor: lineColor,
+          pointHoverBorderColor: '#0b0f19',
+          pointHoverBorderWidth: 2,
+          borderWidth: 1.8,
+          tension: 0.1,
+          fill: true,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { left: 4, right: 4, top: 8 } },
+        plugins: {
+          legend: { display: false },
+          tooltip: { enabled: false },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: '#64748b', font: { size: 8, family: "'JetBrains Mono', monospace" },
+              maxTicksLimit: 8,
+              callback: function(val, i) { return fmtDateShort(labels[i]); }
+            },
+            grid: { display: false }
+          },
+          y: {
+            position: 'right',
+            ticks: {
+              color: '#64748b', font: { size: 9, family: "'JetBrains Mono', monospace" },
+              callback: v => fmtPrice(v),
+              maxTicksLimit: 6
+            },
+            grid: { color: 'rgba(30,45,61,.25)', drawBorder: false }
+          }
+        },
+        interaction: { intersect: false, mode: 'index' },
+        onHover: (evt, elems) => {
+          if (elems.length) {
+            updateHover(elems[0].index);
+            if (volChart) volChart.update('none');
+          } else {
+            updateHover(null);
+            if (volChart) volChart.update('none');
+          }
+        },
+      },
+      plugins: [crosshairLine]
+    });
+
+    // ─── Volume chart ───
+    const maxVol = Math.max(...volumes);
+    const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+    const volColors = closes.map((c, i) => {
+      if (i === 0) return 'rgba(59,130,246,.35)';
+      const alpha = Math.min(0.55, 0.2 + (volumes[i] / maxVol) * 0.35);
+      return c >= closes[i - 1] ? `rgba(34,197,94,${alpha})` : `rgba(239,68,68,${alpha})`;
+    });
+    const ctxV = document.getElementById('chartVolume');
+    if (ctxV) {
+      ctxV.style.display = 'block';
+      volChart = new Chart(ctxV, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            data: volumes,
+            backgroundColor: volColors,
+            borderWidth: 0,
+            barPercentage: 1.0,
+            categoryPercentage: 1.0,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: { padding: { left: 4, right: 4 } },
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: {
+            x: { display: false },
+            y: {
+              display: false,
+              beginAtZero: true,
+              max: maxVol * 1.5,
+            }
+          },
+          interaction: { intersect: false, mode: 'index' },
+          onHover: (evt, elems) => {
+            if (elems.length) {
+              updateHover(elems[0].index);
+              priceChart.update('none');
+            } else {
+              updateHover(null);
+              priceChart.update('none');
+            }
+          },
+        },
+        plugins: [crosshairLine]
+      });
+    }
+  } catch(e) { console.error('Price chart error:', e); }
+}
+
+// —— ChatGPT OAuth + stock chat (NDJSON stream) ——
+let gchatAuthenticated = false;
+let gchatAuthPoll = null;
+
+async function gchatRefreshAuth() {
+  const authBox = document.getElementById('gchatAuth');
+  const signed = document.getElementById('gchatSigned');
+  const loginBtn = document.getElementById('gchatLoginBtn');
+  const inp = document.getElementById('gchatInput');
+  const send = document.getElementById('gchatSend');
+  try {
+    const r = await fetch('/api/auth/status');
+    const d = await r.json();
+    gchatAuthenticated = !!d.authenticated;
+    if (authBox) authBox.classList.add('show');
+    if (gchatAuthenticated) {
+      if (signed) signed.classList.add('show');
+      if (loginBtn) loginBtn.style.display = 'none';
+      const hint0 = authBox && authBox.querySelector('.gchat-hint');
+      if (hint0) hint0.style.display = 'none';
+      if (inp) { inp.disabled = false; inp.removeAttribute('disabled'); inp.placeholder = 'Ask about this stock…'; }
+      if (send) { send.disabled = false; send.removeAttribute('disabled'); }
+      if (gchatAuthPoll) { clearInterval(gchatAuthPoll); gchatAuthPoll = null; }
+    } else {
+      if (signed) signed.classList.remove('show');
+      if (loginBtn) { loginBtn.style.display = ''; loginBtn.disabled = !!d.loginInProgress; }
+      const hint0 = authBox && authBox.querySelector('.gchat-hint');
+      if (hint0) hint0.style.display = '';
+      if (inp) { inp.disabled = true; inp.placeholder = 'Sign in with ChatGPT to chat…'; }
+      if (send) send.disabled = true;
+    }
+  } catch (_) {
+    gchatAuthenticated = false;
+  }
+}
+
+async function gchatLogin() {
+  const err = document.getElementById('gchatErr');
+  const loginBtn = document.getElementById('gchatLoginBtn');
+  if (err) err.textContent = '';
+  if (loginBtn) loginBtn.disabled = true;
+  try {
+    const r = await fetch('/api/auth/login', { method: 'POST' });
+    const d = await r.json();
+    if (d.authenticated) {
+      await gchatRefreshAuth();
+      return;
+    }
+    if (d.error) throw new Error(d.error);
+    if (!d.authUrl) throw new Error('No auth URL');
+    window.open(d.authUrl, 'chatgpt_oauth', 'width=520,height=720');
+    if (gchatAuthPoll) clearInterval(gchatAuthPoll);
+    gchatAuthPoll = setInterval(async () => {
+      await gchatRefreshAuth();
+    }, 1200);
+  } catch (e) {
+    if (err) err.textContent = String(e);
+    if (loginBtn) loginBtn.disabled = false;
+  }
+}
+
+async function gchatLogout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  gchatAuthenticated = false;
+  await gchatRefreshAuth();
+}
+
 const gchatHistory = [];
 function gchatEsc(s) {
   const d = document.createElement('div');
@@ -387,12 +1168,22 @@ function gchatParseErrFromNdjson(text) {
   }
   return null;
 }
+function gchatStripAssistant(s) {
+  if (!s) return '';
+  return s
+    .replace(/<span class="gchat-stream-cursor"><\/span>/gi, '')
+    .replace(/<[^>]+>/g, '');
+}
 async function gchatSend() {
   const body = document.getElementById('gchatBody');
   const inp = document.getElementById('gchatInput');
   const btn = document.getElementById('gchatSend');
   const err = document.getElementById('gchatErr');
   if (!inp || !btn || !body) return;
+  if (!gchatAuthenticated) {
+    if (err) err.textContent = 'Sign in with ChatGPT first.';
+    return;
+  }
   const msg = inp.value.trim();
   if (!msg) return;
   err.textContent = '';
@@ -407,6 +1198,22 @@ async function gchatSend() {
   body.scrollTop = body.scrollHeight;
   let botDiv = null;
   let acc = '';
+  let rafPending = false;
+  function gchatFlushBot() {
+    rafPending = false;
+    if (!botDiv) return;
+    botDiv.classList.add('gchat-streaming');
+    botDiv.textContent = acc;
+    body.scrollTop = body.scrollHeight;
+  }
+  function gchatFinalizeBot() {
+    if (!botDiv) return;
+    botDiv.classList.remove('typing');
+    botDiv.removeAttribute('aria-busy');
+    botDiv.classList.remove('gchat-streaming');
+    botDiv.textContent = gchatStripAssistant(acc);
+    body.scrollTop = body.scrollHeight;
+  }
   try {
     const r = await fetch(`/api/company/${encodeURIComponent(SYM)}/chat/stream`, {
       method: 'POST',
@@ -425,28 +1232,45 @@ async function gchatSend() {
     let buf = '';
     function gchatConsumeObj(o) {
       if (o.error) {
-        if (!botDiv) typingDiv.remove();
-        else err.textContent = o.error;
+        if (typingDiv.parentNode) typingDiv.remove();
+        if (err) err.textContent = o.error;
         return true;
+      }
+      if (o.phase) {
+        if (typingDiv.classList.contains('typing') && o.phase === 'tool') {
+          const toolLbl = {
+            web_search: 'Searching the web…',
+            fetch_web_page: 'Loading page…',
+            evaluate_math: 'Calculating…',
+            eodhd_fundamentals_snapshot: 'Fetching fundamentals…',
+          };
+          const t = toolLbl[o.tool] || 'Working…';
+          typingDiv.innerHTML = '<span style="color:var(--dim);font-size:.68rem">' + t + '</span>';
+        }
       }
       if (o.token) {
         if (!botDiv) {
           typingDiv.classList.remove('typing');
           typingDiv.removeAttribute('aria-busy');
           botDiv = typingDiv;
+          botDiv.textContent = '';
         }
         acc += o.token;
-        botDiv.innerHTML = gchatEsc(acc).replace(/\n/g, '<br/>');
-        body.scrollTop = body.scrollHeight;
+        if (!rafPending) {
+          rafPending = true;
+          requestAnimationFrame(gchatFlushBot);
+        }
       }
       if (o.done) {
+        if (rafPending) rafPending = false;
+        if (botDiv) gchatFinalizeBot();
         gchatHistory.push({ role: 'user', content: msg });
-        gchatHistory.push({ role: 'assistant', content: acc });
+        gchatHistory.push({ role: 'assistant', content: gchatStripAssistant(acc) });
         if (gchatHistory.length > 40) gchatHistory.splice(0, gchatHistory.length - 40);
         if (!botDiv && !acc) {
           typingDiv.classList.remove('typing');
           typingDiv.removeAttribute('aria-busy');
-          typingDiv.innerHTML = gchatEsc('(empty reply)').replace(/\n/g, '<br/>');
+          typingDiv.textContent = '(empty reply)';
         }
         return true;
       }
@@ -478,16 +1302,20 @@ async function gchatSend() {
         }
       } catch (_) { /* ignore trailing garbage */ }
     }
+    if (rafPending) {
+      rafPending = false;
+      if (botDiv) gchatFinalizeBot();
+    }
     if (!botDiv && acc) {
       typingDiv.classList.remove('typing');
       typingDiv.removeAttribute('aria-busy');
       botDiv = typingDiv;
-      botDiv.innerHTML = gchatEsc(acc).replace(/\n/g, '<br/>');
+      botDiv.textContent = gchatStripAssistant(acc);
     } else if (!botDiv && !acc) {
       typingDiv.remove();
     }
     gchatHistory.push({ role: 'user', content: msg });
-    gchatHistory.push({ role: 'assistant', content: acc });
+    gchatHistory.push({ role: 'assistant', content: gchatStripAssistant(acc) });
     if (gchatHistory.length > 40) gchatHistory.splice(0, gchatHistory.length - 40);
   } catch (e) {
     if (typingDiv.parentNode && typingDiv.classList.contains('typing')) typingDiv.remove();
@@ -496,22 +1324,74 @@ async function gchatSend() {
   btn.disabled = false;
 }
 document.addEventListener('DOMContentLoaded', () => {
-  loadHistory();
+  loadHistory().finally(() => scheduleInitialPriceChart());
+  document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
+    btn.addEventListener('click', () => loadPriceChart(btn.dataset.r));
+  });
+  document.querySelectorAll('#finRangeBar .rbtn').forEach(btn => {
+    btn.addEventListener('click', () => renderFinancialCharts(parseInt(btn.dataset.fy)));
+  });
   const panel = document.getElementById('gchat-panel');
   const toggle = document.getElementById('gchatToggle');
+  const resize = document.getElementById('gchatResize');
   const chev = document.getElementById('gchatChev');
   const send = document.getElementById('gchatSend');
   const inp = document.getElementById('gchatInput');
+  const GCHAT_SIZE_KEY = 'equityos_gchat_size_v1';
+  function gchatApplySize(w, h) {
+    if (!panel || !w || !h) return;
+    panel.style.setProperty('--gchat-w', w + 'px');
+    panel.style.setProperty('--gchat-h', h + 'px');
+    panel.classList.add('gchat-sized');
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(GCHAT_SIZE_KEY) || 'null');
+    if (saved && saved.w >= 260 && saved.h >= 180) gchatApplySize(saved.w, saved.h);
+  } catch (_) {}
   if (toggle && panel) {
-    toggle.addEventListener('click', () => {
+    toggle.addEventListener('click', (e) => {
+      if (e.target.closest('.gchat-resize')) return;
       panel.classList.toggle('collapsed');
       if (chev) chev.textContent = panel.classList.contains('collapsed') ? '▲' : '▼';
     });
+  }
+  if (resize && panel) {
+    let drag = null;
+    resize.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (panel.classList.contains('collapsed')) return;
+      const rect = panel.getBoundingClientRect();
+      drag = { x: e.clientX, y: e.clientY, w: rect.width, h: rect.height };
+      resize.setPointerCapture(e.pointerId);
+    });
+    resize.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const w = Math.min(window.innerWidth * 0.92, Math.max(260, drag.w + (drag.x - e.clientX)));
+      const h = Math.min(window.innerHeight * 0.85, Math.max(200, drag.h + (drag.y - e.clientY)));
+      gchatApplySize(Math.round(w), Math.round(h));
+    });
+    function gchatEndDrag(e) {
+      if (!drag) return;
+      resize.releasePointerCapture(e.pointerId);
+      drag = null;
+      const rect = panel.getBoundingClientRect();
+      try {
+        localStorage.setItem(GCHAT_SIZE_KEY, JSON.stringify({ w: Math.round(rect.width), h: Math.round(rect.height) }));
+      } catch (_) {}
+    }
+    resize.addEventListener('pointerup', gchatEndDrag);
+    resize.addEventListener('pointercancel', gchatEndDrag);
   }
   if (send) send.addEventListener('click', gchatSend);
   if (inp) inp.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); gchatSend(); }
   });
+  const loginBtn = document.getElementById('gchatLoginBtn');
+  const logoutBtn = document.getElementById('gchatLogoutBtn');
+  if (loginBtn) loginBtn.addEventListener('click', gchatLogin);
+  if (logoutBtn) logoutBtn.addEventListener('click', gchatLogout);
+  gchatRefreshAuth();
 });
 </script>
 </body>
