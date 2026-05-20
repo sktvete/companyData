@@ -116,6 +116,21 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         # OEPS should be same order of magnitude as EPS for a profitable year
         self.assertLess(abs(row["oeps"] - row["eps"]), max(row["eps"], 0.01) * 2)
 
+    def test_history_chronological_and_display_metrics(self) -> None:
+        r = self.client.get("/api/company/AAPL/history")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        hist = body.get("history") or []
+        if len(hist) >= 2:
+            self.assertLessEqual(int(hist[0]["year"]), int(hist[-1]["year"]))
+        dm = body.get("display_metrics") or {}
+        self.assertEqual(dm.get("source"), "eodhd")
+        self.assertIn("flow", dm)
+        self.assertEqual(dm["flow"].get("basis"), "TTM")
+        self.assertIn("filed_fy", dm)
+        self.assertIn("net_income_fmt", dm["flow"])
+        self.assertIn("free_cash_flow_fmt", dm["flow"])
+
     def test_api_company_symbol_case_insensitive(self) -> None:
         r = self.client.get("/api/company/aapl")
         self.assertEqual(r.status_code, 200)
@@ -525,14 +540,18 @@ class FilterSortApiTests(unittest.TestCase):
                     "roic": 0.12,
                     "roe": 0.14,
                     "red_flag_count": 0,
+                    "revenue_cagr_3y": 0.06,
+                    "revenue_cagr_5y": 0.05,
+                    "oeps_cagr": 0.08,
                 },
                 "data_quality": {"min_quarters": 40},
                 "investment_scores": {
                     "overall_score": 18.0,
                     "quality_score": 5.0,
-                    "growth_score": 4.0,
+                    "growth_score": 2.0,
                     "value_score": 4.0,
                     "safety_score": 5.0,
+                    "revenue_cagr_3y_pct": 6.0,
                 },
             },
             {
@@ -549,14 +568,19 @@ class FilterSortApiTests(unittest.TestCase):
                     "roic": 0.20,
                     "roe": 0.22,
                     "red_flag_count": 0,
+                    "revenue_cagr_3y": 0.18,
+                    "revenue_cagr_5y": 0.16,
+                    "oeps_cagr": 0.20,
+                    "revenue_growth_consistency": 0.80,
                 },
                 "data_quality": {"min_quarters": 60},
                 "investment_scores": {
                     "overall_score": 14.0,
                     "quality_score": 4.0,
-                    "growth_score": 3.5,
+                    "growth_score": 4.5,
                     "value_score": 3.5,
                     "safety_score": 4.5,
+                    "revenue_cagr_3y_pct": 18.0,
                 },
             },
         ]
@@ -851,11 +875,12 @@ class LoadDataPriorityTests(unittest.TestCase):
         if not nvda_path.is_file():
             self.skipTest("NVDA universe file missing")
         row = None
-        for line in nvda_path.open(encoding="utf-8"):
-            rec = json.loads(line)
-            if rec.get("symbol") == "NVDA":
-                row = rec
-                break
+        with nvda_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                rec = json.loads(line)
+                if rec.get("symbol") == "NVDA":
+                    row = rec
+                    break
         self.assertIsNotNone(row)
         row = dict(row)
         row["investment_scores"] = dict(row.get("investment_scores") or {})
@@ -1197,6 +1222,37 @@ class LiveQuoteTests(unittest.TestCase):
         self.assertTrue(out["show_session_split"])
         self.assertAlmostEqual(out["regular_change"], 13.0, places=2)
         self.assertAlmostEqual(out["extended_change"], 0.14, places=2)
+
+    def test_parse_us_quote_no_split_on_sub_display_extended_move(self) -> None:
+        """Tiny ETH vs RTH gap must not enable split (UI would show +0.00% After-hours)."""
+        row = {
+            "lastTradePrice": 97.525,
+            "lastTradeTime": 1000,
+            "previousClosePrice": 98.24,
+            "ethPrice": 97.53,
+            "ethTime": 2000,
+            "change": -0.71,
+            "changePercent": -0.73,
+        }
+        q = ae._parse_us_quote_delayed(row, "after_hours")
+        self.assertIsNotNone(q)
+        self.assertFalse(q["show_session_split"])
+        self.assertAlmostEqual(q["extended_change"], 0.005, places=3)
+
+    def test_parse_us_quote_no_split_when_eth_equals_reg(self) -> None:
+        row = {
+            "lastTradePrice": 416.15,
+            "lastTradeTime": 1000,
+            "previousClosePrice": 417.26,
+            "ethPrice": 416.15,
+            "ethTime": 1000,
+            "change": -1.11,
+            "changePercent": -0.27,
+        }
+        q = ae._parse_us_quote_delayed(row, "closed")
+        self.assertIsNotNone(q)
+        self.assertFalse(q["show_session_split"])
+        self.assertAlmostEqual(q["regular_change_pct"], -0.266, places=1)
 
     def test_parse_us_quote_delayed_regular(self) -> None:
         row = {

@@ -1573,6 +1573,93 @@ def _safe_float(x, default: float = 0.0) -> float:
         return default
 
 
+def _eodhd_display_metrics(history: list, ttm: dict | None, h: dict | None) -> dict:
+    """Headline figures with explicit basis (TTM vs latest filed FY) — matches financial charts."""
+    latest = history[-1] if history else {}
+    fy = str(latest.get("year") or "")
+    out: dict = {
+        "source": "eodhd",
+        "note": (
+            "Flow metrics (revenue, net income, CFO, FCF) on this page use TTM (sum of last 4 quarters). "
+            "Filed FY is the latest annual column on the charts — do not compare TTM net income to FY FCF."
+        ),
+    }
+    if ttm:
+        out["flow"] = {
+            "basis": "TTM",
+            "period_end": (ttm.get("period_end") or "")[:10],
+            "revenue_fmt": _format_usd_compact(_safe_float(ttm.get("revenue_usd"))),
+            "net_income_fmt": _format_usd_compact(_safe_float(ttm.get("net_income_usd"))),
+            "operating_cash_flow_fmt": _format_usd_compact(_safe_float(ttm.get("ocf_usd"))),
+            "capital_expenditure_fmt": _format_usd_compact(_safe_float(ttm.get("capex_usd"))),
+            "free_cash_flow_fmt": _format_usd_compact(_safe_float(ttm.get("fcf_usd"))),
+            "gross_margin_pct": round(_safe_float(ttm.get("gross_margin_pct")), 1),
+            "net_margin_pct": round(_safe_float(ttm.get("net_margin_pct")), 1),
+        }
+    if latest:
+        out["filed_fy"] = {
+            "basis": f"FY{fy}" if fy else "Filed FY",
+            "year": fy,
+            "revenue_fmt": _format_usd_compact(_safe_float(latest.get("revenue_usd"))),
+            "net_income_fmt": _format_usd_compact(_safe_float(latest.get("net_income_usd"))),
+            "operating_cash_flow_fmt": _format_usd_compact(_safe_float(latest.get("ocf_usd"))),
+            "capital_expenditure_fmt": _format_usd_compact(_safe_float(latest.get("capex_usd"))),
+            "free_cash_flow_fmt": _format_usd_compact(_safe_float(latest.get("fcf_usd"))),
+            "gross_margin_pct": round(_safe_float(latest.get("gross_margin_pct")), 1),
+            "net_margin_pct": round(_safe_float(latest.get("net_margin_pct")), 1),
+        }
+    if h:
+        pe = _safe_float(h.get("PERatio"))
+        if pe > 0:
+            out["pe_ttm"] = round(pe, 2)
+    return out
+
+
+def _chat_metrics_from_eodhd(symbol: str) -> dict | None:
+    """Lightweight EODHD headline for chat context (avoids stale scan-only metrics)."""
+    try:
+        d = _get_fundamentals(symbol)
+        if not d:
+            return None
+        annual = (d.get("Financials") or {}).get("Income_Statement", {}).get("yearly") or {}
+        if not annual:
+            return None
+        yr_key = sorted(annual.keys())[-1]
+        inc = annual[yr_key]
+        bs = (d.get("Financials") or {}).get("Balance_Sheet", {}).get("yearly", {}).get(yr_key, {})
+        cf = (d.get("Financials") or {}).get("Cash_Flow", {}).get("yearly", {}).get(yr_key, {})
+        shares_stats = d.get("SharesStats") or {}
+        shares_out = _safe_float(shares_stats.get("SharesOutstanding")) or 1.0
+        rev = _safe_float(inc.get("totalRevenue"))
+        ni = _safe_float(inc.get("netIncome"))
+        ocf = _safe_float(cf.get("totalCashFromOperatingActivities"))
+        capex = abs(_safe_float(cf.get("capitalExpenditures")))
+        cor = _safe_float(inc.get("costOfRevenue"))
+        gp = _safe_float(inc.get("grossProfit"))
+        if rev > 0 and cor > 0 and gp >= rev * 0.999:
+            gp = rev - cor
+        latest_row = {
+            "year": yr_key[:4],
+            "revenue_usd": rev,
+            "net_income_usd": ni,
+            "ocf_usd": ocf,
+            "capex_usd": capex,
+            "fcf_usd": ocf - capex,
+            "gross_margin_pct": round(gp / rev * 100, 1) if rev else 0,
+            "net_margin_pct": round(ni / rev * 100, 1) if rev else 0,
+        }
+        q_inc = (d.get("Financials") or {}).get("Income_Statement", {}).get("quarterly") or {}
+        q_cf = (d.get("Financials") or {}).get("Cash_Flow", {}).get("quarterly") or {}
+        price_data = _price_store.get(symbol) or []
+        ttm = _build_ttm_window(
+            q_inc, q_cf, shares_stats, shares_out, price_data, trailing_years=1,
+            highlights=_merged_highlights(d),
+        )
+        return _eodhd_display_metrics([latest_row], ttm, _merged_highlights(d))
+    except Exception:
+        return None
+
+
 _CHART_MONEY_SCALARS = (
     "revenue_usd", "revenue_b",
     "net_income_usd", "net_income_b",
@@ -2239,14 +2326,8 @@ def _eod_previous_close_from_store(symbol: str) -> float:
     return _safe_float(prices[-2].get("close"))
 
 
-def _recompute_us_session_split(quote: dict) -> dict:
-    """Derive At close / After-hours lines from regular, extended, and prior close."""
-    prev = _safe_float(quote.get("previous_close"))
-    reg = _safe_float(quote.get("regular_close"))
-    eth = _safe_float(quote.get("extended_price"))
-    session = str(quote.get("session") or "")
-    use_extended = session in ("pre_market", "after_hours") and eth > 0
-
+def _us_quote_session_split_fields(reg: float, eth: float, prev: float) -> dict:
+    """RTH last vs prior close (At close); ETH vs RTH last (After-hours) when they differ."""
     regular_change = regular_change_pct = extended_change = extended_change_pct = None
     if reg > 0 and prev > 0:
         regular_change = reg - prev
@@ -2254,12 +2335,31 @@ def _recompute_us_session_split(quote: dict) -> dict:
     if eth > 0 and reg > 0:
         extended_change = eth - reg
         extended_change_pct = (extended_change / reg) * 100.0
+    show_session_split = False
+    if regular_change is not None and extended_change is not None and reg > 0:
+        # Min 0.01% or $0.02 — smaller moves round to "+0.00% (+0.00)" in the UI
+        if abs(extended_change_pct) >= 0.01 or abs(extended_change) >= 0.02:
+            show_session_split = True
+    return {
+        "regular_change": regular_change,
+        "regular_change_pct": regular_change_pct,
+        "extended_change": extended_change,
+        "extended_change_pct": extended_change_pct,
+        "show_session_split": show_session_split,
+    }
 
-    show_session_split = (
-        use_extended
-        and regular_change is not None
-        and extended_change is not None
-    )
+
+def _recompute_us_session_split(quote: dict) -> dict:
+    """Derive At close / After-hours lines from regular, extended, and prior close."""
+    prev = _safe_float(quote.get("previous_close"))
+    reg = _safe_float(quote.get("regular_close"))
+    eth = _safe_float(quote.get("extended_price"))
+    split = _us_quote_session_split_fields(reg, eth, prev)
+    regular_change = split["regular_change"]
+    regular_change_pct = split["regular_change_pct"]
+    extended_change = split["extended_change"]
+    extended_change_pct = split["extended_change_pct"]
+    show_session_split = split["show_session_split"]
     out = {**quote}
     out["regular_change"] = round(regular_change, 4) if regular_change is not None else None
     out["regular_change_pct"] = round(regular_change_pct, 3) if regular_change_pct is not None else None
@@ -2325,22 +2425,20 @@ def _parse_us_quote_delayed(row: dict, session: str) -> dict | None:
         chg = price - ref
         chg_p = (chg / ref) * 100.0
 
-    regular_change = None
-    regular_change_pct = None
-    extended_change = None
-    extended_change_pct = None
-    if reg > 0 and prev > 0:
-        regular_change = reg - prev
-        regular_change_pct = (regular_change / prev) * 100.0
-    if eth > 0 and reg > 0:
-        extended_change = eth - reg
-        extended_change_pct = (extended_change / reg) * 100.0
+    split = _us_quote_session_split_fields(reg, eth, prev)
+    regular_change = split["regular_change"]
+    regular_change_pct = split["regular_change_pct"]
+    extended_change = split["extended_change"]
+    extended_change_pct = split["extended_change_pct"]
+    show_session_split = split["show_session_split"]
 
-    show_session_split = (
-        regular_change is not None
-        and extended_change is not None
-        and use_extended
-    )
+    if not show_session_split and prev > 0:
+        if abs(chg) < 1e-9 and abs(chg_p) < 1e-9:
+            chg = reg - prev if reg > 0 else price - prev
+            chg_p = (chg / prev) * 100.0
+        elif reg > 0:
+            chg = reg - prev
+            chg_p = (chg / prev) * 100.0
 
     is_live = disp_session in ("regular", "pre_market", "after_hours")
     return {
@@ -3009,7 +3107,7 @@ def api_company_history(symbol):
     shares_out   = _safe_float(shares_stats.get("SharesOutstanding")) or 1.0
 
     history = []
-    for yr in sorted(annual.keys(), reverse=True)[:15]:
+    for yr in sorted(annual.keys())[-15:]:
         inc = annual[yr]
         bs  = bs_ann.get(yr, {})
         cf  = cf_ann.get(yr, {})
@@ -3100,7 +3198,7 @@ def api_company_history(symbol):
     if not ref_rev and ttm:
         ref_rev = _safe_float(ttm.get("revenue_usd"))
     if not ref_rev and history:
-        ref_rev = _safe_float(history[0].get("revenue_usd"))
+        ref_rev = _safe_float(history[-1].get("revenue_usd"))
     now_year = datetime.now().year
     seen_est_years = set()
     for date_key in sorted(trend.keys(), reverse=True):
@@ -3174,12 +3272,15 @@ def api_company_history(symbol):
 
     _prune_implausible_revenue_estimates(estimates, ttm, history)
 
+    display_metrics = _eodhd_display_metrics(history, ttm, h)
+
     return jsonify({
         "history":         history,
         "quarterly_reports": quarterly_reports,
         "ttm":             ttm,
         "ttm2":            ttm2,
         "estimates":       estimates,
+        "display_metrics": display_metrics,
         "analyst_ratings": analyst,
         "price_chart_1y":  price_chart_1y,
         "price":           _safe_float(h.get("WallStreetTargetPrice")),
@@ -3259,7 +3360,7 @@ def api_company(symbol):
 
 
 def _chat_stock_context_tiny(c: dict) -> dict:
-    """Minimal ticker context for the LLM (full EODHD via tool only)."""
+    """Minimal ticker context for the LLM (EODHD headline when cached; full detail via tools)."""
     m = c.get("financial_metrics", {})
     ci = c.get("company_info", {})
     s = c.get("investment_scores", {})
@@ -3268,6 +3369,25 @@ def _chat_stock_context_tiny(c: dict) -> dict:
     if isinstance(rf, list):
         rf = rf[:5]
     desc = (ci.get("description") or "")[:400]
+    eodhd = _chat_metrics_from_eodhd(sym)
+    metrics = {
+        "revenue_b": round(m.get("revenue", 0) / 1e9, 2),
+        "revenue_fmt": _format_usd_compact(m.get("revenue", 0)),
+        "net_income_b": round(m.get("net_income", 0) / 1e9, 2),
+        "net_income_fmt": _format_usd_compact(m.get("net_income", 0)),
+        "pe": ci.get("pe_ratio") or m.get("pe_ratio"),
+        "market_cap_b": round(ci.get("market_cap", 0) / 1e9, 2),
+        "market_cap_fmt": _format_usd_compact(ci.get("market_cap", 0)),
+        "roe_pct": round(m.get("roe", 0) * 100, 1),
+        "roic_pct": round(m.get("roic", 0) * 100, 1),
+        "basis": "universe_scan_ttm",
+    }
+    if eodhd:
+        metrics["eodhd"] = eodhd
+        if eodhd.get("flow"):
+            metrics["basis"] = "eodhd_ttm"
+        if eodhd.get("filed_fy"):
+            metrics["filed_fy"] = eodhd["filed_fy"]
     return {
         "ticker": sym,
         "name": c.get("name", sym),
@@ -3280,17 +3400,7 @@ def _chat_stock_context_tiny(c: dict) -> dict:
             "growth": s.get("growth_score"),
             "safety": s.get("safety_score"),
         },
-        "metrics": {
-            "revenue_b": round(m.get("revenue", 0) / 1e9, 2),
-            "revenue_fmt": _format_usd_compact(m.get("revenue", 0)),
-            "net_income_b": round(m.get("net_income", 0) / 1e9, 2),
-            "net_income_fmt": _format_usd_compact(m.get("net_income", 0)),
-            "pe": ci.get("pe_ratio") or m.get("pe_ratio"),
-            "market_cap_b": round(ci.get("market_cap", 0) / 1e9, 2),
-            "market_cap_fmt": _format_usd_compact(ci.get("market_cap", 0)),
-            "roe_pct": round(m.get("roe", 0) * 100, 1),
-            "roic_pct": round(m.get("roic", 0) * 100, 1),
-        },
+        "metrics": metrics,
         "red_flags_sample": rf,
         "data_quality": (c.get("data_quality") or {}).get("quality"),
         "description_excerpt": desc,
@@ -3853,6 +3963,7 @@ def company_detail(symbol):
             "pb_ratio":             round(m.get("pb_ratio", 0), 2),
             "ps_ratio":             round(m.get("ps_ratio", 0), 2),
             "ev_ebitda":            round(m.get("ev_ebitda", 0), 1),
+            "fcf_yield_pct":        round(float(m.get("fcf_yield", 0) or 0) * 100, 1),
             "current_ratio":        round(m.get("current_ratio", 0), 2),
             "debt_to_equity":       round(m.get("debt_to_equity", 0), 2),
             "altman_z_score":       round(m.get("altman_z_score", 0), 1),
@@ -3966,7 +4077,7 @@ def analysis_run():
         return jsonify({"error": "Analysis already running"}), 409
 
     body = request.get_json(silent=True) or {}
-    target = min(int(body.get("target", 1000)), 15000)
+    target = min(int(body.get("target", 1000)), 8000)
     _cpu = os.cpu_count() or 8
     workers = min(int(body.get("workers", 0)) or _cpu, 64)
     try:
@@ -4039,10 +4150,26 @@ def analysis_run():
                 cmd.extend(["--symbols-file", str(sym_path)])
             if merge_path is not None:
                 cmd.extend(["--merge-into", str(merge_path)])
-            proc = subprocess.run(cmd, env=env, cwd=str(PROJECT_ROOT))
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                cwd=str(PROJECT_ROOT),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
             if proc.returncode == 0:
                 load_data()
             else:
+                err_tail = ""
+                if proc.stderr:
+                    err_tail = proc.stderr.strip()[-800:]
+                elif proc.stdout:
+                    err_tail = proc.stdout.strip()[-800:]
+                msg = f"subprocess exit {proc.returncode}"
+                if err_tail:
+                    msg = f"{msg}: {err_tail}"
                 _write_analysis_progress_file(
                     {
                         "running": False,
@@ -4054,7 +4181,7 @@ def analysis_run():
                         "successful": 0,
                         "failed": 0,
                         "started_at": datetime.now().isoformat(),
-                        "error": f"subprocess exit {proc.returncode}",
+                        "error": msg[:500],
                     }
                 )
         except Exception as ex:

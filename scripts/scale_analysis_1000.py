@@ -16,6 +16,7 @@ import json
 import time
 import os
 import asyncio
+import platform
 import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -946,11 +947,11 @@ def _score_single(sym_data_pair: tuple[str, dict]) -> tuple[str, dict | None, st
 
 
 def _rescore_executor(n_symbols: int, workers: int) -> tuple[type, int, int]:
-    """Process pool for large batches (bypasses GIL); threads for tiny batches (lower fork cost)."""
+    """Process pool on Linux/macOS for large batches; threads on Windows (stable under Flask subprocess)."""
     cpus = os.cpu_count() or 8
     w = max(1, min(workers, cpus))
     chunksize = max(1, n_symbols // (w * 16)) if n_symbols >= 400 else 1
-    if n_symbols < 400:
+    if platform.system() == "Windows" or n_symbols < 800:
         return ThreadPoolExecutor, w, chunksize
     return ProcessPoolExecutor, w, chunksize
 
@@ -1129,8 +1130,12 @@ async def _async_fetch_batch(
         ttl_dns_cache=600,
     )
     timeout = aiohttp.ClientTimeout(total=90, connect=12, sock_read=60)
+    batch_size = max(50, min(500, int(os.environ.get("EODHD_FETCH_BATCH", "400"))))
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        results = await asyncio.gather(*[_fetch_one(session, s) for s in symbols])
+        results: list = []
+        for off in range(0, len(symbols), batch_size):
+            chunk = symbols[off : off + batch_size]
+            results.extend(await asyncio.gather(*[_fetch_one(session, s) for s in chunk]))
     await _flush()
     return list(results)
 
@@ -1266,22 +1271,44 @@ if __name__ == "__main__":
     )
     _args = _p.parse_args()
 
-    if _args.cache_only:
-        run_cache_only_rescore(merge_into=_args.merge_into, workers=_args.workers)
-    elif _args.refresh:
-        conc = _args.concurrency or _default_fetch_concurrency()
-        run_refresh_and_score(
-            target_companies=_args.target,
-            workers=_args.workers,
-            concurrency=conc,
-            symbols_file=_args.symbols_file,
-            merge_into=_args.merge_into,
-        )
-    else:
-        run_scaled_analysis(
-            target_companies=_args.target,
-            workers=_args.workers,
-            symbols_file=_args.symbols_file,
-            merge_into=_args.merge_into,
-            exchange=_args.exchange,
-        )
+    progress_file = PROJECT_ROOT / "outputs" / "analysis_progress.json"
+
+    def _fatal_progress(exc: BaseException) -> None:
+        try:
+            payload = json.dumps({
+                "running": False,
+                "done": 0,
+                "total": 0,
+                "pct": 0,
+                "error": str(exc)[:500],
+                "phase": "Failed",
+            })
+            tmp = progress_file.with_suffix(progress_file.suffix + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(progress_file)
+        except Exception:
+            pass
+
+    try:
+        if _args.cache_only:
+            run_cache_only_rescore(merge_into=_args.merge_into, workers=_args.workers)
+        elif _args.refresh:
+            conc = _args.concurrency or _default_fetch_concurrency()
+            run_refresh_and_score(
+                target_companies=_args.target,
+                workers=_args.workers,
+                concurrency=conc,
+                symbols_file=_args.symbols_file,
+                merge_into=_args.merge_into,
+            )
+        else:
+            run_scaled_analysis(
+                target_companies=_args.target,
+                workers=_args.workers,
+                symbols_file=_args.symbols_file,
+                merge_into=_args.merge_into,
+                exchange=_args.exchange,
+            )
+    except Exception as ex:
+        _fatal_progress(ex)
+        raise

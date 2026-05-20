@@ -92,8 +92,24 @@
   .price-toolbar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.75rem 1rem;padding:1rem 1rem .5rem}
   .price-toolbar-main{flex:1;min-width:min(100%,12rem)}
   .price-range-row{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-bottom:.25rem}
-  .price-chart-stack{padding:0 .75rem .5rem;overflow:visible}
-  .price-chart-pane,.vol-chart-pane{overflow:hidden}
+  .price-chart-stack{padding:0 .75rem .5rem;overflow:visible;display:flex;flex-direction:column;flex:1;min-height:0}
+  .price-chart-pane,.vol-chart-pane{overflow:hidden;position:relative}
+  .price-chart-pane{flex:1 1 auto;min-height:clamp(280px,42vh,520px);height:clamp(280px,42vh,520px)}
+  .price-chart-pane canvas,.vol-chart-pane canvas{width:100%!important;height:100%!important;max-height:none!important}
+  .vol-chart-pane{flex:0 0 auto;height:clamp(56px,9vh,88px)}
+  /* Price chart beside financials: grow chart to match the taller column */
+  @media (min-width:1024px){
+    .price-fin-row{align-items:stretch}
+    .price-fin-row .price-chart-card{display:flex;flex-direction:column;min-height:100%}
+    .price-fin-row .price-chart-stack{flex:1 1 auto;min-height:0}
+    .price-fin-row .price-chart-pane{
+      flex:1 1 auto;
+      min-height:clamp(360px,54vh,720px);
+      height:auto;
+      max-height:none;
+    }
+    .price-fin-row .vol-chart-pane{flex:0 0 clamp(52px,7vh,76px);height:clamp(52px,7vh,76px)}
+  }
   #priceHover{
     display:none;pointer-events:none;flex:0 1 auto;align-self:flex-start;min-width:0;max-width:min(100%,22rem);
     margin-left:auto;padding:.35rem .5rem;text-align:right;font-size:.58rem;line-height:1.35;
@@ -185,7 +201,7 @@
   <!-- Stock price + Financials row -->
   {% set m = company.financial_metrics %}
   {% set ci = company.company_info %}
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6 price-fin-row">
 
     <!-- Left: Stock price chart (2 cols wide) -->
     <div class="card lg:col-span-2 price-chart-card" style="padding:0">
@@ -231,10 +247,10 @@
       </div>
       <!-- Price + volume (shared horizontal plot width) -->
       <div class="price-chart-stack">
-        <div class="price-chart-pane" style="position:relative;height:260px">
+        <div class="price-chart-pane" style="position:relative">
           <canvas id="chartPrice"></canvas>
         </div>
-        <div class="vol-chart-pane" style="position:relative;height:60px">
+        <div class="vol-chart-pane" style="position:relative">
           <canvas id="chartVolume"></canvas>
         </div>
       </div>
@@ -249,20 +265,21 @@
       </div>
     </div>
 
-    <!-- Right: Financials summary -->
-    <div class="card p-5">
+    <!-- Right: Financials summary (scan TTM until /history loads; then EODHD TTM + filed FY label) -->
+    <div class="card p-5 fin-panel-card">
       <div class="section-h">Financials</div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.revenue }}">Revenue</span><span style="font-weight:600">{{ m.revenue_fmt }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.net_income }}">Net Income</span><span style="font-weight:600">{{ m.net_income_fmt }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.cfo }}">Operating CF (CFO)</span><span style="font-weight:600;color:var(--accent2)">{{ m.operating_cash_flow_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.capex }}">CapEx</span><span>{{ m.capital_expenditure_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.fcf }}">Free Cash Flow</span><span style="font-weight:600">{{ m.free_cash_flow_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.gross_margin }}">Gross Margin</span><span>{{ '%.1f'|format(m.gross_margin_pct) }}%</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.net_margin }}">Net Margin</span><span>{{ '%.1f'|format(m.net_margin_pct) }}%</span></div>
+      <div id="finBasisNote" style="display:none;font-size:.62rem;color:var(--dim);margin:-.25rem 0 .5rem;line-height:1.35"></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.revenue }}">Revenue</span><span id="finRevenue" style="font-weight:600">{{ m.revenue_fmt }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.net_income }}">Net Income</span><span id="finNetIncome" style="font-weight:600">{{ m.net_income_fmt }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.cfo }}">Operating CF (CFO)</span><span id="finCFO" style="font-weight:600;color:var(--accent2)">{{ m.operating_cash_flow_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.capex }}">CapEx</span><span id="finCapEx">{{ m.capital_expenditure_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.fcf }}">Free Cash Flow</span><span id="finFCF" style="font-weight:600">{{ m.free_cash_flow_fmt or '–' }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.gross_margin }}">Gross Margin</span><span id="finGrossMargin">{{ '%.1f'|format(m.gross_margin_pct) }}%</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.net_margin }}">Net Margin</span><span id="finNetMargin">{{ '%.1f'|format(m.net_margin_pct) }}%</span></div>
       <div class="stat-row"><span class="stat-label" title="{{ G.roe }}">ROE</span><span class="{{ 'bull' if m.roe_pct > 12 else '' }}">{{ '%.1f'|format(m.roe_pct) }}%</span></div>
       <div class="stat-row"><span class="stat-label" title="{{ G.roic }}">ROIC</span><span class="{{ 'bull' if m.roic_pct > 12 else '' }}">{{ '%.1f'|format(m.roic_pct) }}%</span></div>
       <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span><span>{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span><span id="finPE">{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
       <div class="stat-row">
         <span class="stat-label" title="{{ G.peg }}">PEG</span>
         {% if m.lynch_peg %}
@@ -272,7 +289,7 @@
         {% endif %}
       </div>
       <div class="stat-row"><span class="stat-label" title="{{ G.ev_ebitda }}">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.fcf_yield }}">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">–</span></div>
+      <div class="stat-row"><span class="stat-label" title="{{ G.fcf_yield }}">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">{% if m.fcf_yield_pct and m.fcf_yield_pct > 0 %}{{ '%.1f'|format(m.fcf_yield_pct) }}%{% else %}–{% endif %}</span></div>
       <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
       <div class="stat-row"><span class="stat-label" title="{{ G.de }}">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
       <div class="stat-row"><span class="stat-label" title="{{ G.current_ratio }}">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
@@ -379,6 +396,18 @@
 
 <script>
 const SYM = '{{ company.symbol }}';
+
+function updateFcfYieldEl(mcapUsd, fcfUsd) {
+  const el = document.getElementById('fcfYield');
+  if (!el) return;
+  const mcap = Number(mcapUsd);
+  const fcf = Number(fcfUsd);
+  if (mcap > 0 && fcf > 0) {
+    const pct = (fcf / mcap) * 100;
+    el.textContent = pct.toFixed(1) + '%';
+    el.style.color = pct >= 5 ? 'var(--pos)' : 'var(--fg)';
+  }
+}
 
 function usdFromHistRow(h, keyUsd, keyB) {
   const u = h[keyUsd];
@@ -930,6 +959,39 @@ function mkChartRet(id, type, labels, datasets, extraOpts) {
   });
 }
 
+function applyDisplayMetrics(dm) {
+  if (!dm) return;
+  const flow = dm.flow;
+  const fy = dm.filed_fy;
+  const note = document.getElementById('finBasisNote');
+  if (note && flow) {
+    let t = 'Flows: TTM (last 4 quarters)';
+    if (flow.period_end) t += ' · ended ' + flow.period_end;
+    if (fy && fy.basis) t += ' · Charts also show ' + fy.basis;
+    note.textContent = t;
+    note.style.display = 'block';
+    note.title = dm.note || '';
+  }
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && val) el.textContent = val;
+  };
+  if (flow) {
+    set('finRevenue', flow.revenue_fmt);
+    set('finNetIncome', flow.net_income_fmt);
+    set('finCFO', flow.operating_cash_flow_fmt);
+    set('finCapEx', flow.capital_expenditure_fmt);
+    set('finFCF', flow.free_cash_flow_fmt);
+    if (flow.gross_margin_pct != null) set('finGrossMargin', flow.gross_margin_pct + '%');
+    if (flow.net_margin_pct != null) set('finNetMargin', flow.net_margin_pct + '%');
+  }
+  const pe = dm.pe_ttm || 0;
+  if (pe > 0) {
+    const peEl = document.getElementById('finPE');
+    if (peEl) peEl.textContent = pe.toFixed(1);
+  }
+}
+
 async function loadHistory() {
   try {
     const r = await fetch(`/api/company/${SYM}/history`);
@@ -947,10 +1009,12 @@ async function loadHistory() {
       else if (d.market_cap_b > 0) mcapEl.textContent = '$' + d.market_cap_b.toFixed(1) + 'B';
     }
     if (d.pe_ttm > 0) document.getElementById('livePE').textContent = 'P/E ' + d.pe_ttm.toFixed(1);
-    if (d.eps_ttm) document.getElementById('fcfYield').textContent = '$' + d.eps_ttm.toFixed(2) + ' EPS TTM';
+    const ttmFcf = d.ttm && Number(d.ttm.fcf_usd);
+    if (d.market_cap_usd > 0 && ttmFcf > 0) updateFcfYieldEl(d.market_cap_usd, ttmFcf);
+    applyDisplayMetrics(d.display_metrics);
 
     _quarterlyReports = d.quarterly_reports || [];
-    _fullHist = (d.history || []).slice().reverse();
+    _fullHist = d.history || [];
     _ttmData = d.ttm || null;
     _ttm2Data = d.ttm2 || null;
     _estData = d.estimates || [];
@@ -1248,7 +1312,26 @@ function renderPriceCharts(prices, range) {
   });
   bindPriceCrosshairLeave(ctxV);
   alignVolumeChartToPrice();
+  schedulePriceChartResize();
+  bindPriceChartResizeObserver();
   updatePriceHeaderFromSeries(prices, range);
+}
+
+function schedulePriceChartResize() {
+  requestAnimationFrame(() => {
+    if (priceChart) priceChart.resize();
+    if (volChart) volChart.resize();
+    alignVolumeChartToPrice();
+  });
+}
+
+let _priceChartResizeObs = null;
+function bindPriceChartResizeObserver() {
+  if (_priceChartResizeObs) return;
+  const pane = document.querySelector('.price-fin-row .price-chart-pane');
+  if (!pane || typeof ResizeObserver === 'undefined') return;
+  _priceChartResizeObs = new ResizeObserver(() => schedulePriceChartResize());
+  _priceChartResizeObs.observe(pane);
 }
 
 let _quarterlyReports = [];
@@ -1489,7 +1572,13 @@ function applyLiveQuote(q) {
   const isUp = chg >= 0;
   const session = q.session || 'closed';
   const stale = !!q.stale;
-  const ext = !stale && (session === 'pre_market' || session === 'after_hours');
+  const extPct = Number(q.extended_change_pct);
+  const extChg = Number(q.extended_change);
+  const hasEthMove = !!q.show_session_split
+    && Number.isFinite(extPct)
+    && Number.isFinite(extChg)
+    && (Math.abs(extPct) >= 0.01 || Math.abs(extChg) >= 0.02);
+  const ext = hasEthMove || (!stale && (session === 'pre_market' || session === 'after_hours'));
   const accent = _sessionAccent(session);
   _lastQuoteSession = session;
   if (q.poll_seconds && q.poll_seconds >= 5) {
@@ -1503,9 +1592,7 @@ function applyLiveQuote(q) {
     nowEl.style.color = ext ? '#fbbf24' : 'var(--fg)';
   }
   const extLabel = session === 'pre_market' ? 'Pre-market' : 'After-hours';
-  if (q.show_session_split
-      && q.regular_change_pct != null
-      && q.extended_change_pct != null) {
+  if (q.show_session_split && q.regular_change_pct != null && hasEthMove) {
     setPriceChgDisplay({
       split: true,
       regularPct: q.regular_change_pct,
@@ -1515,6 +1602,12 @@ function applyLiveQuote(q) {
       extChg: q.extended_change,
       extLabel,
     });
+  } else if (q.regular_change_pct != null && q.regular_change != null && q.previous_close) {
+    setPriceChgDisplay({
+      split: false,
+      singleText: fmtPctAbsChgLine(q.regular_change_pct, q.regular_change, 'At close'),
+      singleColor: chgLineColor(q.regular_change_pct, false),
+    });
   } else if (_currentRange === '1d') {
     const basis = q.change_label === 'vs close' ? 'vs close' : 'today';
     const sign = isUp ? '+' : '';
@@ -1523,6 +1616,8 @@ function applyLiveQuote(q) {
       singleText: sign + chg.toFixed(2) + ' (' + sign + chgPct.toFixed(2) + '%) ' + basis,
       singleColor: isUp ? (ext ? '#fbbf24' : 'var(--pos)') : 'var(--neg)',
     });
+  } else {
+    setPriceChgDisplay({ split: false });
   }
   if (asOfEl) {
     const label = q.session_label
@@ -1541,6 +1636,8 @@ function applyLiveQuote(q) {
     const peEl = document.getElementById('livePE');
     if (peEl) peEl.textContent = 'P/E ' + Number(q.pe_ttm).toFixed(1);
   }
+  const ttmFcf = _ttmData && Number(_ttmData.fcf_usd);
+  if (q.market_cap_usd > 0 && ttmFcf > 0) updateFcfYieldEl(q.market_cap_usd, ttmFcf);
 
   if (priceChart?.data?.datasets?.[0]) {
     const ds = priceChart.data.datasets[0];
