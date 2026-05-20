@@ -29,6 +29,7 @@ if sys.stderr and hasattr(sys.stderr, "buffer"):
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "web"))
 
 # Load .env BEFORE importing Settings (defaults are evaluated at import time)
 from dotenv import load_dotenv
@@ -43,6 +44,7 @@ from equity_sorter.canonical.comprehensive_metrics import (
 )
 from equity_sorter.providers.eodhd.client import EODHDClient, EODHDRequest
 from equity_sorter.cache import FundamentalsCache
+from eodhd_analyst import extract_analyst_ratings
 
 def extract_financial_data_correct(fundamentals):
     """Extract financial data using the CORRECT EODHD API structure."""
@@ -99,17 +101,27 @@ def extract_financial_data_correct(fundamentals):
 
 def _load_symbols_from_file(path: Path) -> list[str]:
     """One symbol per line; # comments; optional CSV (first column). Deduplicated, order preserved."""
+    return [sym for sym, _ in _load_symbol_exchange_pairs(path)]
+
+
+def _load_symbol_exchange_pairs(path: Path, default_exchange: str = "US") -> list[tuple[str, str]]:
+    """SYMBOL or SYMBOL,EXCHANGE per line (e.g. EQNR,OL)."""
     text = path.read_text(encoding="utf-8")
-    out: list[str] = []
-    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        sym = line.split(",")[0].strip().upper()
-        if sym and sym not in seen:
-            seen.add(sym)
-            out.append(sym)
+        parts = [p.strip().upper() for p in line.split(",") if p.strip()]
+        if not parts:
+            continue
+        sym = parts[0]
+        ex = parts[1] if len(parts) > 1 else default_exchange
+        key = (sym, ex)
+        if sym and key not in seen:
+            seen.add(key)
+            out.append(key)
     return out
 
 
@@ -280,10 +292,40 @@ def _get_session() -> requests.Session:
     return _SHARED_SESSION
 
 
-def _analyse_one(symbol: str, api_key: str) -> tuple[str, dict | None, str | None]:
+def _normalize_exchange_code(exchange: str) -> str:
+    ex = (exchange or "US").strip().upper()
+    if ex in ("OL", "OS", "XOSL", "OSE"):
+        return "OL"
+    if ex in ("ST", "STO", "XSTO", "SSE"):
+        return "ST"
+    if ex in ("CO", "CPH", "XCSE", "CPSE"):
+        return "CO"
+    if ex in ("HE", "HEL", "XHEL"):
+        return "HE"
+    return ex or "US"
+
+
+def _eodhd_symbol(symbol: str, exchange: str = "US") -> str:
+    sym = symbol.strip().upper()
+    if "." in sym:
+        base, suf = sym.rsplit(".", 1)
+        if base and len(suf) <= 6:
+            return sym
+    ex = _normalize_exchange_code(exchange)
+    if ex == "US":
+        return f"{sym}.US"
+    return f"{sym}.{ex}"
+
+
+def _analyse_one(
+    symbol: str,
+    api_key: str,
+    exchange: str = "US",
+) -> tuple[str, dict | None, str | None]:
     """Fetch + score a single symbol. Caches raw fundamentals to disk (TTL=24h)."""
     try:
         fundamentals = _load_cached(symbol)
+        eodhd_sym = _eodhd_symbol(symbol, exchange)
         if fundamentals is None:
             last_err = ""
             session = _get_session()
@@ -291,7 +333,7 @@ def _analyse_one(symbol: str, api_key: str) -> tuple[str, dict | None, str | Non
             for attempt in range(3):
                 try:
                     raw = client.get_json(
-                        EODHDRequest(endpoint=f"fundamentals/{symbol}.US", params={})
+                        EODHDRequest(endpoint=f"fundamentals/{eodhd_sym}", params={})
                     )
                     if raw and isinstance(raw, dict) and raw.get("General"):
                         _save_cache(symbol, raw)
@@ -343,29 +385,19 @@ def _analyse_one(symbol: str, api_key: str) -> tuple[str, dict | None, str | Non
                 msg = f"{msg}: {err_detail.strip()[:400]}"
             return symbol, None, msg
 
-        ar_raw = fundamentals.get("AnalystRatings", {})
-        analyst_ratings = None
-        if ar_raw and ar_raw.get("Rating"):
-            analyst_ratings = {
-                "Rating":     ar_raw.get("Rating"),
-                "TargetPrice": ar_raw.get("TargetPrice", 0),
-                "StrongBuy":  ar_raw.get("StrongBuy", 0),
-                "Buy":        ar_raw.get("Buy", 0),
-                "Hold":       ar_raw.get("Hold", 0),
-                "Sell":       ar_raw.get("Sell", 0),
-                "StrongSell": ar_raw.get("StrongSell", 0),
-            }
+        analyst_ratings = extract_analyst_ratings(fundamentals)
 
         currency_code = general.get("CurrencyCode", "USD") or "USD"
         exchange_name = general.get("Exchange", "") or ""
         is_primary = exchange_name.upper() in ("NYSE", "NASDAQ", "AMEX", "NYQ", "NMS", "NGM", "NCM")
+        ex_code = _normalize_exchange_code(exchange)
 
         analysis = {
             "symbol":   symbol,
             "name":     general.get("Name", general.get("CompanyName", symbol)),
             "sector":   general.get("Sector", "Unknown"),
             "industry": general.get("Industry", "Unknown"),
-            "exchange": "US",
+            "exchange": ex_code,
             "currency_code": currency_code,
             "is_primary_listing": is_primary,
             "data_quality": {
@@ -417,17 +449,23 @@ def run_scaled_analysis(
     workers: int = 8,
     symbols_file: Path | None = None,
     merge_into: Path | None = None,
+    exchange: str = "US",
 ):
     """Run large-scale analysis using a thread pool for concurrent API calls."""
 
-    symbols = get_top_companies(target_companies, symbols_file=symbols_file)
-    if not symbols:
+    if symbols_file is not None and Path(symbols_file).is_file():
+        pairs = _load_symbol_exchange_pairs(Path(symbols_file), default_exchange=exchange)
+        pairs = pairs[:target_companies]
+        print(f"📋  Loaded {len(pairs)} symbol+exchange pairs from {Path(symbols_file).name}")
+    else:
+        pairs = [(s, exchange) for s in get_top_companies(target_companies, symbols_file=symbols_file)]
+    if not pairs:
         print("⚠️  No symbols to analyze — exiting.")
         return [], {}
 
-    tag = f"{len(symbols)} companies"
+    tag = f"{len(pairs)} companies"
     if symbols_file:
-        tag = f"{len(symbols)} companies from {Path(symbols_file).name}"
+        tag = f"{len(pairs)} companies from {Path(symbols_file).name}"
     print(f"SCALED ANALYSIS: {tag}  (workers={workers})")
     print("=" * 60)
 
@@ -461,30 +499,32 @@ def run_scaled_analysis(
         except Exception:
             pass
 
-    _write_progress(0, len(symbols))
+    _write_progress(0, len(pairs))
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_analyse_one, sym, api_key): sym for sym in symbols}
+        futures = {
+            pool.submit(_analyse_one, sym, api_key, ex): sym for sym, ex in pairs
+        }
         for future in as_completed(futures):
             sym = futures[future]
             symbol, analysis, err = future.result()
             with lock:
                 done += 1
                 if err:
-                    print(f"  [{done}/{len(symbols)}] {symbol:6s}  FAIL: {err[:50]}")
+                    print(f"  [{done}/{len(pairs)}] {symbol:6s}  FAIL: {err[:50]}")
                     failed_companies.append({"symbol": symbol, "reason": err})
-                    _write_progress(done, len(symbols), symbol)
+                    _write_progress(done, len(pairs), symbol)
                 else:
                     q = analysis["data_quality"]["quality"]
                     data_quality_stats[q.lower()] = data_quality_stats.get(q.lower(), 0) + 1
                     score = analysis["investment_scores"]["overall_score"]
                     cat   = analysis["investment_scores"]["investment_category"]
                     rev   = analysis["financial_metrics"].get("revenue", 0)
-                    print(f"  [{done}/{len(symbols)}] {symbol:6s}  {score:5.1f}/20 {cat:9s} rev=${rev/1e9:.1f}B")
+                    print(f"  [{done}/{len(pairs)}] {symbol:6s}  {score:5.1f}/20 {cat:9s} rev=${rev/1e9:.1f}B")
                     successful_analyses.append(analysis)
-                    _write_progress(done, len(symbols), symbol, score)
+                    _write_progress(done, len(pairs), symbol, score)
     
-    _write_progress(len(symbols), len(symbols), finished=True)
+    _write_progress(len(pairs), len(pairs), finished=True)
 
     # Sort this batch by overall score
     successful_analyses.sort(
@@ -497,7 +537,7 @@ def run_scaled_analysis(
         output_rows = _merge_with_base(merge_path, successful_analyses)
         print(
             f"🔗 Merged batch into {merge_path.name}: "
-            f"+{len(successful_analyses)} ok / {len(symbols)} tested → {len(output_rows)} rows in output"
+            f"+{len(successful_analyses)} ok / {len(pairs)} tested → {len(output_rows)} rows in output"
         )
     elif merge_path is not None:
         print(f"⚠️  --merge-into not found ({merge_path}) — writing batch only")
@@ -505,7 +545,7 @@ def run_scaled_analysis(
     else:
         output_rows = successful_analyses
 
-    n_sym = len(symbols)
+    n_sym = len(pairs)
     batch_ok = len(successful_analyses)
     batch_fail = len(failed_companies)
     success_rate = (batch_ok / n_sym * 100) if n_sym else 0.0
@@ -863,18 +903,7 @@ def _score_single(sym_data_pair: tuple[str, dict]) -> tuple[str, dict | None, st
         if "error" in metrics:
             return sym, None, f"Metrics failed: {metrics.get('error', '')[:200]}"
 
-        ar_raw = data.get("AnalystRatings", {})
-        analyst_ratings = None
-        if ar_raw and ar_raw.get("Rating"):
-            analyst_ratings = {
-                "Rating": ar_raw.get("Rating"),
-                "TargetPrice": ar_raw.get("TargetPrice", 0),
-                "StrongBuy": ar_raw.get("StrongBuy", 0),
-                "Buy": ar_raw.get("Buy", 0),
-                "Hold": ar_raw.get("Hold", 0),
-                "Sell": ar_raw.get("Sell", 0),
-                "StrongSell": ar_raw.get("StrongSell", 0),
-            }
+        analyst_ratings = extract_analyst_ratings(data)
 
         currency_code = general.get("CurrencyCode", "USD") or "USD"
         exchange_name = general.get("Exchange", "") or ""
@@ -1220,6 +1249,12 @@ if __name__ == "__main__":
         help="Existing scaled_analysis *.jsonl to merge with this batch (new/updated symbols win).",
     )
     _p.add_argument(
+        "--exchange",
+        type=str,
+        default="US",
+        help="EODHD exchange suffix for symbols in --symbols-file (e.g. OL for Oslo: ANDF → ANDF.OL).",
+    )
+    _p.add_argument(
         "--cache-only",
         action="store_true",
         help="Re-score all cached symbols without API calls. Fastest mode (~30s for 5,000 symbols).",
@@ -1248,4 +1283,5 @@ if __name__ == "__main__":
             workers=_args.workers,
             symbols_file=_args.symbols_file,
             merge_into=_args.merge_into,
+            exchange=_args.exchange,
         )

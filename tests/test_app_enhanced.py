@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -49,6 +50,59 @@ class AppEnhancedHistoryTests(unittest.TestCase):
     def tearDown(self) -> None:
         ae._get_fundamentals = self._orig_get
 
+    def test_history_drops_estimate_for_reported_fy(self) -> None:
+        from datetime import datetime, timedelta
+
+        end = datetime.now().date()
+        mock_prices = [
+            {
+                "date": (end - timedelta(days=400 - i)).strftime("%Y-%m-%d"),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1_000_000,
+            }
+            for i in range(400)
+        ]
+        with patch.object(ae, "_fetch_full_price_history", return_value=mock_prices):
+            r = self.client.get("/api/company/AAPL/history")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        hist_years = {h["year"] for h in body.get("history", [])}
+        for est in body.get("estimates", []):
+            fy = str(est.get("fiscal_year", ""))
+            self.assertNotIn(
+                fy,
+                hist_years,
+                msg=f"estimate {est.get('year')} overlaps reported FY{fy}",
+            )
+
+    def test_history_includes_price_chart_1y(self) -> None:
+        from datetime import datetime, timedelta
+
+        end = datetime.now().date()
+        mock_prices = [
+            {
+                "date": (end - timedelta(days=400 - i)).strftime("%Y-%m-%d"),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0 + i * 0.05,
+                "volume": 1_000_000,
+            }
+            for i in range(400)
+        ]
+        with patch.object(ae, "_fetch_full_price_history", return_value=mock_prices):
+            r = self.client.get("/api/company/AAPL/history")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        chart = body.get("price_chart_1y")
+        self.assertIsInstance(chart, list)
+        self.assertGreater(len(chart), 0)
+        self.assertLessEqual(len(chart), ae._MAX_CHART_POINTS)
+        self.assertIn("close", chart[0])
+
     def test_history_includes_oeps_per_share(self) -> None:
         r = self.client.get("/api/company/AAPL/history")
         self.assertEqual(r.status_code, 200)
@@ -82,11 +136,12 @@ class AppEnhancedHistoryTests(unittest.TestCase):
 
     def test_chat_requires_openai_key(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
-            r = self.client.post(
-                "/api/company/AAPL/chat",
-                json={"message": "What is revenue?"},
-                content_type="application/json",
-            )
+            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
+                r = self.client.post(
+                    "/api/company/AAPL/chat",
+                    json={"message": "What is revenue?"},
+                    content_type="application/json",
+                )
         self.assertEqual(r.status_code, 503)
         self.assertIn("error", r.get_json())
 
@@ -104,13 +159,15 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         fake.choices = [MagicMock(message=MagicMock(content="Revenue is in the context."))]
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-fake"}, clear=False):
-            with patch("openai.OpenAI") as MO:
-                MO.return_value.chat.completions.create.return_value = fake
-                r = self.client.post(
-                    "/api/company/AAPL/chat",
-                    json={"message": "Summarize revenue."},
-                    content_type="application/json",
-                )
+            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
+                with patch("openai.OpenAI") as MO:
+                    MO.return_value.chat.completions.create.return_value = fake
+                    with patch("app_enhanced._chat_run_tool_loop", return_value="Revenue is in the context."):
+                        r = self.client.post(
+                            "/api/company/AAPL/chat",
+                            json={"message": "Summarize revenue."},
+                            content_type="application/json",
+                        )
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         body = r.get_json()
         self.assertEqual(body.get("reply"), "Revenue is in the context.")
@@ -128,16 +185,22 @@ class AppEnhancedHistoryTests(unittest.TestCase):
 
         fake = _Rsp()
 
+        msg = MagicMock()
+        msg.content = "Hi stream."
+        msg.tool_calls = None
+        rsp = MagicMock()
+        rsp.choices = [MagicMock(message=msg)]
+
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-fake"}, clear=False):
-            with patch("openai.OpenAI") as MO:
-                MO.return_value.chat.completions.create.return_value = fake
-                r = self.client.post(
-                    "/api/company/AAPL/chat/stream",
-                    json={"message": "ping"},
-                    content_type="application/json",
-                )
-                # Buffer body while patch is active (stream generator runs on read).
-                raw = r.get_data(as_text=True)
+            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
+                with patch("openai.OpenAI"):
+                    with patch("app_enhanced._openai_chat_round", return_value=rsp):
+                        r = self.client.post(
+                            "/api/company/AAPL/chat/stream",
+                            json={"message": "ping"},
+                            content_type="application/json",
+                        )
+                        raw = r.get_data(as_text=True)
         self.assertEqual(r.status_code, 200, raw)
         self.assertEqual(r.mimetype, "application/x-ndjson")
         lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
@@ -178,6 +241,9 @@ class FilterSortApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self._orig_c = ae.companies
         self._orig_l = ae.company_lookup
+        self._orig_ranks = ae.screener_rank_by_symbol
+        self._orig_listing_sorted = ae._companies_listing_sorted
+        ae._companies_listing_sorted = False
         ae.companies = [
             {
                 "symbol": "ACC1",
@@ -217,6 +283,8 @@ class FilterSortApiTests(unittest.TestCase):
     def tearDown(self) -> None:
         ae.companies = self._orig_c
         ae.company_lookup = self._orig_l
+        ae.screener_rank_by_symbol = self._orig_ranks
+        ae._companies_listing_sorted = self._orig_listing_sorted
 
     def test_search_matches_accented_name(self) -> None:
         c = ae.app.test_client()
@@ -259,6 +327,118 @@ class FilterSortApiTests(unittest.TestCase):
         d3 = c.get("/api/companies?search=cafe+demo&sort_by=symbol&sort_order=asc&limit=50").get_json()
         for i, row in enumerate(d3["companies"]):
             self.assertEqual(row["rank"], i + 1)
+
+    def test_api_companies_screener_rank_is_universe_position(self) -> None:
+        ae.companies = [
+            {
+                "symbol": "HIGH",
+                "name": "High",
+                "sector": "Technology",
+                "company_info": {"market_cap": 50e9},
+                "financial_metrics": {
+                    "revenue": 10e9,
+                    "roe": 0.2,
+                    "roic": 0.2,
+                    "gross_margin": 0.5,
+                    "revenue_growth_consistency": 0.8,
+                },
+                "investment_scores": {
+                    "overall_score": 18,
+                    "quality_score": 4,
+                    "value_score": 4,
+                    "growth_score": 4,
+                    "safety_score": 4,
+                    "peg_ratio": 0.5,
+                },
+            },
+            {
+                "symbol": "LOW",
+                "name": "Low",
+                "sector": "Technology",
+                "company_info": {"market_cap": 5e9},
+                "financial_metrics": {
+                    "revenue": 1e9,
+                    "roe": 0.05,
+                    "roic": 0.05,
+                    "gross_margin": 0.2,
+                    "revenue_growth_consistency": 0.3,
+                },
+                "investment_scores": {
+                    "overall_score": 6,
+                    "quality_score": 1,
+                    "value_score": 1,
+                    "growth_score": 1,
+                    "safety_score": 1,
+                    "peg_ratio": 3.0,
+                },
+            },
+        ]
+        ae.companies = sorted(
+            ae.companies,
+            key=lambda c: (-ae._compounder_list_score(c), c.get("symbol") or ""),
+        )
+        ae.company_lookup = {c["symbol"]: c for c in ae.companies}
+        ae._rebuild_screener_ranks()
+        c = ae.app.test_client()
+        d = c.get("/api/companies?search=LOW&limit=1").get_json()
+        row = d["companies"][0]
+        self.assertEqual(row["rank"], 1)
+        self.assertEqual(row["screener_rank"], 2)
+        d2 = c.get("/api/company/LOW").get_json()
+        self.assertEqual(d2["screener_rank"], 2)
+        self.assertGreater(d2["listing_score"], 0)
+
+    def test_companies_list_monotonic_listing_score(self) -> None:
+        if len(ae.companies) < 2:
+            self.skipTest("universe not loaded")
+        for i in range(len(ae.companies) - 1):
+            a = ae._compounder_list_score(ae.companies[i])
+            b = ae._compounder_list_score(ae.companies[i + 1])
+            self.assertGreaterEqual(
+                a, b,
+                msg=f"{ae.companies[i]['symbol']} ({a}) before {ae.companies[i+1]['symbol']} ({b})",
+            )
+
+    def test_momentum_score_ranks_high_growth_first(self) -> None:
+        ae.companies = [
+            {
+                "symbol": "FAST",
+                "name": "Fast",
+                "sector": "Technology",
+                "data_quality": {"min_quarters": 12},
+                "financial_metrics": {
+                    "revenue_growth_1y": 0.45,
+                    "latest_quarter_revenue_growth": 0.50,
+                    "revenue_acceleration": 0.12,
+                    "eps_growth": 0.40,
+                },
+                "investment_scores": {"overall_score": 10},
+            },
+            {
+                "symbol": "SLOW",
+                "name": "Slow",
+                "sector": "Technology",
+                "data_quality": {"min_quarters": 12},
+                "financial_metrics": {
+                    "revenue_growth_1y": 0.03,
+                    "revenue_acceleration": -0.02,
+                    "eps_growth": 0.02,
+                },
+                "investment_scores": {"overall_score": 14},
+            },
+        ]
+        ae._rebuild_momentum_ranks()
+        self.assertGreater(
+            ae._cached_momentum_score(ae.companies[0]),
+            ae._cached_momentum_score(ae.companies[1]),
+        )
+        c = ae.app.test_client()
+        d = c.get("/api/companies?sort_by=momentum_score&limit=2").get_json()
+        self.assertEqual(d["companies"][0]["symbol"], "FAST")
+        self.assertEqual(d["companies"][0]["momentum_rank"], 1)
+        short = c.get("/api/screener/high-growth-shortlist?limit=10&min_rev_growth_pct=10").get_json()
+        self.assertGreaterEqual(short["total_qualified"], 1)
+        self.assertEqual(short["candidates"][0]["symbol"], "FAST")
 
     def test_weight_custom_flag_with_default_sliders_changes_blend(self) -> None:
         c = ae.app.test_client()
@@ -512,26 +692,67 @@ class LoadDataPriorityTests(unittest.TestCase):
         scaled_dir.mkdir(parents=True)
         rescored_dir.mkdir(parents=True)
 
-        def line(sym: str, score: float) -> str:
+        def _rich_metrics() -> dict:
+            return {
+                "roe": 0.35,
+                "roic": 0.30,
+                "roa": 0.20,
+                "pe_ratio": 14.0,
+                "peg_ratio": 0.55,
+                "fcf_yield": 0.06,
+                "ev_ebitda": 12.0,
+                "oeps_cagr": 0.25,
+                "revenue_cagr_3y": 0.20,
+                "revenue_growth_1y": 0.15,
+                "gross_margin": 0.45,
+                "net_margin": 0.22,
+                "altman_z_score": 5.0,
+                "current_ratio": 2.0,
+                "debt_to_equity": 0.4,
+                "piotroski_score": 8,
+                "fcf_conversion": 0.9,
+                "red_flag_count": 0,
+            }
+
+        def line(sym: str, metrics: dict, name: str | None = None) -> str:
             rec = {
                 "symbol": sym,
-                "name": sym,
-                "sector": "X",
-                "industry": "",
+                "name": name or sym,
+                "sector": "Technology",
+                "industry": "Software",
                 "exchange": "US",
-                "company_info": {},
-                "financial_metrics": {},
-                "investment_scores": {"overall_score": score},
+                "company_info": {"market_cap": 50e9},
+                "financial_metrics": metrics,
+                "investment_scores": {"overall_score": 1.0, "value_score": 0},
             }
             return json.dumps(rec) + "\n"
 
-        # Universe (scaled) has two names; rescored file only re-scores one of them.
-        (scaled_dir / "scaled_analysis_x.jsonl").write_text(
-            line("ZZSCALED", 5.0) + line("ZZRESCORED", 1.0), encoding="utf-8"
+        poor = {
+            "roe": 0.05,
+            "pe_ratio": 80.0,
+            "peg_ratio": 4.0,
+            "oeps_cagr": 0.02,
+            "altman_z_score": 2.0,
+            "current_ratio": 1.0,
+            "debt_to_equity": 2.0,
+            "piotroski_score": 3,
+            "red_flag_count": 2,
+        }
+        scaled_path = scaled_dir / "scaled_analysis_x.jsonl"
+        rescored_path = rescored_dir / "rescored_x.jsonl"
+        scaled_path.write_text(
+            line("ZZSCALED", poor) + line("ZZRESCORED", poor, name="Old"),
+            encoding="utf-8",
         )
-        (rescored_dir / "rescored_x.jsonl").write_text(
-            line("ZZRESCORED", 19.0), encoding="utf-8"
+        rescored_path.write_text(
+            line("ZZRESCORED", _rich_metrics(), name="Rescored Inc"),
+            encoding="utf-8",
         )
+        # Rescored overlay must be newer than scaled base.
+        time.sleep(0.05)
+        import os
+
+        os.utime(rescored_path, (time.time() + 10, time.time() + 10))
 
         orig_root = ae.PROJECT_ROOT
         ae.PROJECT_ROOT = tmp
@@ -541,10 +762,36 @@ class LoadDataPriorityTests(unittest.TestCase):
         self.assertEqual(ae.DATA_SOURCE, "scaled+rescored_scores")
         self.assertEqual(len(ae.companies), 2)
         self.assertEqual(ae.companies[0]["symbol"], "ZZRESCORED")
-        self.assertEqual(
-            ae.companies[0]["investment_scores"]["overall_score"],
-            19.0,
+        self.assertEqual(ae.companies[0]["name"], "Rescored Inc")
+        self.assertGreater(
+            ae.companies[0]["investment_scores"]["value_score"],
+            ae.companies[1]["investment_scores"]["value_score"],
         )
+        self.assertGreater(
+            ae._compounder_list_score(ae.companies[0]),
+            ae._compounder_list_score(ae.companies[1]),
+        )
+
+    def test_refresh_nvda_value_score_uses_peg(self) -> None:
+        """Stale value_score=0 in jsonl must not survive load when PEG is strong."""
+        nvda_path = PROJECT_ROOT / "outputs" / "scaled_analysis" / "scaled_analysis_20260513_225040.jsonl"
+        if not nvda_path.is_file():
+            self.skipTest("NVDA universe file missing")
+        row = None
+        for line in nvda_path.open(encoding="utf-8"):
+            rec = json.loads(line)
+            if rec.get("symbol") == "NVDA":
+                row = rec
+                break
+        self.assertIsNotNone(row)
+        row = dict(row)
+        row["investment_scores"] = dict(row.get("investment_scores") or {})
+        row["investment_scores"]["value_score"] = 0
+        ae._refresh_investment_scores(row)
+        peg = float(row["investment_scores"].get("peg_ratio") or 0)
+        val = float(row["investment_scores"].get("value_score") or 0)
+        if peg > 0 and peg <= 0.8:
+            self.assertGreaterEqual(val, 2.0)
 
 
 class SafeOutputsPathTests(unittest.TestCase):
@@ -704,6 +951,142 @@ class AnalysisRunApiTests(unittest.TestCase):
             _time.sleep(2.3)
 
 
+class PriceHistorySliceTests(unittest.TestCase):
+    def _daily(self, n: int) -> list:
+        from datetime import datetime, timedelta
+        end = datetime.now().date()
+        return [
+            {
+                "date": (end - timedelta(days=n - 1 - i)).strftime("%Y-%m-%d"),
+                "close": 100.0 + i * 0.1,
+            }
+            for i in range(n)
+        ]
+
+    def test_short_range_expands_to_min_200_points(self) -> None:
+        prices = self._daily(400)
+        out = ae._slice_and_downsample(prices, "1w")
+        self.assertGreaterEqual(len(out), ae._MIN_CHART_POINTS)
+        self.assertLessEqual(len(out), ae._MAX_CHART_POINTS)
+
+    def test_long_range_caps_at_400(self) -> None:
+        prices = self._daily(800)
+        out = ae._slice_and_downsample(prices, "max")
+        self.assertEqual(len(out), ae._MAX_CHART_POINTS)
+        self.assertEqual(out[-1]["date"], prices[-1]["date"])
+
+    def test_one_year_keeps_natural_density(self) -> None:
+        prices = self._daily(300)
+        out = ae._slice_and_downsample(prices, "1y")
+        self.assertGreaterEqual(len(out), 200)
+        self.assertLessEqual(len(out), 400)
+
+    def test_1d_stays_short_without_200_expansion(self) -> None:
+        prices = self._daily(400)
+        out = ae._slice_and_downsample(prices, "1d")
+        self.assertLessEqual(len(out), 12)
+        self.assertGreaterEqual(len(out), 1)
+
+    def test_apply_price_density_quarter(self) -> None:
+        prices = self._daily(400)
+        full = ae._slice_and_downsample(prices, "1y")
+        preview = ae._apply_price_density(full, 0.25)
+        self.assertLess(len(preview), len(full))
+        self.assertGreaterEqual(len(preview), 50)
+
+    def test_chart_prices_for_range_matches_slice(self) -> None:
+        prices = self._daily(400)
+        self.assertEqual(
+            ae._chart_prices_for_range(prices, "1y"),
+            ae._slice_and_downsample(prices, "1y"),
+        )
+
+    def test_drop_estimates_when_annual_reported(self) -> None:
+        hist = [{"year": "2026", "revenue_usd": 100e9}]
+        ests = [
+            {"year": "FY2026E", "fiscal_year": 2026, "revenue_usd": 99e9},
+            {"year": "FY2027E", "fiscal_year": 2027, "revenue_usd": 120e9},
+        ]
+        out = ae._drop_estimates_for_reported_years(hist, ests)
+        self.assertEqual([e["year"] for e in out], ["FY2027E"])
+
+
+class LiveQuoteTests(unittest.TestCase):
+    def test_us_market_session_regular_hours(self) -> None:
+        from datetime import datetime
+
+        noon = datetime(2026, 5, 20, 12, 0, tzinfo=ae._ET)
+        self.assertEqual(ae._us_market_session_now(noon), "regular")
+
+    def test_us_market_session_after_hours(self) -> None:
+        from datetime import datetime
+
+        evening = datetime(2026, 5, 20, 17, 30, tzinfo=ae._ET)
+        self.assertEqual(ae._us_market_session_now(evening), "after_hours")
+
+    def test_parse_us_quote_delayed_extended(self) -> None:
+        row = {
+            "lastTradePrice": 220.0,
+            "lastTradeTime": 1000,
+            "previousClosePrice": 215.0,
+            "ethPrice": 222.5,
+            "ethTime": 2000,
+            "change": 5.0,
+            "changePercent": 2.3,
+        }
+        q = ae._parse_us_quote_delayed(row, "after_hours")
+        self.assertIsNotNone(q)
+        self.assertEqual(q["price"], 222.5)
+        self.assertEqual(q["session"], "after_hours")
+        self.assertAlmostEqual(q["change"], 2.5, places=2)
+
+    def test_parse_us_quote_delayed_regular(self) -> None:
+        row = {
+            "lastTradePrice": 225.0,
+            "lastTradeTime": 3000,
+            "previousClosePrice": 220.0,
+            "ethPrice": 222.0,
+            "ethTime": 1000,
+            "change": 5.0,
+            "changePercent": 2.27,
+        }
+        q = ae._parse_us_quote_delayed(row, "regular")
+        self.assertEqual(q["price"], 225.0)
+        self.assertEqual(q["session"], "regular")
+
+    def test_parse_eodhd_realtime_quote(self) -> None:
+        raw = {
+            "code": "AAPL.US",
+            "close": 227.72,
+            "previousClose": 226.4,
+            "change": 1.32,
+            "change_p": 0.5829,
+            "timestamp": 1690381773,
+        }
+        q = ae._parse_eodhd_realtime_quote(raw)
+        self.assertIsNotNone(q)
+        self.assertEqual(q["price"], 227.72)
+        self.assertEqual(q["previous_close"], 226.4)
+
+    def test_api_company_quote(self) -> None:
+        fake = {
+            "price": 100.0,
+            "previous_close": 98.0,
+            "change": 2.0,
+            "change_pct": 2.04,
+            "as_of": "2026-05-16T15:30:00",
+            "session": "regular",
+            "session_label": "Live",
+            "market_open": True,
+        }
+        with unittest.mock.patch.object(ae, "_get_live_quote", return_value=fake):
+            c = ae.app.test_client()
+            r = c.get("/api/company/TEST/quote")
+            self.assertEqual(r.status_code, 200)
+            d = r.get_json()
+            self.assertEqual(d["price"], 100.0)
+
+
 class EodhdFundamentalsHelpersTests(unittest.TestCase):
     def test_merged_highlights_from_top_level(self) -> None:
         d = {"Highlights": {}, "PERatio": 12.5, "EarningsShare": 8.74, "MarketCapitalization": 5e9}
@@ -720,6 +1103,14 @@ class EodhdFundamentalsHelpersTests(unittest.TestCase):
     def test_eodhd_adjust_gross_profit(self) -> None:
         self.assertAlmostEqual(ae._eodhd_adjust_gross_profit(100.0, 100.0, 30.0), 70.0)
         self.assertAlmostEqual(ae._eodhd_adjust_gross_profit(100.0, 50.0, 30.0), 50.0)
+
+    def test_sanitize_revenue_estimate_zar_scale(self) -> None:
+        ref = 8.75e9
+        bad = 213.576751540e9
+        fixed = ae._sanitize_revenue_estimate(bad, ref)
+        self.assertIsNotNone(fixed)
+        self.assertAlmostEqual(fixed / ref, 1.35, delta=0.15)
+        self.assertAlmostEqual(ae._sanitize_revenue_estimate(9e9, ref), 9e9)
 
     def test_build_ttm_uses_highlights_when_quarterly_eps_incomplete(self) -> None:
         dates = ["2025-12-31", "2025-09-30", "2025-06-30", "2025-03-31"]
@@ -751,6 +1142,78 @@ class EodhdFundamentalsHelpersTests(unittest.TestCase):
         self.assertIsNotNone(out)
         assert out is not None
         self.assertAlmostEqual(out["eps"], 4.5, places=3)
+
+    def test_sec_edgar_document_url(self) -> None:
+        u = ae._sec_edgar_document_url(
+            "0000820313", "0001104659-26-054128", "aph-20260331x10q.htm",
+        )
+        self.assertIn("/Archives/edgar/data/820313/", u)
+        self.assertTrue(u.endswith("aph-20260331x10q.htm"))
+
+    def test_match_sec_filing_exact_date(self) -> None:
+        sub = {
+            "filings": {
+                "recent": {
+                    "form": ["10-Q", "10-K"],
+                    "filingDate": ["2026-05-01", "2026-02-10"],
+                    "accessionNumber": ["0001104659-26-054128", "0001104659-26-010000"],
+                    "primaryDocument": ["aph-20260331x10q.htm", "aph-20251231x10k.htm"],
+                }
+            }
+        }
+        hit = ae._match_sec_filing(sub, "10-Q", "2026-05-01")
+        self.assertEqual(hit, ("0001104659-26-054128", "aph-20260331x10q.htm"))
+
+    def test_sec_edgar_filing_url_uses_document_when_matched(self) -> None:
+        sub = {
+            "filings": {
+                "recent": {
+                    "form": ["10-Q"],
+                    "filingDate": ["2026-05-01"],
+                    "accessionNumber": ["0001104659-26-054128"],
+                    "primaryDocument": ["aph-20260331x10q.htm"],
+                }
+            }
+        }
+        u = ae._sec_edgar_filing_url("0000820313", "10-Q", "2026-05-01", sub)
+        self.assertIn("/Archives/edgar/data/", u)
+        self.assertNotIn("browse-edgar", u)
+
+    def test_build_quarterly_report_events(self) -> None:
+        d = {
+            "General": {"CIK": "0001562088", "FiscalYearEnd": "December"},
+            "Financials": {
+                "Income_Statement": {
+                    "quarterly": {
+                        "2025-12-31": {
+                            "date": "2025-12-31",
+                            "filing_date": "2026-02-15",
+                            "totalRevenue": 100,
+                        },
+                        "2025-09-30": {
+                            "date": "2025-09-30",
+                            "filing_date": "2025-11-05",
+                            "totalRevenue": 90,
+                        },
+                    }
+                }
+            },
+            "Earnings": {
+                "History": {
+                    "2025-12-31": {"date": "2025-12-31", "reportDate": "2026-02-20"},
+                }
+            },
+        }
+        with patch.object(ae, "_fetch_sec_submissions", return_value=None):
+            events = ae._build_quarterly_report_events(d)
+        self.assertEqual(len(events), 2)
+        q4 = next(e for e in events if e["period_end"] == "2025-12-31")
+        self.assertEqual(q4["form"], "10-K")
+        self.assertEqual(q4["marker_date"], "2026-02-15")
+        self.assertIn("browse-edgar", q4["sec_url"])
+        self.assertIn("type=10-K", q4["sec_url"])
+        q3 = next(e for e in events if e["period_end"] == "2025-09-30")
+        self.assertEqual(q3["form"], "10-Q")
 
 
 if __name__ == "__main__":

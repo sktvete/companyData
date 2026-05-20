@@ -77,6 +77,32 @@
   .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.58rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
   .rbtn:hover{color:var(--fg);background:var(--muted)}
   .rbtn.active{color:var(--accent);background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
+  .reports-toggle{display:inline-flex;align-items:center;gap:.45rem;margin-left:.4rem;padding:.18rem .5rem .18rem .35rem;font-size:.58rem;font-weight:600;letter-spacing:.03em;color:var(--dim);cursor:pointer;border:1px solid var(--border);border-radius:3px;user-select:none;vertical-align:middle;transition:border-color .12s,background .12s,color .12s}
+  .reports-toggle:hover{color:var(--fg);border-color:rgba(148,163,184,.35);background:rgba(26,35,50,.6)}
+  .reports-toggle.active{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
+  .reports-toggle-input{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+  .reports-toggle-track{position:relative;flex-shrink:0;width:1.65rem;height:.9rem;border-radius:999px;background:var(--muted);border:1px solid var(--border);transition:background .15s,border-color .15s}
+  .reports-toggle-track::after{content:'';position:absolute;top:50%;left:2px;width:.55rem;height:.55rem;border-radius:50%;background:#64748b;transform:translateY(-50%);transition:left .15s,background .15s,box-shadow .15s}
+  .reports-toggle.active .reports-toggle-track{background:rgba(245,158,11,.22);border-color:rgba(245,158,11,.55)}
+  .reports-toggle.active .reports-toggle-track::after{left:calc(100% - .55rem - 2px);background:#fbbf24;box-shadow:0 0 6px rgba(245,158,11,.55)}
+  .reports-toggle-label{line-height:1}
+  #chartPrice{cursor:crosshair}
+  #chartPrice.reports-hit{cursor:pointer}
+  .price-chart-card{overflow:visible}
+  .price-toolbar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.75rem 1rem;padding:1rem 1rem .5rem}
+  .price-toolbar-main{flex:1;min-width:min(100%,12rem)}
+  .price-range-row{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-bottom:.25rem}
+  .price-chart-stack{padding:0 .75rem .5rem;overflow:visible}
+  .price-chart-pane,.vol-chart-pane{overflow:hidden}
+  #priceHover{
+    position:absolute;top:6px;right:6px;z-index:5;display:none;pointer-events:none;
+    max-width:min(100%,20rem);padding:.4rem .55rem;text-align:right;font-size:.6rem;line-height:1.4;
+    color:var(--dim);background:rgba(11,15,25,.92);border:1px solid var(--border);border-radius:3px;
+    backdrop-filter:blur(6px);box-shadow:0 4px 12px rgba(0,0,0,.35);
+  }
+  #hoverDate{color:var(--fg);font-weight:600;margin-bottom:.2rem;font-size:.62rem}
+  #hoverPrice{color:var(--fg);letter-spacing:.02em;white-space:normal;word-break:break-word}
+  #hoverVol{margin-top:.15rem}
 </style>
 <body class="min-h-screen">
 <nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
@@ -127,7 +153,19 @@
       <div style="font-size:2.5rem;font-weight:800;margin-bottom:.2rem;color:{% if cat=='EXCELLENT' %}var(--pos){% elif cat=='GOOD' %}var(--accent){% elif cat=='FAIR' %}var(--warn){% elif cat=='POOR' %}var(--neg){% else %}#c084fc{% endif %}">
         {{ sc.overall_score }}
       </div>
-      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.65rem" title="{{ G.score_20 }}">Score / 20</div>
+      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.1em;text-transform:uppercase;margin-bottom:.35rem" title="{{ G.score_20 }}">Score / 20</div>
+      {% if company.momentum_rank %}
+      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;margin-bottom:.35rem" title="{{ G.momentum_rank }}">
+        Growth screener <span style="color:var(--pos)">#{{ company.momentum_rank }}</span>
+        · {{ '%.1f'|format(company.momentum_score or 0) }}/20
+      </div>
+      {% endif %}
+      {% if company.screener_rank %}
+      <div style="color:var(--dim);font-size:.58rem;letter-spacing:.06em;margin-bottom:.65rem" title="{{ G.screener_rank }}">
+        Screener <span style="color:var(--accent2)">#{{ company.screener_rank }}</span>
+        · {{ '%.1f'|format(company.listing_score) }}/20
+      </div>
+      {% endif %}
       <span class="badge {{ cat_cls }} mb-5">{{ cat }}</span>
       <div class="w-full space-y-2 text-left">
         {% set sub_tips = {'Quality': G.quality, 'Value': G.value, 'Growth': G.growth, 'Safety': G.safety} %}
@@ -151,15 +189,15 @@
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
 
     <!-- Left: Stock price chart (2 cols wide) -->
-    <div class="card lg:col-span-2" style="padding:0;overflow:hidden">
+    <div class="card lg:col-span-2 price-chart-card" style="padding:0">
       <!-- Price header -->
-      <div class="flex items-center justify-between px-4 pt-4 pb-2">
-        <div>
-          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.25rem">
+      <div class="price-toolbar">
+        <div class="price-toolbar-main">
+          <div class="price-range-row">
             <span class="section-h" style="margin-bottom:0">{{ company.symbol }}</span>
-            <div id="rangeBar" style="display:flex;gap:2px">
-              <button class="rbtn" data-r="1d">1D</button>
-              <button class="rbtn" data-r="1w">1W</button>
+            <div id="rangeBar" style="display:flex;flex-wrap:wrap;gap:2px">
+              <button class="rbtn" data-r="1d" title="Last few sessions (daily EOD)">1D</button>
+              <button class="rbtn" data-r="1w" title="~200 daily bars (EOD)">1W</button>
               <button class="rbtn" data-r="1m">1M</button>
               <button class="rbtn" data-r="3m">3M</button>
               <button class="rbtn" data-r="6m">6M</button>
@@ -169,26 +207,33 @@
               <button class="rbtn" data-r="5y">5Y</button>
               <button class="rbtn" data-r="10y">10Y</button>
               <button class="rbtn" data-r="max">Max</button>
+              <label id="reportsToggleLbl" class="reports-toggle" title="Quarterly SEC filings on the price line — click a dot to open the 10-Q/10-K filing">
+                <input type="checkbox" id="toggleQuarterlyReports" class="reports-toggle-input"/>
+                <span class="reports-toggle-track"></span>
+                <span class="reports-toggle-label">Reports</span>
+              </label>
             </div>
           </div>
-          <div id="priceHeader" style="display:flex;align-items:baseline;gap:.6rem">
+          <div id="priceHeader" style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap">
             <span id="priceNow" style="font-size:1.4rem;font-weight:800;color:var(--fg)">–</span>
             <span id="priceChange" style="font-size:.78rem;font-weight:600">–</span>
+            <span id="liveAsOf" style="font-size:.58rem;color:var(--dim);display:none"></span>
           </div>
         </div>
-        <div id="priceHover" style="text-align:right;font-size:.62rem;color:var(--dim);min-width:14rem;display:none">
-          <div id="hoverDate" style="color:var(--fg);font-weight:600;margin-bottom:1px"></div>
-          <div id="hoverPrice" style="color:var(--fg);letter-spacing:.02em"></div>
-          <div id="hoverVol" style="color:var(--dim)"></div>
+      </div>
+      <!-- Price + volume (shared horizontal plot width) -->
+      <div class="price-chart-stack">
+        <div class="price-chart-pane" style="position:relative;height:260px">
+          <div id="priceHover">
+            <div id="hoverDate"></div>
+            <div id="hoverPrice"></div>
+            <div id="hoverVol"></div>
+          </div>
+          <canvas id="chartPrice"></canvas>
         </div>
-      </div>
-      <!-- Chart area -->
-      <div style="position:relative;height:260px;padding:0 .5rem">
-        <canvas id="chartPrice"></canvas>
-      </div>
-      <!-- Volume bars -->
-      <div style="position:relative;height:60px;padding:0 .5rem">
-        <canvas id="chartVolume"></canvas>
+        <div class="vol-chart-pane" style="position:relative;height:60px">
+          <canvas id="chartVolume"></canvas>
+        </div>
       </div>
       <div id="priceLoading" style="display:none;color:var(--border);font-size:.7rem;text-align:center;padding:.75rem 0">FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span></div>
       <!-- Technicals bar -->
@@ -363,7 +408,10 @@ function hideLoader(id) {
 
 function renderAnalyst(ar) {
   const el = document.getElementById('analystBlock');
-  if (!ar) { el.innerHTML = '<div style="color:var(--dim);font-size:.7rem">No analyst data</div>'; return; }
+  if (!ar) {
+    el.innerHTML = '<div style="color:var(--dim);font-size:.7rem">No buy/hold/sell consensus for this listing.<br><span style="font-size:.62rem">Forward EPS/revenue estimates may still appear on the charts below.</span></div>';
+    return;
+  }
   const r = ar.rating, sb = ar.strong_buy, b = ar.buy, h = ar.hold, s = ar.sell + ar.strong_sell;
   const total = sb + b + h + s || 1;
   const bullPct = Math.round((sb + b) / total * 100);
@@ -425,17 +473,12 @@ function rowUsd(row, keyUsd, keyB) {
   return usdFromHistRow(row, keyUsd, keyB);
 }
 
-/** Pick forward estimate to stack with TTM on one x-axis column (actual vs analyst). */
+/** Pick forward estimate for same fiscal year as TTM (only when that year is not yet reported). */
 function pickTtmCompareEstimate(ttm, estimates) {
   if (!ttm || !estimates.length) return -1;
   const ttmFy = ttm.fiscal_year != null ? Number(ttm.fiscal_year) : null;
-  if (ttmFy != null) {
-    const exact = estimates.findIndex(e => parseEstFy(e) === ttmFy);
-    if (exact >= 0) return exact;
-    const next = estimates.findIndex(e => parseEstFy(e) === ttmFy + 1);
-    if (next >= 0) return next;
-  }
-  return 0;
+  if (ttmFy == null) return -1;
+  return estimates.findIndex(e => parseEstFy(e) === ttmFy);
 }
 
 /** Historical years + 1Y/2Y TTM each overlapped with a forward estimate column. */
@@ -473,11 +516,7 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
     const ttm2Fy = ttm2.fiscal_year != null ? Number(ttm2.fiscal_year) : null;
     if (ttm2Fy != null) {
       merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
-      if (merge2 < 0) {
-        merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy + 1);
-      }
     }
-    if (merge2 < 0) merge2 = estimates.findIndex((_, i) => !usedEst.has(i));
   }
   if (ttm2 && merge2 >= 0) {
     const est = estimates[merge2];
@@ -773,9 +812,13 @@ function mkChartRet(id, type, labels, datasets, extraOpts) {
 async function loadHistory() {
   try {
     const r = await fetch(`/api/company/${SYM}/history`);
-    if (!r.ok) return;
+    if (!r.ok) return null;
     const d = await r.json();
-    if (d.error) return;
+    if (d.error) return null;
+
+    if (Array.isArray(d.price_chart_1y) && d.price_chart_1y.length) {
+      _priceCache['1y'] = d.price_chart_1y;
+    }
 
     const mcapEl = document.getElementById('liveMcap');
     if (mcapEl) {
@@ -785,10 +828,16 @@ async function loadHistory() {
     if (d.pe_ttm > 0) document.getElementById('livePE').textContent = 'P/E ' + d.pe_ttm.toFixed(1);
     if (d.eps_ttm) document.getElementById('fcfYield').textContent = '$' + d.eps_ttm.toFixed(2) + ' EPS TTM';
 
+    _quarterlyReports = d.quarterly_reports || [];
     _fullHist = (d.history || []).slice().reverse();
     _ttmData = d.ttm || null;
     _ttm2Data = d.ttm2 || null;
     _estData = d.estimates || [];
+    const revH = document.getElementById('revNIHeading');
+    if (revH) {
+      const base = 'Revenue & net income';
+      revH.textContent = d.chart_fx_note ? base + ' · ' + d.chart_fx_note : base;
+    }
 
     if (!_fullHist.length) {
       if (d.partial) {
@@ -799,281 +848,517 @@ async function loadHistory() {
         });
       }
       renderAnalyst(d.analyst_ratings);
-      return;
+      return d;
     }
 
     renderFinancialCharts(_finYears);
     renderAnalyst(d.analyst_ratings);
-  } catch(e) { console.error(e); }
+    return d;
+  } catch(e) { console.error(e); return null; }
 }
 
 let priceChart = null;
 let volChart = null;
 let _currentRange = '1y';
+let _priceChartRange = '1y';
+let _priceSeries = null;
+let _priceHoverIdx = null;
 const _priceCache = {};
 let _priceChartBooted = false;
+let _historyPayloadPromise = null;
+const _HISTORY_PRICE_WAIT_MS = 120;
+const _PRICE_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const _PRICE_LONG_RANGES = ['3y','5y','10y','max'];
+const _PRICE_SHORT_RANGES = ['1d','1w','1m'];
 
-/** Queue price chart after fundamentals — never competes with /history on first paint. */
-function scheduleInitialPriceChart() {
+function buildPriceSeries(prices) {
+  return {
+    labels: prices.map(p => p.date),
+    closes: prices.map(p => p.close),
+    opens: prices.map(p => p.open || p.close),
+    highs: prices.map(p => p.high || p.close),
+    lows: prices.map(p => p.low || p.close),
+    volumes: prices.map(p => p.volume || 0),
+  };
+}
+
+function fmtPriceAxis(v) {
+  if (v >= 1000) return '$' + v.toFixed(0);
+  if (v >= 100) return '$' + v.toFixed(1);
+  return '$' + v.toFixed(2);
+}
+
+function fmtVolAxis(v) {
+  if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+  return v.toString();
+}
+
+function fmtPriceDateShort(ds, range) {
+  const parts = ds.split('-');
+  const mon = _PRICE_MONTHS[parseInt(parts[1], 10) - 1];
+  const day = parseInt(parts[2], 10);
+  const yr = parts[0].slice(2);
+  if (_PRICE_SHORT_RANGES.includes(range)) return mon + ' ' + day;
+  if (_PRICE_LONG_RANGES.includes(range)) return mon + ' ' + parts[0];
+  return mon + " '" + yr;
+}
+
+function fmtPriceDateFull(ds) {
+  const parts = ds.split('-');
+  return _PRICE_MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
+}
+
+function updatePriceHover(idx) {
+  _priceHoverIdx = idx;
+  const hoverBox = document.getElementById('priceHover');
+  const s = _priceSeries;
+  if (idx == null || !s) {
+    if (hoverBox) hoverBox.style.display = 'none';
+    return;
+  }
+  if (hoverBox) hoverBox.style.display = 'block';
+  const hoverDate = document.getElementById('hoverDate');
+  const hoverPr = document.getElementById('hoverPrice');
+  const hoverVol = document.getElementById('hoverVol');
+  if (hoverDate) hoverDate.textContent = fmtPriceDateFull(s.labels[idx]);
+  const ohlc = 'O ' + fmtPriceAxis(s.opens[idx]) + ' · H ' + fmtPriceAxis(s.highs[idx])
+    + ' · L ' + fmtPriceAxis(s.lows[idx]) + ' · C ' + fmtPriceAxis(s.closes[idx]);
+  if (hoverPr) hoverPr.textContent = ohlc;
+  if (hoverVol) hoverVol.textContent = 'Vol ' + fmtVolAxis(s.volumes[idx]);
+}
+
+function destroyPriceCharts() {
+  if (priceChart) { priceChart.destroy(); priceChart = null; }
+  if (volChart) { volChart.destroy(); volChart = null; }
+  _priceHoverIdx = null;
+}
+
+function volumeBarColors(closes, volumes) {
+  const maxVol = Math.max(...volumes, 1);
+  return closes.map((c, i) => {
+    if (i === 0) return 'rgba(59,130,246,.35)';
+    const alpha = Math.min(0.55, 0.2 + (volumes[i] / maxVol) * 0.35);
+    return c >= closes[i - 1] ? `rgba(34,197,94,${alpha})` : `rgba(239,68,68,${alpha})`;
+  });
+}
+
+const crosshairLinePlugin = {
+  id: 'crosshairLine',
+  afterDraw(chart) {
+    if (_priceHoverIdx == null) return;
+    const { ctx, chartArea: { top, bottom } } = chart;
+    const meta = chart.getDatasetMeta(0);
+    if (!meta.data[_priceHoverIdx]) return;
+    const x = meta.data[_priceHoverIdx].x;
+    ctx.save();
+    ctx.beginPath();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(148,163,184,.3)';
+    ctx.lineWidth = 1;
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, bottom);
+    ctx.stroke();
+    ctx.restore();
+  }
+};
+
+async function fetchPriceHistory(range) {
+  const r = await fetch(`/api/company/${SYM}/price-history?range=${range}`);
+  if (!r.ok) return [];
+  const d = await r.json();
+  return d.prices || [];
+}
+
+async function waitForHistoryPriceCache(range) {
+  if (range !== '1y' || !_historyPayloadPromise) return;
+  await Promise.race([
+    _historyPayloadPromise,
+    new Promise(r => setTimeout(r, _HISTORY_PRICE_WAIT_MS)),
+  ]);
+}
+
+function renderPriceCharts(prices, range) {
+  _priceChartRange = range;
+  _priceSeries = buildPriceSeries(prices);
+  const { labels, closes, opens, highs, lows, volumes } = _priceSeries;
+  const isUp = closes[closes.length - 1] >= closes[0];
+  const lineColor = isUp ? '#22c55e' : '#ef4444';
+  const volColors = volumeBarColors(closes, volumes);
+  const maxVol = Math.max(...volumes, 1);
+
+  const ctxP = document.getElementById('chartPrice');
+  const ctxV = document.getElementById('chartVolume');
+  if (ctxP) ctxP.style.display = 'block';
+  if (ctxV) ctxV.style.display = 'block';
+
+  priceChart = new Chart(ctxP, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: closes,
+        borderColor: lineColor,
+        backgroundColor: (ctx) => {
+          const area = ctx.chart.chartArea;
+          if (!area) return lineColor + '15';
+          const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
+          g.addColorStop(0, lineColor + '28');
+          g.addColorStop(0.6, lineColor + '0a');
+          g.addColorStop(1, lineColor + '00');
+          return g;
+        },
+        pointRadius: 0,
+        pointHoverRadius: 4,
+        pointHoverBackgroundColor: lineColor,
+        pointHoverBorderColor: '#0b0f19',
+        pointHoverBorderWidth: 2,
+        borderWidth: 1.8,
+        tension: 0.1,
+        fill: true,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { left: 6, right: 14, top: 40, bottom: 4 } },
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: {
+          offset: false,
+          ticks: {
+            color: '#64748b', font: { size: 8, family: "'JetBrains Mono', monospace" },
+            maxTicksLimit: 8,
+            callback: function(val, i) { return fmtPriceDateShort(labels[i], range); }
+          },
+          grid: { display: false, offset: false }
+        },
+        y: {
+          position: 'right',
+          ticks: {
+            color: '#64748b', font: { size: 9, family: "'JetBrains Mono', monospace" },
+            callback: v => fmtPriceAxis(v),
+            maxTicksLimit: 6
+          },
+          grid: { color: 'rgba(30,45,61,.25)', drawBorder: false }
+        }
+      },
+      interaction: { intersect: false, mode: 'index' },
+      onResize: () => alignVolumeChartToPrice(),
+      onHover: (evt, elems) => {
+        if (elems.length) {
+          updatePriceHover(elems[0].index);
+          if (volChart) volChart.update('none');
+        } else {
+          updatePriceHover(null);
+          if (volChart) volChart.update('none');
+        }
+      },
+    },
+    plugins: [crosshairLinePlugin, makeQuarterlyReportsPlugin()]
+  });
+  bindPriceChartReportClicks(ctxP);
+
+  volChart = new Chart(ctxV, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{ data: volumes, backgroundColor: volColors, borderWidth: 0, barPercentage: 1.0, categoryPercentage: 1.0 }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { left: 4, right: 4, top: 0, bottom: 0 } },
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      scales: {
+        x: { display: false, offset: false, grid: { offset: false } },
+        y: { display: false, beginAtZero: true, max: maxVol * 1.5 }
+      },
+      interaction: { intersect: false, mode: 'index' },
+      onResize: () => alignVolumeChartToPrice(),
+      onHover: (evt, elems) => {
+        if (elems.length) {
+          updatePriceHover(elems[0].index);
+          priceChart.update('none');
+        } else {
+          updatePriceHover(null);
+          priceChart.update('none');
+        }
+      },
+    },
+    plugins: [crosshairLinePlugin]
+  });
+  alignVolumeChartToPrice();
+}
+
+let _quarterlyReports = [];
+let _showQuarterlyReports = false;
+
+function indexForReportDate(labels, dateStr) {
+  if (!labels || !labels.length || !dateStr) return null;
+  let best = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] <= dateStr) best = i;
+    else break;
+  }
+  return best;
+}
+
+function reportsInPriceRange(labels) {
+  if (!labels.length || !_quarterlyReports.length) return [];
+  const lo = labels[0];
+  const hi = labels[labels.length - 1];
+  return _quarterlyReports.filter(r => {
+    const d = r.marker_date || r.filing_date || r.period_end;
+    return d && d >= lo && d <= hi;
+  });
+}
+
+const _REPORT_DOT_R = 3.5;
+const _REPORT_DOT_HIT = 9;
+const _REPORT_DOT_INNER = 2.1;
+
+function alignVolumeChartToPrice() {
+  if (!priceChart?.chartArea || !volChart) return;
+  const ca = priceChart.chartArea;
+  const w = priceChart.width;
+  volChart.options.layout.padding = {
+    left: Math.round(ca.left),
+    right: Math.round(w - ca.right),
+    top: 0,
+    bottom: 0,
+  };
+  volChart.update('none');
+}
+
+function makeQuarterlyReportsPlugin() {
+  return {
+    id: 'quarterlyReports',
+    afterDatasetsDraw(chart) {
+      if (!_showQuarterlyReports || chart.canvas?.id !== 'chartPrice') return;
+      const labels = chart.data.labels || [];
+      const reports = reportsInPriceRange(labels);
+      if (!reports.length) return;
+      const meta = chart.getDatasetMeta(0);
+      const { ctx, chartArea } = chart;
+      if (!chartArea) return;
+      ctx.save();
+      ctx.lineWidth = 2;
+      for (const r of reports) {
+        const idx = indexForReportDate(labels, r.marker_date);
+        const pt = idx != null ? meta.data[idx] : null;
+        if (!pt) continue;
+        const { x, y } = pt;
+        const is10k = r.form === '10-K';
+        ctx.beginPath();
+        ctx.arc(x, y, _REPORT_DOT_R, 0, Math.PI * 2);
+        ctx.fillStyle = is10k ? '#f59e0b' : '#fbbf24';
+        ctx.fill();
+        ctx.strokeStyle = '#0b0f19';
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, _REPORT_DOT_INNER, 0, Math.PI * 2);
+        ctx.fillStyle = is10k ? 'rgba(251,191,36,.35)' : 'rgba(255,255,255,.25)';
+        ctx.fill();
+      }
+      ctx.restore();
+    },
+  };
+}
+
+function reportHitTest(chart, evt) {
+  if (!_showQuarterlyReports || !chart) return null;
+  const rect = chart.canvas.getBoundingClientRect();
+  const mx = evt.clientX - rect.left;
+  const my = evt.clientY - rect.top;
+  const labels = chart.data.labels || [];
+  const reports = reportsInPriceRange(labels);
+  const meta = chart.getDatasetMeta(0);
+  let best = null;
+  let bestDist = _REPORT_DOT_HIT;
+  for (const r of reports) {
+    const idx = indexForReportDate(labels, r.marker_date);
+    const pt = idx != null ? meta.data[idx] : null;
+    if (!pt) continue;
+    const d = Math.hypot(pt.x - mx, pt.y - my);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = r;
+    }
+  }
+  return best;
+}
+
+function bindPriceChartReportClicks(canvas) {
+  if (!canvas || canvas._reportClickBound) return;
+  canvas._reportClickBound = true;
+  canvas.addEventListener('click', (evt) => {
+    const hit = reportHitTest(priceChart, evt);
+    if (hit && hit.sec_url) window.open(hit.sec_url, '_blank', 'noopener,noreferrer');
+  });
+  canvas.addEventListener('mousemove', (evt) => {
+    const hit = reportHitTest(priceChart, evt);
+    canvas.classList.toggle('reports-hit', !!hit);
+  });
+  canvas.addEventListener('mouseleave', () => canvas.classList.remove('reports-hit'));
+}
+
+function bootPriceChart() {
   if (_priceChartBooted) return;
   _priceChartBooted = true;
-  const run = () => {
-    const el = document.getElementById('priceLoading');
-    if (el) el.style.display = 'block';
-    loadPriceChart('1y');
-  };
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(run, { timeout: 1200 });
-  } else {
-    setTimeout(run, 50);
-  }
+  const el = document.getElementById('priceLoading');
+  if (el) el.style.display = 'block';
+  loadPriceChart('1y');
 }
 
 async function loadPriceChart(range) {
   range = range || _currentRange;
   _currentRange = range;
-  document.querySelectorAll('.rbtn').forEach(b => {
+  document.querySelectorAll('#rangeBar .rbtn').forEach(b => {
     b.classList.toggle('active', b.dataset.r === range);
   });
 
-  if (priceChart) { priceChart.destroy(); priceChart = null; }
-  if (volChart) { volChart.destroy(); volChart = null; }
+  destroyPriceCharts();
   const cP = document.getElementById('chartPrice');
   const cV = document.getElementById('chartVolume');
   if (cP) cP.style.display = 'none';
   if (cV) cV.style.display = 'none';
 
-  let prices;
   const loadEl = document.getElementById('priceLoading');
-  if (_priceCache[range]) {
-    prices = _priceCache[range];
-  } else {
-    if (loadEl) { loadEl.style.display = 'block'; loadEl.style.color = 'var(--border)'; loadEl.innerHTML = 'FETCHING_DATA<span style="animation:blink 1s step-end infinite">_</span>'; }
-    try {
-      const r = await fetch(`/api/company/${SYM}/price-history?range=${range}`);
-      if (!r.ok) return;
-      const d = await r.json();
-      prices = d.prices || [];
-      if (prices.length) _priceCache[range] = prices;
-    } catch(e) { console.error('Price fetch error:', e); return; }
-  }
-  if (!prices.length) {
-    if (loadEl) { loadEl.textContent = 'No price data for this range'; loadEl.style.color = 'var(--dim)'; }
-    return;
-  }
-  hideLoader('priceLoading');
+  const showLoad = (msg) => {
+    if (!loadEl) return;
+    loadEl.style.display = 'block';
+    loadEl.style.color = 'var(--border)';
+    loadEl.innerHTML = msg || 'FETCHING_DATA<span class="blink">_</span>';
+  };
+
   try {
-
-    const labels = prices.map(p => p.date);
-    const closes = prices.map(p => p.close);
-    const opens  = prices.map(p => p.open || p.close);
-    const highs  = prices.map(p => p.high || p.close);
-    const lows   = prices.map(p => p.low || p.close);
-    const volumes = prices.map(p => p.volume || 0);
-    const startPrice = closes[0];
-    const endPrice = closes[closes.length - 1];
-    const pctChange = ((endPrice - startPrice) / startPrice * 100);
-    const dollarChange = endPrice - startPrice;
-    const isUp = endPrice >= startPrice;
-    const lineColor = isUp ? '#22c55e' : '#ef4444';
-
-    const nowEl = document.getElementById('priceNow');
-    const chgEl = document.getElementById('priceChange');
-    if (nowEl) nowEl.textContent = '$' + endPrice.toFixed(2);
-    if (chgEl) {
-      chgEl.textContent = (isUp ? '+' : '') + dollarChange.toFixed(2) + ' (' + (isUp ? '+' : '') + pctChange.toFixed(2) + '%)';
-      chgEl.style.color = isUp ? 'var(--pos)' : 'var(--neg)';
+    if (_priceCache[range]) {
+      hideLoader('priceLoading');
+      renderPriceCharts(_priceCache[range], range);
+      refreshLiveQuote();
+      return;
     }
 
-    const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const shortRanges = ['1d','1w','1m'];
-    const longRanges = ['3y','5y','10y','max'];
-    function fmtDateShort(ds) {
-      const parts = ds.split('-');
-      const mon = MONTHS[parseInt(parts[1], 10) - 1];
-      const day = parseInt(parts[2], 10);
-      const yr = parts[0].slice(2);
-      if (shortRanges.includes(range)) return mon + ' ' + day;
-      if (longRanges.includes(range)) return mon + ' ' + parts[0];
-      return mon + " '" + yr;
-    }
-    function fmtDateFull(ds) {
-      const parts = ds.split('-');
-      return MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
-    }
-    function fmtVol(v) {
-      if (v >= 1e9) return (v / 1e9).toFixed(1) + 'B';
-      if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
-      if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
-      return v.toString();
-    }
-    function fmtPrice(v) {
-      if (v >= 1000) return '$' + v.toFixed(0);
-      if (v >= 100) return '$' + v.toFixed(1);
-      return '$' + v.toFixed(2);
+    showLoad('LOADING<span class="blink">_</span>');
+    await waitForHistoryPriceCache(range);
+    if (_currentRange !== range) return;
+    if (_priceCache[range]) {
+      hideLoader('priceLoading');
+      if (cP) cP.style.display = 'block';
+      if (cV) cV.style.display = 'block';
+      renderPriceCharts(_priceCache[range], range);
+      refreshLiveQuote();
+      return;
     }
 
-    let hoverIdx = null;
+    const prices = await fetchPriceHistory(range);
+    if (_currentRange !== range) return;
+    if (!prices.length) {
+      if (loadEl) { loadEl.textContent = 'No price data for this range'; loadEl.style.color = 'var(--dim)'; }
+      return;
+    }
+    _priceCache[range] = prices;
+    hideLoader('priceLoading');
+    if (cP) cP.style.display = 'block';
+    if (cV) cV.style.display = 'block';
+    renderPriceCharts(prices, range);
+    refreshLiveQuote();
+  } catch (e) {
+    console.error('Price chart error:', e);
+  }
+}
 
-    function updateHover(idx) {
-      hoverIdx = idx;
-      const hoverBox = document.getElementById('priceHover');
-      if (idx == null) {
-        if (hoverBox) hoverBox.style.display = 'none';
-        return;
+let _liveQuoteTimer = null;
+let _livePollMs = 5000;
+let _lastQuoteSession = null;
+
+function _sessionAccent(session) {
+  if (session === 'pre_market' || session === 'after_hours') return '#f59e0b';
+  return null;
+}
+
+function applyLiveQuote(q) {
+  if (!q || q.price == null) return;
+  const price = Number(q.price);
+  const chg = q.change != null ? Number(q.change) : 0;
+  const chgPct = q.change_pct != null ? Number(q.change_pct) : 0;
+  const isUp = chg >= 0;
+  const session = q.session || 'closed';
+  const ext = session === 'pre_market' || session === 'after_hours';
+  const accent = _sessionAccent(session);
+  _lastQuoteSession = session;
+  if (q.poll_seconds && q.poll_seconds >= 5) {
+    _livePollMs = q.poll_seconds * 1000;
+  }
+
+  const nowEl = document.getElementById('priceNow');
+  const chgEl = document.getElementById('priceChange');
+  const asOfEl = document.getElementById('liveAsOf');
+  if (nowEl) {
+    nowEl.textContent = '$' + price.toFixed(2);
+    nowEl.style.color = ext ? '#fbbf24' : 'var(--fg)';
+  }
+  if (chgEl) {
+    const basis = q.change_label === 'vs close' ? 'vs close' : 'today';
+    chgEl.textContent = (isUp ? '+' : '') + chg.toFixed(2) + ' (' + (isUp ? '+' : '') + chgPct.toFixed(2) + '%) ' + basis;
+    chgEl.style.color = isUp ? (ext ? '#fbbf24' : 'var(--pos)') : 'var(--neg)';
+  }
+  if (asOfEl) {
+    const label = q.session_label || (q.stale || q.source === 'eod_daily' ? 'EOD' : 'Live');
+    let tail = '';
+    if (q.as_of) tail = ' · ' + String(q.as_of).replace('T', ' ').slice(0, 19);
+    asOfEl.textContent = label + tail;
+    asOfEl.style.display = 'inline';
+    asOfEl.style.color = ext ? '#f59e0b' : 'var(--dim)';
+  }
+  if (q.market_cap_fmt) {
+    const mcapEl = document.getElementById('liveMcap');
+    if (mcapEl) mcapEl.textContent = q.market_cap_fmt;
+  }
+  if (q.pe_ttm > 0) {
+    const peEl = document.getElementById('livePE');
+    if (peEl) peEl.textContent = 'P/E ' + Number(q.pe_ttm).toFixed(1);
+  }
+
+  if (priceChart?.data?.datasets?.[0]) {
+    const ds = priceChart.data.datasets[0];
+    const n = ds.data ? ds.data.length : 0;
+    if (n) {
+      ds.data[n - 1] = price;
+      const lineColor = ext ? '#f59e0b' : (isUp ? '#22c55e' : '#ef4444');
+      ds.borderColor = lineColor;
+      ds.pointHoverBackgroundColor = lineColor;
+      ds.pointRadius = (ctx) => (ctx.dataIndex === n - 1 ? 5 : 0);
+      ds.pointBorderWidth = (ctx) => (ctx.dataIndex === n - 1 ? 2 : 0);
+      if (priceChart.options?.scales?.y) {
+        delete priceChart.options.scales.y.min;
+        delete priceChart.options.scales.y.max;
       }
-      const hoverDate = document.getElementById('hoverDate');
-      const hoverPr = document.getElementById('hoverPrice');
-      const hoverVol = document.getElementById('hoverVol');
-      if (hoverBox) hoverBox.style.display = 'block';
-      if (hoverDate) hoverDate.textContent = fmtDateFull(labels[idx]);
-      const ohlc = 'O ' + fmtPrice(opens[idx]) + '  H ' + fmtPrice(highs[idx]) + '  L ' + fmtPrice(lows[idx]) + '  C ' + fmtPrice(closes[idx]);
-      if (hoverPr) hoverPr.textContent = ohlc;
-      if (hoverVol) hoverVol.textContent = 'Vol ' + fmtVol(volumes[idx]);
+      priceChart.update('none');
     }
+  }
+}
 
-    const crosshairLine = {
-      id: 'crosshairLine',
-      afterDraw(chart) {
-        if (hoverIdx == null) return;
-        const { ctx, chartArea: { top, bottom } } = chart;
-        const meta = chart.getDatasetMeta(0);
-        if (!meta.data[hoverIdx]) return;
-        const x = meta.data[hoverIdx].x;
-        ctx.save();
-        ctx.beginPath();
-        ctx.setLineDash([3, 3]);
-        ctx.strokeStyle = 'rgba(148,163,184,.3)';
-        ctx.lineWidth = 1;
-        ctx.moveTo(x, top);
-        ctx.lineTo(x, bottom);
-        ctx.stroke();
-        ctx.restore();
-      }
-    };
+async function refreshLiveQuote() {
+  if (document.hidden) return;
+  try {
+    const r = await fetch(`/api/company/${SYM}/quote`);
+    if (!r.ok) return;
+    const q = await r.json();
+    if (q.error) return;
+    applyLiveQuote(q);
+  } catch (e) { /* ignore transient network errors */ }
+}
 
-    // ─── Price chart ───
-    const ctxP = document.getElementById('chartPrice');
-    if (!ctxP) return;
-    ctxP.style.display = 'block';
-    priceChart = new Chart(ctxP, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: closes,
-          borderColor: lineColor,
-          backgroundColor: (ctx) => {
-            const area = ctx.chart.chartArea;
-            if (!area) return lineColor + '15';
-            const g = ctx.chart.ctx.createLinearGradient(0, area.top, 0, area.bottom);
-            g.addColorStop(0, lineColor + '28');
-            g.addColorStop(0.6, lineColor + '0a');
-            g.addColorStop(1, lineColor + '00');
-            return g;
-          },
-          pointRadius: 0,
-          pointHoverRadius: 4,
-          pointHoverBackgroundColor: lineColor,
-          pointHoverBorderColor: '#0b0f19',
-          pointHoverBorderWidth: 2,
-          borderWidth: 1.8,
-          tension: 0.1,
-          fill: true,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: { padding: { left: 4, right: 4, top: 8 } },
-        plugins: {
-          legend: { display: false },
-          tooltip: { enabled: false },
-        },
-        scales: {
-          x: {
-            ticks: {
-              color: '#64748b', font: { size: 8, family: "'JetBrains Mono', monospace" },
-              maxTicksLimit: 8,
-              callback: function(val, i) { return fmtDateShort(labels[i]); }
-            },
-            grid: { display: false }
-          },
-          y: {
-            position: 'right',
-            ticks: {
-              color: '#64748b', font: { size: 9, family: "'JetBrains Mono', monospace" },
-              callback: v => fmtPrice(v),
-              maxTicksLimit: 6
-            },
-            grid: { color: 'rgba(30,45,61,.25)', drawBorder: false }
-          }
-        },
-        interaction: { intersect: false, mode: 'index' },
-        onHover: (evt, elems) => {
-          if (elems.length) {
-            updateHover(elems[0].index);
-            if (volChart) volChart.update('none');
-          } else {
-            updateHover(null);
-            if (volChart) volChart.update('none');
-          }
-        },
-      },
-      plugins: [crosshairLine]
-    });
-
-    // ─── Volume chart ───
-    const maxVol = Math.max(...volumes);
-    const avgVol = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-    const volColors = closes.map((c, i) => {
-      if (i === 0) return 'rgba(59,130,246,.35)';
-      const alpha = Math.min(0.55, 0.2 + (volumes[i] / maxVol) * 0.35);
-      return c >= closes[i - 1] ? `rgba(34,197,94,${alpha})` : `rgba(239,68,68,${alpha})`;
-    });
-    const ctxV = document.getElementById('chartVolume');
-    if (ctxV) {
-      ctxV.style.display = 'block';
-      volChart = new Chart(ctxV, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [{
-            data: volumes,
-            backgroundColor: volColors,
-            borderWidth: 0,
-            barPercentage: 1.0,
-            categoryPercentage: 1.0,
-          }]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          layout: { padding: { left: 4, right: 4 } },
-          plugins: { legend: { display: false }, tooltip: { enabled: false } },
-          scales: {
-            x: { display: false },
-            y: {
-              display: false,
-              beginAtZero: true,
-              max: maxVol * 1.5,
-            }
-          },
-          interaction: { intersect: false, mode: 'index' },
-          onHover: (evt, elems) => {
-            if (elems.length) {
-              updateHover(elems[0].index);
-              priceChart.update('none');
-            } else {
-              updateHover(null);
-              priceChart.update('none');
-            }
-          },
-        },
-        plugins: [crosshairLine]
-      });
-    }
-  } catch(e) { console.error('Price chart error:', e); }
+function restartLiveQuotePolling() {
+  if (_liveQuoteTimer) {
+    clearInterval(_liveQuoteTimer);
+    _liveQuoteTimer = null;
+  }
+  refreshLiveQuote();
+  _liveQuoteTimer = setInterval(refreshLiveQuote, _livePollMs);
 }
 
 // —— ChatGPT OAuth + stock chat (NDJSON stream) ——
@@ -1324,7 +1609,29 @@ async function gchatSend() {
   btn.disabled = false;
 }
 document.addEventListener('DOMContentLoaded', () => {
-  loadHistory().finally(() => scheduleInitialPriceChart());
+  _historyPayloadPromise = loadHistory();
+  bootPriceChart();
+  restartLiveQuotePolling();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (_liveQuoteTimer) { clearInterval(_liveQuoteTimer); _liveQuoteTimer = null; }
+    } else {
+      restartLiveQuotePolling();
+    }
+  });
+  window.addEventListener('beforeunload', () => {
+    if (_liveQuoteTimer) clearInterval(_liveQuoteTimer);
+  });
+  const reportsChk = document.getElementById('toggleQuarterlyReports');
+  const reportsLbl = document.getElementById('reportsToggleLbl');
+  if (reportsChk) {
+    reportsChk.addEventListener('change', () => {
+      _showQuarterlyReports = reportsChk.checked;
+      if (reportsLbl) reportsLbl.classList.toggle('active', _showQuarterlyReports);
+      if (priceChart) priceChart.update('none');
+      if (volChart) volChart.update('none');
+    });
+  }
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
     btn.addEventListener('click', () => loadPriceChart(btn.dataset.r));
   });

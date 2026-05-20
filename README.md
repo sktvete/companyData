@@ -93,6 +93,17 @@ Optional columns:
 - `docs/free_open_gap_report.md`
 - `docs/source_resolution_model.md`
 
+## Web app (screener + company pages)
+
+Requires `EODHD_API_KEY` in `.env` for live fundamentals, prices, and US quotes.
+
+```bash
+pip install -r web/requirements.txt
+python run_server.py
+```
+
+Open http://localhost:3000 for the dashboard screener; `/company/{SYMBOL}` for charts, live quotes, and Codex chat.
+
 ## Tests
 
 - `python -m unittest discover -s tests -p "test_*.py"`
