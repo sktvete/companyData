@@ -550,6 +550,30 @@ def _long_term_growth_factor(m: dict, s: dict) -> float:
     return min(1.0, max(0.0, blended))
 
 
+def _listing_scale_confidence(mcap_b: float, rev_b: float) -> float:
+    """Mild size prior: micro-caps stay discounted; mid-cap compounders need not be mega-caps."""
+    mcap_f = 0.78 + 0.22 * _clamp01((mcap_b - 0.5) / 20.0)
+    rev_f = 0.78 + 0.22 * _clamp01((rev_b - 0.15) / 5.0)
+    return math.sqrt(max(mcap_f * rev_f, 1e-9))
+
+
+def _steady_compounder_confidence_lift(m: dict, s: dict) -> float:
+    """Lift consistent multi-year revenue compounders (high growth + stable track)."""
+    rc = float(m.get("revenue_growth_consistency") or 0.5)
+    rev_long = _blended_revenue_cagr(m)
+    g = float(s.get("growth_score", 0) or 0)
+    sf = float(s.get("safety_score", 0) or 0)
+    ni = float(m.get("net_income", 0) or 0)
+    if rc < 0.70 or rev_long < 0.12 or g < 3.0 or sf < 3.5 or ni <= 0:
+        return 1.0
+    lift = 1.0
+    lift += 0.08 * _clamp01((rev_long - 0.12) / 0.28)
+    lift += 0.06 * _clamp01((rc - 0.70) / 0.30)
+    if g >= 4.0:
+        lift += 0.04
+    return min(lift, 1.20)
+
+
 def _per_share_growth_distortion_factor(m: dict) -> float:
     """Down-rank when OEPS/EPS CAGR far exceeds multi-year revenue CAGR (buybacks, margins, base effects)."""
     rev_long = _blended_revenue_cagr(m)
@@ -766,8 +790,8 @@ def _compounder_list_score(c: dict) -> float:
     if rev_long_for_g < 0.12 and earn_long_for_g > 0.25:
         g = min(g, _cagr_to_unit(rev_long_for_g) + 0.10)
 
-    # Weights: growth + stability matter for 3y upside; value/safety for margin of safety.
-    base = (0.16 * q) + (0.28 * g) + (0.28 * sf) + (0.28 * v)
+    # Weights: growth leads; value/safety are guardrails (not a substitute for compounding).
+    base = (0.14 * q) + (0.36 * g) + (0.25 * sf) + (0.25 * v)
     base = max(base, float(s.get("overall_score", 0.0) or 0.0) / 20.0 * 0.7)
 
     rev = float(m.get("revenue", 0.0) or 0.0)
@@ -807,9 +831,8 @@ def _compounder_list_score(c: dict) -> float:
         confidence *= 0.55
     elif roe > 0.85 or roic > 0.85:
         confidence *= 0.72
-    # Scale confidence: tiny names can 5x, but probabilities are much noisier.
-    confidence *= 0.58 + 0.42 * _clamp01((mcap_b - 1.0) / 60.0)
-    confidence *= 0.62 + 0.38 * _clamp01((rev_b - 0.2) / 20.0)
+    # Scale confidence: discount micro-caps; mid-cap steady compounders need not be $50B+.
+    confidence *= _listing_scale_confidence(mcap_b, rev_b)
     confidence *= 0.70 + 0.30 * _clamp01((min_q - 12.0) / 56.0)
 
     # Profit durability.
@@ -944,15 +967,29 @@ def _compounder_list_score(c: dict) -> float:
         # e.g., GOOGL/GOOG style duplicates: keep one but lower sibling crowding.
         confidence *= 0.96
 
+    confidence *= _steady_compounder_confidence_lift(m, s)
+
     score = 20.0 * base * confidence
     score *= _per_share_growth_distortion_factor(m)
-    # Growth floor: if growth < 2/5, the name isn't compounding — cap the score so it
-    # can't outrank genuine growers purely on safety/scale.
+    # Growth floor: weak compounders can't top the list on safety/value/scale alone.
     growth_raw = float(s.get("growth_score", 0.0) or 0.0)
+    rev_long = _blended_revenue_cagr(m)
     if growth_raw < 2.0:
         score = min(score, 9.0)
     elif growth_raw < 2.5:
         score = min(score, 10.5)
+    elif growth_raw < 3.0 and rev_long < 0.10:
+        score = min(score, 11.5)
+    elif growth_raw < 3.5 and rev_long < 0.12:
+        score = min(score, 13.5)
+    if rev_long < 0.08:
+        score = min(score, 10.0)
+    elif rev_long < 0.10:
+        score = min(score, 12.0)
+    elif rev_long < 0.12:
+        score = min(score, 14.0)
+    elif rev_long < 0.15:
+        score = min(score, 15.5)
     return round(max(score, 0.0), 4)
 
 
@@ -2043,7 +2080,32 @@ _LIVE_QUOTE_CACHE: dict[str, tuple[dict, float]] = {}
 _LIVE_POLL_OPEN_SEC = 5
 _LIVE_QUOTE_TTL_OPEN_SEC = 4.0
 _LIVE_QUOTE_TTL_CLOSED_SEC = 60.0
+_STALE_QUOTE_SEC = 20 * 60
 _ET = ZoneInfo("America/New_York")
+
+# Cash session windows (local exchange time; no holiday calendar).
+_EXCHANGE_HOURS: dict[str, dict] = {
+    "US": {
+        "tz": "America/New_York",
+        "pre": (4, 0),
+        "open": (9, 30),
+        "close": (16, 0),
+        "after_end": (20, 0),
+    },
+    "OL": {"tz": "Europe/Oslo", "open": (9, 0), "close": (16, 25)},
+    "ST": {"tz": "Europe/Stockholm", "open": (9, 0), "close": (17, 30)},
+    "CO": {"tz": "Europe/Copenhagen", "open": (9, 0), "close": (17, 0)},
+    "HE": {"tz": "Europe/Helsinki", "open": (10, 0), "close": (18, 30)},
+}
+
+
+def _listing_exchange(c: dict | None, symbol: str) -> str:
+    sym = (_parse_symbol(symbol) or "").upper()
+    if "." in sym:
+        suf = sym.rsplit(".", 1)[-1]
+        if suf in ("US", "OL", "ST", "CO", "HE"):
+            return suf
+    return _normalize_exchange_code((c or {}).get("exchange") or (c or {}).get("eodhd_exchange") or "US")
 
 
 def _is_us_equity_listing(c: dict | None, symbol: str) -> bool:
@@ -2056,23 +2118,109 @@ def _is_us_equity_listing(c: dict | None, symbol: str) -> bool:
     return ex == "US"
 
 
-def _us_market_session_now(when: datetime | None = None) -> str:
-    """US cash session bucket in America/New_York (no holiday calendar)."""
-    now = when or datetime.now(_ET)
+def _market_session_now(exchange: str = "US", when: datetime | None = None) -> str:
+    """Exchange-local session bucket (no holiday calendar)."""
+    meta = _EXCHANGE_HOURS.get(exchange) or _EXCHANGE_HOURS["US"]
+    tz = ZoneInfo(meta["tz"])
+    now = when or datetime.now(tz)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=_ET)
+        now = now.replace(tzinfo=tz)
     else:
-        now = now.astimezone(_ET)
+        now = now.astimezone(tz)
     if now.weekday() >= 5:
         return "closed"
     t = now.time()
-    if dt_time(4, 0) <= t < dt_time(9, 30):
-        return "pre_market"
-    if dt_time(9, 30) <= t < dt_time(16, 0):
+    if exchange == "US":
+        if dt_time(meta["pre"][0], meta["pre"][1]) <= t < dt_time(meta["open"][0], meta["open"][1]):
+            return "pre_market"
+        if dt_time(meta["open"][0], meta["open"][1]) <= t < dt_time(meta["close"][0], meta["close"][1]):
+            return "regular"
+        if dt_time(meta["close"][0], meta["close"][1]) <= t < dt_time(meta["after_end"][0], meta["after_end"][1]):
+            return "after_hours"
+        return "closed"
+    o = dt_time(meta["open"][0], meta["open"][1])
+    c = dt_time(meta["close"][0], meta["close"][1])
+    if o <= t < c:
         return "regular"
-    if dt_time(16, 0) <= t < dt_time(20, 0):
-        return "after_hours"
     return "closed"
+
+
+def _us_market_session_now(when: datetime | None = None) -> str:
+    return _market_session_now("US", when)
+
+
+def _quote_tz(exchange: str) -> ZoneInfo:
+    meta = _EXCHANGE_HOURS.get(exchange) or _EXCHANGE_HOURS["US"]
+    return ZoneInfo(meta["tz"])
+
+
+def _format_quote_as_of(value: object, exchange: str) -> str | None:
+    """Normalize API timestamps to exchange-local ISO for display."""
+    if value in (None, ""):
+        return None
+    tz = _quote_tz(exchange)
+    try:
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(int(value), tz=ZoneInfo("UTC"))
+        else:
+            s = str(value).strip()
+            if s.isdigit():
+                dt = datetime.fromtimestamp(int(s), tz=ZoneInfo("UTC"))
+            else:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=tz)
+        return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError, OSError):
+        return str(value)[:19]
+
+
+def _quote_age_seconds(as_of: object) -> float | None:
+    if as_of in (None, ""):
+        return None
+    try:
+        if isinstance(as_of, (int, float)):
+            ts = float(as_of)
+        else:
+            s = str(as_of).strip()
+            if s.isdigit():
+                ts = float(s)
+            else:
+                dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+                ts = dt.timestamp()
+        return max(0.0, time.time() - ts)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _apply_quote_session_truth(quote: dict, exchange: str) -> dict:
+    """Align session labels with listing hours and quote freshness (avoid false Live)."""
+    cal = _market_session_now(exchange)
+    age = _quote_age_seconds(quote.get("as_of"))
+    stale = bool(quote.get("stale")) or quote.get("source") == "eod_daily"
+
+    if stale or (age is not None and age > _STALE_QUOTE_SEC):
+        quote = {**quote, "session": "closed", "market_open": False, "stale": True}
+    elif cal == "closed":
+        quote = {**quote, "session": "closed", "market_open": False}
+    elif cal in ("pre_market", "after_hours"):
+        quote = {**quote, "session": cal, "market_open": True}
+    else:
+        quote = {**quote, "session": "regular", "market_open": True}
+
+    if quote.get("stale"):
+        quote["session_label"] = "Last trade"
+    elif quote.get("session") == "closed":
+        quote["session_label"] = "Closed"
+    elif quote.get("session") == "pre_market":
+        quote["session_label"] = "Pre-market"
+    elif quote.get("session") == "after_hours":
+        quote["session_label"] = "After-hours"
+    else:
+        quote["session_label"] = "Live"
+    return quote
 
 
 def _ms_to_iso(ms: object) -> str | None:
@@ -2084,11 +2232,67 @@ def _ms_to_iso(ms: object) -> str | None:
         return None
 
 
+def _eod_previous_close_from_store(symbol: str) -> float:
+    prices = _price_store.get(symbol) or []
+    if len(prices) < 2:
+        return 0.0
+    return _safe_float(prices[-2].get("close"))
+
+
+def _recompute_us_session_split(quote: dict) -> dict:
+    """Derive At close / After-hours lines from regular, extended, and prior close."""
+    prev = _safe_float(quote.get("previous_close"))
+    reg = _safe_float(quote.get("regular_close"))
+    eth = _safe_float(quote.get("extended_price"))
+    session = str(quote.get("session") or "")
+    use_extended = session in ("pre_market", "after_hours") and eth > 0
+
+    regular_change = regular_change_pct = extended_change = extended_change_pct = None
+    if reg > 0 and prev > 0:
+        regular_change = reg - prev
+        regular_change_pct = (regular_change / prev) * 100.0
+    if eth > 0 and reg > 0:
+        extended_change = eth - reg
+        extended_change_pct = (extended_change / reg) * 100.0
+
+    show_session_split = (
+        use_extended
+        and regular_change is not None
+        and extended_change is not None
+    )
+    out = {**quote}
+    out["regular_change"] = round(regular_change, 4) if regular_change is not None else None
+    out["regular_change_pct"] = round(regular_change_pct, 3) if regular_change_pct is not None else None
+    out["extended_change"] = round(extended_change, 4) if extended_change is not None else None
+    out["extended_change_pct"] = round(extended_change_pct, 3) if extended_change_pct is not None else None
+    out["show_session_split"] = show_session_split
+    return out
+
+
+def _backfill_us_quote_previous_close(symbol: str, quote: dict) -> dict:
+    if quote.get("source") != "eodhd_us_quote":
+        return quote
+    if _safe_float(quote.get("previous_close")) > 0:
+        return quote
+    prev = _eod_previous_close_from_store(symbol)
+    if prev <= 0:
+        return quote
+    return _recompute_us_session_split({**quote, "previous_close": round(prev, 4)})
+
+
 def _parse_us_quote_delayed(row: dict, session: str) -> dict | None:
     """Build display quote from EODHD us-quote-delayed row (incl. extended hours)."""
     reg = _safe_float(row.get("lastTradePrice"))
     eth = _safe_float(row.get("ethPrice"))
-    prev = _safe_float(row.get("previousClosePrice"))
+    prev = _safe_float(
+        row.get("previousClosePrice")
+        or row.get("previousClose")
+        or row.get("previous_close")
+    )
+    if prev <= 0 and reg > 0:
+        chg = _safe_float(row.get("change"))
+        if chg != 0.0:
+            prev = reg - chg
     reg_ms = int(_safe_float(row.get("lastTradeTime")) or 0)
     eth_ms = int(_safe_float(row.get("ethTime")) or 0)
 
@@ -2121,6 +2325,23 @@ def _parse_us_quote_delayed(row: dict, session: str) -> dict | None:
         chg = price - ref
         chg_p = (chg / ref) * 100.0
 
+    regular_change = None
+    regular_change_pct = None
+    extended_change = None
+    extended_change_pct = None
+    if reg > 0 and prev > 0:
+        regular_change = reg - prev
+        regular_change_pct = (regular_change / prev) * 100.0
+    if eth > 0 and reg > 0:
+        extended_change = eth - reg
+        extended_change_pct = (extended_change / reg) * 100.0
+
+    show_session_split = (
+        regular_change is not None
+        and extended_change is not None
+        and use_extended
+    )
+
     is_live = disp_session in ("regular", "pre_market", "after_hours")
     return {
         "price": round(price, 4),
@@ -2129,6 +2350,11 @@ def _parse_us_quote_delayed(row: dict, session: str) -> dict | None:
         "previous_close": round(prev, 4) if prev > 0 else None,
         "change": round(chg, 4),
         "change_pct": round(chg_p, 3),
+        "regular_change": round(regular_change, 4) if regular_change is not None else None,
+        "regular_change_pct": round(regular_change_pct, 3) if regular_change_pct is not None else None,
+        "extended_change": round(extended_change, 4) if extended_change is not None else None,
+        "extended_change_pct": round(extended_change_pct, 3) if extended_change_pct is not None else None,
+        "show_session_split": show_session_split,
         "bid": round(_safe_float(row.get("bidPrice")), 4) or None,
         "ask": round(_safe_float(row.get("askPrice")), 4) or None,
         "volume": int(_safe_float(row.get("volume")) or 0),
@@ -2175,7 +2401,7 @@ def _live_quote_cache_ttl(session: str) -> float:
     return _LIVE_QUOTE_TTL_CLOSED_SEC
 
 
-def _parse_eodhd_realtime_quote(raw: object) -> dict | None:
+def _parse_eodhd_realtime_quote(raw: object, exchange: str = "US") -> dict | None:
     """Normalize EODHD real-time JSON to a small quote dict."""
     if isinstance(raw, list):
         raw = raw[0] if raw else None
@@ -2195,14 +2421,8 @@ def _parse_eodhd_realtime_quote(raw: object) -> dict | None:
         chg = close - prev
     if chg_p == 0.0 and prev > 0:
         chg_p = (chg / prev) * 100.0
-    ts = raw.get("timestamp")
-    as_of = None
-    if ts is not None:
-        try:
-            as_of = datetime.fromtimestamp(int(ts)).isoformat(timespec="seconds")
-        except (TypeError, ValueError, OSError):
-            as_of = None
-    session = _us_market_session_now()
+    as_of = _format_quote_as_of(raw.get("timestamp"), exchange)
+    session = _market_session_now(exchange)
     return {
         "price": round(close, 4),
         "previous_close": round(prev, 4) if prev > 0 else None,
@@ -2237,7 +2457,8 @@ def _fetch_eodhd_live_quote(symbol: str) -> dict | None:
         )
         if resp.status_code != 200:
             return None
-        return _parse_eodhd_realtime_quote(resp.json())
+        ex = _listing_exchange(c, symbol)
+        return _parse_eodhd_realtime_quote(resp.json(), exchange=ex)
     except Exception:
         return None
 
@@ -2270,10 +2491,11 @@ def _live_quote_fallback_from_eod(symbol: str) -> dict | None:
         "session": "closed",
         "market_open": False,
         "change_label": "today",
+        "source": "eod_daily",
     }
 
 
-def _enrich_live_quote_out(quote: dict, sym: str) -> dict:
+def _enrich_live_quote_out(quote: dict, sym: str, exchange: str) -> dict:
     c = get_company(sym) or {}
     m = c.get("financial_metrics") or {}
     price = float(quote["price"])
@@ -2309,14 +2531,15 @@ def _enrich_live_quote_out(quote: dict, sym: str) -> dict:
     elif eps_ttm > 0:
         out["pe_ttm"] = round(price / eps_ttm, 2)
         out["eps_ttm"] = round(eps_ttm, 4)
-    sess = str(quote.get("session") or "closed")
     out["poll_seconds"] = _LIVE_POLL_OPEN_SEC if quote.get("market_open") else 60
-    out["session_label"] = {
-        "regular": "Live",
-        "pre_market": "Pre-market",
-        "after_hours": "After-hours",
-        "closed": "Closed",
-    }.get(sess, "Closed")
+    if not out.get("session_label"):
+        sess = str(quote.get("session") or "closed")
+        out["session_label"] = {
+            "regular": "Live",
+            "pre_market": "Pre-market",
+            "after_hours": "After-hours",
+            "closed": "Closed",
+        }.get(sess, "Closed")
     return out
 
 
@@ -2332,6 +2555,7 @@ def _get_live_quote(symbol: str) -> dict | None:
             return dict(cached[0])
 
     c = get_company(sym) or {}
+    exchange = _listing_exchange(c, sym)
     quote = None
     if _is_us_equity_listing(c, sym):
         quote = _fetch_eodhd_us_quote_delayed(sym)
@@ -2339,12 +2563,12 @@ def _get_live_quote(symbol: str) -> dict | None:
         quote = _fetch_eodhd_live_quote(sym)
     if not quote:
         quote = _live_quote_fallback_from_eod(sym)
-        if quote:
-            quote["source"] = "eod_daily"
     if not quote:
         return None
 
-    out = _enrich_live_quote_out(quote, sym)
+    quote = _backfill_us_quote_previous_close(sym, quote)
+    quote = _apply_quote_session_truth(quote, exchange)
+    out = _enrich_live_quote_out(quote, sym, exchange)
     _LIVE_QUOTE_CACHE[sym] = (out, now)
     return out
 
@@ -2367,6 +2591,114 @@ def _parse_eodhd_prices(data: list) -> list:
             "volume": p.get("volume", 0),
         })
     return prices
+
+
+def _intraday_bar_from_raw(p: dict, ts: int) -> dict | None:
+    try:
+        close = float(p.get("close"))
+    except (TypeError, ValueError):
+        return None
+    if close <= 0:
+        return None
+    from datetime import timezone
+
+    dt = datetime.fromtimestamp(int(ts), tz=timezone.utc)
+    label = dt.strftime("%Y-%m-%d %H:%M")
+    try:
+        op = float(p.get("open", close))
+        hi = float(p.get("high", close))
+        lo = float(p.get("low", close))
+    except (TypeError, ValueError):
+        op, hi, lo = close, close, close
+    vol = p.get("volume", 0)
+    return {
+        "date": label,
+        "close": round(close, 4),
+        "open": round(op, 4),
+        "high": round(hi, 4),
+        "low": round(lo, 4),
+        "volume": vol,
+    }
+
+
+def _parse_eodhd_intraday(data) -> list:
+    """Convert EODHD intraday JSON (list or timestamp-keyed dict) to OHLCV rows."""
+    rows: list[dict] = []
+    if isinstance(data, dict):
+        if not data or data.get("errors"):
+            return []
+        if all(str(k).isdigit() for k in data.keys()):
+            for k in sorted(data.keys(), key=lambda x: int(x)):
+                p = data[k]
+                if isinstance(p, dict):
+                    bar = _intraday_bar_from_raw(p, int(k))
+                    if bar:
+                        rows.append(bar)
+            return rows
+        data = [v for v in data.values() if isinstance(v, dict)]
+    if not isinstance(data, list):
+        return []
+    for p in data:
+        if not isinstance(p, dict):
+            continue
+        ts = p.get("datetime")
+        if ts is None:
+            continue
+        bar = _intraday_bar_from_raw(p, int(ts))
+        if bar:
+            rows.append(bar)
+    rows.sort(key=lambda x: x["date"])
+    return rows
+
+
+def _fetch_intraday_1d(symbol: str) -> list:
+    """1-minute bars for recent sessions (150–400 points for the 1D chart)."""
+    from datetime import timedelta, timezone
+
+    api_key = (os.getenv("EODHD_API_KEY") or "").strip()
+    if not api_key:
+        return []
+    try:
+        c = get_company(symbol)
+        eodhd_sym = _eodhd_ticker(symbol, c) or f"{symbol}.US"
+        now = datetime.now(timezone.utc)
+        from_ts = int((now - timedelta(days=4)).timestamp())
+        to_ts = int(now.timestamp())
+        resp = _req.get(
+            f"https://eodhd.com/api/intraday/{eodhd_sym}",
+            params={
+                "api_token": api_key,
+                "fmt": "json",
+                "interval": "1m",
+                "from": from_ts,
+                "to": to_ts,
+            },
+            timeout=25,
+        )
+        if resp.status_code != 200:
+            return []
+        bars = _parse_eodhd_intraday(resp.json())
+        if not bars:
+            return []
+        days = sorted({b["date"][:10] for b in bars})
+        for n_days in (2, 3, 4):
+            if len(days) < n_days:
+                subset = bars
+            else:
+                keep = set(days[-n_days:])
+                subset = [b for b in bars if b["date"][:10] in keep]
+            if len(subset) >= _MIN_CHART_POINTS:
+                bars = subset
+                break
+        else:
+            bars = subset
+        if len(bars) > _MAX_CHART_POINTS:
+            return _downsample_prices_evenly(bars, _MAX_CHART_POINTS)
+        if len(bars) >= _MIN_CHART_POINTS:
+            return bars
+        return []
+    except Exception:
+        return []
 
 
 def _fetch_full_price_history(symbol: str) -> list:
@@ -2413,7 +2745,7 @@ def _fetch_full_price_history(symbol: str) -> list:
         return existing
 
 
-_MIN_CHART_POINTS = 200
+_MIN_CHART_POINTS = 150
 _MAX_CHART_POINTS = 400
 
 
@@ -2469,8 +2801,8 @@ def _slice_and_downsample(prices: list, rng: str) -> list:
     if not sliced:
         return []
 
-    # Short ranges (except 1D): extend backward until at least _MIN_CHART_POINTS.
-    if rng != "1d" and len(sliced) < _MIN_CHART_POINTS and len(prices) > len(sliced):
+    # Short ranges: extend backward until at least _MIN_CHART_POINTS (daily EOD fallback).
+    if len(sliced) < _MIN_CHART_POINTS and len(prices) > len(sliced):
         need = _MIN_CHART_POINTS - len(sliced)
         first_idx = len(prices) - len(sliced)
         start_idx = max(0, first_idx - need)
@@ -2481,8 +2813,14 @@ def _slice_and_downsample(prices: list, rng: str) -> list:
     return sliced
 
 
-def _chart_prices_for_range(all_prices: list, rng: str = "1y") -> list:
-    """Slice/downsample stored EOD bars for a chart range."""
+def _chart_prices_for_range(
+    all_prices: list, rng: str = "1y", symbol: str | None = None,
+) -> list:
+    """Slice/downsample bars for a chart range; 1D uses intraday 1m when available."""
+    if rng == "1d" and symbol:
+        intra = _fetch_intraday_1d(symbol)
+        if intra:
+            return intra
     if not all_prices:
         return []
     return _slice_and_downsample(all_prices, rng)
@@ -2503,7 +2841,7 @@ def api_company_price_history(symbol):
         all_prices = _fetch_full_price_history(symbol)
         if not all_prices:
             return jsonify({"error": "No price data", "prices": []}), 200
-        prices = _chart_prices_for_range(all_prices, rng)
+        prices = _chart_prices_for_range(all_prices, rng, symbol=symbol)
         preview = density_f < 1.0
         if preview:
             prices = _apply_price_density(prices, density_f)
@@ -2965,10 +3303,11 @@ _CHAT_TOOLS = [
         "function": {
             "name": "web_search",
             "description": (
-                "Search the web (DuckDuckGo) for headlines and snippets; results include titles and URLs but **not** "
-                "full page text. To read a specific article the user pasted or from search results, call "
-                "`fetch_web_page` with that http(s) URL. You have **no browser** — never say you opened a link unless "
-                "you actually invoked `fetch_web_page` (or the user only asked for the URL itself)."
+                "Search the web (DuckDuckGo) for recent news, catalysts, earnings reactions, guidance, lawsuits, "
+                "management changes, and macro context. **Call proactively** when the user asks why the stock moved, "
+                "what happened lately, risks, competitors, or anything time-sensitive — do not guess from memory. "
+                "Snippets + URLs only (not full articles); follow with `fetch_web_page` when you need the body. "
+                "You have **no browser** — never claim you read a page unless you called `fetch_web_page`."
             ),
             "parameters": {
                 "type": "object",
@@ -2984,9 +3323,9 @@ _CHAT_TOOLS = [
         "function": {
             "name": "fetch_web_page",
             "description": (
-                "Fetch plain text from one public http(s) URL (server-side GET). Use after `web_search` when you need "
-                "article body or when the user gives a link. Only standard web pages (HTML or plain text / JSON); "
-                "cannot log in or run JavaScript."
+                "Fetch plain text from one public http(s) URL (server-side GET). Use after `web_search` when snippets "
+                "are not enough, or when the user pastes a link. **Prefer fetching** over saying you cannot read URLs. "
+                "Standard HTML/text/JSON only; no login or JavaScript."
             ),
             "parameters": {
                 "type": "object",
@@ -3029,21 +3368,23 @@ _CHAT_TOOLS = [
         "function": {
             "name": "eodhd_fundamentals_snapshot",
             "description": (
-                "Fetch a compact EODHD fundamentals snapshot for the ticker on this page. "
-                "The server uses EODHD_API_KEY from its environment — never ask the user for keys. "
-                "**Call whenever** context JSON lacks a field you need (Highlights, General, recent income). "
-                "Prefer this over apologizing, refusing, or guessing; if the call fails, say so briefly. "
-                "Use financials detail when you need last annual revenue / net income rows."
+                "Fetch live EODHD fundamentals for the ticker on this page (General, Highlights, optional annual income). "
+                "Server already has EODHD_API_KEY — **never ask the user for keys or permission**. "
+                "**Default to calling this** when you need P/E, EPS, margins, 52-week range, target price, sector, "
+                "or any number missing/stale in context JSON; also to verify before stating a figure. "
+                "Use detail_level=financials for ~12 years of annual statements; full adds quarterly + more years. "
+                "If the call fails, say so briefly — do not invent numbers."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "detail_level": {
                         "type": "string",
-                        "enum": ["summary", "financials"],
+                        "enum": ["summary", "financials", "full"],
                         "description": (
-                            "summary = General + Highlights only; "
-                            "financials = also last 3 annual income statement rows."
+                            "summary = General + Highlights; "
+                            "financials = up to 12 annual income + 8 annual cash-flow rows; "
+                            "full = up to 20 annual income, 12 quarterly income, balance-sheet snapshot."
                         ),
                     },
                 },
@@ -3051,6 +3392,95 @@ _CHAT_TOOLS = [
         },
     }
 ]
+
+
+def _eodhd_chat_pick(d: dict, *keys: str):
+    """Include only present EODHD numeric fields (keeps JSON smaller)."""
+    row = {}
+    for k in keys:
+        v = d.get(k)
+        if v is not None and v != "":
+            row[k] = v
+    return row
+
+
+def _eodhd_chat_income_row(inc: dict, period: str) -> dict:
+    row = {"period": period}
+    row.update(_eodhd_chat_pick(
+        inc,
+        "totalRevenue",
+        "costOfRevenue",
+        "grossProfit",
+        "operatingIncome",
+        "ebit",
+        "researchDevelopment",
+        "interestExpense",
+        "incomeBeforeTax",
+        "incomeTaxExpense",
+        "netIncome",
+        "eps",
+        "epsDiluted",
+        "weightedAverageShsOut",
+        "weightedAverageShsOutDil",
+    ))
+    return row
+
+
+def _eodhd_chat_cf_row(cf: dict, period: str) -> dict:
+    row = {"period": period}
+    row.update(_eodhd_chat_pick(
+        cf,
+        "totalCashFromOperatingActivities",
+        "capitalExpenditures",
+        "stockBasedCompensation",
+        "freeCashFlow",
+        "dividendsPaid",
+    ))
+    return row
+
+
+def _eodhd_snapshot_append_financials(out: dict, d: dict, detail_level: str) -> None:
+    fin = d.get("Financials") or {}
+    inc_y = (fin.get("Income_Statement") or {}).get("yearly") or {}
+    cf_y = (fin.get("Cash_Flow") or {}).get("yearly") or {}
+    bs_y = (fin.get("Balance_Sheet") or {}).get("yearly") or {}
+
+    n_annual = 20 if detail_level == "full" else 12
+    inc_keys = sorted(inc_y.keys(), reverse=True)[:n_annual]
+    out["annual_income"] = [_eodhd_chat_income_row(inc_y[k], k) for k in inc_keys]
+    out["annual_income_count"] = len(out["annual_income"])
+
+    cf_keys = sorted(cf_y.keys(), reverse=True)[: (12 if detail_level == "full" else 8)]
+    out["annual_cash_flow"] = [_eodhd_chat_cf_row(cf_y[k], k) for k in cf_keys]
+
+    if bs_y:
+        bs_key = sorted(bs_y.keys(), reverse=True)[0]
+        bs = bs_y[bs_key]
+        out["balance_sheet_latest"] = {
+            "period": bs_key,
+            **_eodhd_chat_pick(
+                bs,
+                "totalAssets",
+                "totalLiab",
+                "totalStockholderEquity",
+                "cash",
+                "shortLongTermDebtTotal",
+                "longTermDebt",
+                "commonStockSharesOutstanding",
+            ),
+        }
+
+    if detail_level == "full":
+        q_inc = (fin.get("Income_Statement") or {}).get("quarterly") or {}
+        q_keys = sorted(q_inc.keys(), reverse=True)[:12]
+        out["quarterly_income"] = [
+            {
+                "period": k,
+                **_eodhd_chat_pick(q_inc[k], "totalRevenue", "grossProfit", "netIncome", "eps", "epsDiluted"),
+            }
+            for k in q_keys
+        ]
+        out["quarterly_income_count"] = len(out["quarterly_income"])
 
 
 def _eodhd_snapshot_for_tool(symbol: str, detail_level: str) -> str:
@@ -3062,6 +3492,7 @@ def _eodhd_snapshot_for_tool(symbol: str, detail_level: str) -> str:
     out: dict = {
         "ok": True,
         "symbol": symbol,
+        "detail_level": detail_level,
         "general": {
             k: gen.get(k)
             for k in ("Name", "Code", "Sector", "Industry", "CurrencyCode", "FiscalYearEnd")
@@ -3070,27 +3501,18 @@ def _eodhd_snapshot_for_tool(symbol: str, detail_level: str) -> str:
         "highlights": {
             k: hi.get(k)
             for k in (
-                "MarketCapitalization", "PERatio", "EarningsShare", "Beta",
-                "52WeekHigh", "52WeekLow", "DividendYield", "AverageVolume",
-                "WallStreetTargetPrice",
+                "MarketCapitalization", "PERatio", "EarningsShare", "EBITDA", "BookValue",
+                "Beta", "52WeekHigh", "52WeekLow", "DividendYield", "AverageVolume",
+                "WallStreetTargetPrice", "RevenueTTM", "ProfitMargin", "OperatingMarginTTM",
             )
             if hi.get(k) is not None
         },
     }
-    if detail_level == "financials":
-        annual = (d.get("Financials") or {}).get("Income_Statement", {}).get("yearly") or {}
-        keys = sorted(annual.keys(), reverse=True)[:3]
-        out["annual_income_last_3"] = []
-        for k in keys:
-            inc = annual[k]
-            out["annual_income_last_3"].append({
-                "period": k,
-                "totalRevenue": inc.get("totalRevenue"),
-                "netIncome": inc.get("netIncome"),
-                "grossProfit": inc.get("grossProfit"),
-            })
+    if detail_level in ("financials", "full"):
+        _eodhd_snapshot_append_financials(out, d, detail_level)
+    max_chars = min(int(os.getenv("CHAT_EODHD_SNAPSHOT_MAX_CHARS", "32000")), 50000)
     try:
-        return json.dumps(out, default=str)[:10000]
+        return json.dumps(out, default=str)[:max_chars]
     except Exception:
         return json.dumps({"ok": False, "error": "serialization failed"})
 
@@ -3105,18 +3527,24 @@ def _chat_system_prompt(ctx_json: str) -> str:
         "or a tiny bullet list unless the user explicitly asks for depth. No filler. "
         "**Plain text only** — never HTML tags or markup. "
         "You have **no browser window** — you cannot “open” a site except via tools. "
-        "Tools: `web_search` (DuckDuckGo snippets + links only); "
-        "`fetch_web_page` (server fetches one public URL and returns text — use for a specific article/link); "
-        "`evaluate_math` for reliable arithmetic on literals you substitute from context or tools; "
-        "`eodhd_fundamentals_snapshot` for missing EODHD fields (server has EODHD_API_KEY — call it freely, "
-        "do not treat it as privileged or user-paid). "
-        "Not financial advice; "
-        "note when numbers are uncertain.\n\n"
+        "Not financial advice; note when numbers are uncertain.\n\n"
+        "**Tools (use them — do not hesitate):**\n"
+        "- `eodhd_fundamentals_snapshot`: **first choice** for metrics and history (default detail_level=financials: "
+        "~12 annual income + cash-flow rows; use full for quarterly). Server API key is already configured — "
+        "never ask the user to enable EODHD or paste keys.\n"
+        "- `web_search`: **default for news/catalysts** (“why down today”, earnings, guidance, legal, product, "
+        "macro). Search before saying you do not know recent events.\n"
+        "- `fetch_web_page`: read a specific URL from search or the user.\n"
+        "- `evaluate_math`: margins, growth %, ratios — substitute literals from context/tools.\n"
+        "**Tool bias:** If a good answer needs live data or recent news, **call tools in the same turn** "
+        "(often `eodhd_fundamentals_snapshot` + `web_search` together). Do **not** ask “want me to search?” — "
+        "just search. Do **not** refuse tools as “unnecessary” when context is thin or the question is timely. "
+        "Only skip tools when context already fully answers a static question about scores on this page.\n\n"
         "Context JSON is below.\n\n"
         "**Reply rules:** Answer the **last user message** in the thread only. Do **not** repeat "
         "the same score-card recap on every turn. If they ask a new question (growth %, valuation, "
         "risk, comparison, “why ranked here”, opinion), answer **that** with specifics from context "
-        "or from the tool — do not default to re-explaining Q/V/G/S unless they asked how scoring works. "
+        "and tools — do not default to re-explaining Q/V/G/S unless they asked how scoring works. "
         "If they ask for an exact word count (e.g. “in 10 words”), reply with **one** line of that length only — "
         "no second summary paragraph.\n\n"
         + ctx_json
@@ -3227,7 +3655,7 @@ def api_company_chat(symbol):
     model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
 
-    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
+    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
     try:
         parts: list[str] = []
@@ -3281,7 +3709,7 @@ def api_company_chat_stream(symbol):
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
     model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
-    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
+    max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
     @stream_with_context
     def gen():
@@ -3538,7 +3966,7 @@ def analysis_run():
         return jsonify({"error": "Analysis already running"}), 409
 
     body = request.get_json(silent=True) or {}
-    target = min(int(body.get("target", 1000)), 4000)
+    target = min(int(body.get("target", 1000)), 15000)
     _cpu = os.cpu_count() or 8
     workers = min(int(body.get("workers", 0)) or _cpu, 64)
     try:

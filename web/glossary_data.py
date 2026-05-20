@@ -44,7 +44,7 @@ GLOSSARY: dict[str, str] = {
     "rev_5y": "Revenue compound annual growth over ~4–5 years.",
     "mcap": "Market capitalization — share price × shares outstanding.",
     "analyst": "Street consensus rating (typically 1 = strong sell, 5 = strong buy).",
-    "live_quote": "Near-live quote from EODHD: regular session when open, extended (pre/after-market) price when closed.",
+    "live_quote": "Quote from EODHD by listing exchange: Live / Pre-market / After-hours (US) when fresh; Closed or Last trade when the market is shut or the timestamp is stale.",
     "ttm_bar": "Trailing twelve months — last four quarters summed.",
     "ytd": "Year to date — from Jan 1 through the latest trading day.",
     "dma": "Daily moving average of the closing price.",

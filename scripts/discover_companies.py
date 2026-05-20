@@ -58,8 +58,9 @@ def fetch_screener_page(
     upper_mcap: float | None = None,
     sector: str | None = None,
     sector_op: str = "=",
+    sort: str = "market_capitalization.desc",
 ) -> list[dict]:
-    """Fetch one screener page sorted by market cap descending."""
+    """Fetch one screener page (market-cap sorted)."""
     filters = [
         ["exchange", "=", exchange],
         ["market_capitalization", ">", int(min_mcap_b * 1e9)],
@@ -75,7 +76,7 @@ def fetch_screener_page(
         "https://eodhd.com/api/screener",
         params={
             "api_token": api_key,
-            "sort": "market_capitalization.desc",
+            "sort": sort,
             "filters": json.dumps(filters, separators=(",", ":")),
             "limit": limit,
             "offset": 0,
@@ -145,31 +146,15 @@ def build_universe(
         )
         if not rows:
             break
-        last_mcap = None
-        for s in rows:
-            code = (s.get("code") or "").strip().upper()
-            if not code or code in seen:
-                continue
-            if code not in major_codes:
-                continue
-            # Skip most OTC/ADR style tickers that dominate suffix Y/F.
-            if len(code) == 5 and code.endswith(("Y", "F")):
-                continue
-            seen.add(code)
-            mcap = float(s.get("market_capitalization") or 0.0)
-            last_mcap = mcap if (last_mcap is None or mcap < last_mcap) else last_mcap
-            universe.append({
-                "symbol": code,
-                "name": s.get("name", code),
-                "exchange": s.get("exchange", exchange),
-                "isin": s.get("isin"),
-                "sector": s.get("sector"),
-                "market_cap": mcap,
-                "market_cap_b": round(mcap / 1e9, 3),
-                "adjusted_close": float(s.get("adjusted_close") or 0.0),
-            })
-            if len(universe) >= limit:
-                break
+        before = len(universe)
+        _append_screener_rows(universe, seen, rows, major_codes, limit)
+        if len(universe) == before:
+            break
+        last_mcap = min(
+            float(s.get("market_capitalization") or 0.0)
+            for s in rows
+            if s.get("code")
+        )
         if last_mcap is None:
             break
         # cursor pagination: fetch next block below this market-cap frontier.
@@ -181,11 +166,117 @@ def build_universe(
     return universe
 
 
+def _append_screener_rows(
+    universe: list[dict],
+    seen: set[str],
+    rows: list[dict],
+    major_codes: set[str],
+    limit: int,
+) -> None:
+    for s in rows:
+        if len(universe) >= limit:
+            return
+        code = (s.get("code") or "").strip().upper()
+        if not code or code in seen:
+            continue
+        if code not in major_codes:
+            continue
+        if len(code) == 5 and code.endswith(("Y", "F")):
+            continue
+        seen.add(code)
+        mcap = float(s.get("market_capitalization") or 0.0)
+        universe.append({
+            "symbol": code,
+            "name": s.get("name", code),
+            "exchange": s.get("exchange", "US"),
+            "isin": s.get("isin"),
+            "sector": s.get("sector"),
+            "market_cap": mcap,
+            "market_cap_b": round(mcap / 1e9, 3),
+            "adjusted_close": float(s.get("adjusted_close") or 0.0),
+        })
+
+
+def build_small_mid_cap_slice(
+    api_key: str,
+    *,
+    min_price: float = 1.5,
+    min_mcap_b: float = 0.03,
+    max_mcap_b: float = 3.0,
+    limit: int = 2500,
+    exchange: str = "US",
+) -> list[dict]:
+    """Smaller names ($30M–$3B) via ascending market-cap screener (complements large-cap pass)."""
+    print(f"📥  Small/mid slice: ${min_mcap_b:.2f}B–${max_mcap_b:.1f}B, up to {limit} symbols…")
+    raw_list = fetch_exchange_list(api_key, exchange)
+    major_codes = {
+        (r.get("Code") or "").strip().upper()
+        for r in raw_list
+        if r.get("Type") == "Common Stock"
+        and r.get("Currency") == "USD"
+        and r.get("Exchange") in MAJOR_EXCHANGES
+    }
+    seen: set[str] = set()
+    universe: list[dict] = []
+    page_size = 100
+    floor_b = min_mcap_b
+    max_mcap = int(max_mcap_b * 1e9)
+    while len(universe) < limit:
+        rows = fetch_screener_page(
+            api_key,
+            exchange,
+            page_size,
+            floor_b,
+            min_price,
+            upper_mcap=max_mcap,
+            sort="market_capitalization.asc",
+        )
+        if not rows:
+            break
+        before = len(universe)
+        _append_screener_rows(universe, seen, rows, major_codes, limit)
+        if len(universe) == before:
+            break
+        hi_mcap = max(
+            float(s.get("market_capitalization") or 0.0) for s in rows if s.get("code")
+        )
+        floor_b = max(min_mcap_b, hi_mcap / 1e9 + 1e-6)
+        if hi_mcap >= max_mcap - 1:
+            break
+        if len(universe) % 500 == 0:
+            print(f"    small/mid kept {len(universe)} (floor ${floor_b:.3f}B)")
+    print(f"✅  Small/mid slice: {len(universe)} symbols")
+    return universe
+
+
+def merge_universe_slices(*slices: list[dict]) -> list[dict]:
+    """Dedupe by symbol; keep row with larger market cap when duplicated."""
+    by_sym: dict[str, dict] = {}
+    for rows in slices:
+        for row in rows:
+            sym = (row.get("symbol") or "").strip().upper()
+            if not sym:
+                continue
+            prev = by_sym.get(sym)
+            if prev is None or float(row.get("market_cap") or 0) >= float(prev.get("market_cap") or 0):
+                by_sym[sym] = row
+    merged = list(by_sym.values())
+    merged.sort(key=lambda r: float(r.get("market_cap") or 0), reverse=True)
+    return merged
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build EODHD company universe")
-    parser.add_argument("--limit",     type=int,   default=2000, help="Max companies (default 2000)")
-    parser.add_argument("--min-price", type=float, default=5.0,  help="Min stock price filter")
-    parser.add_argument("--min-mcap",  type=float, default=0.5,  help="Min market cap in $B")
+    parser.add_argument("--limit",     type=int,   default=7000, help="Max large-cap pass (default 7000)")
+    parser.add_argument("--min-price", type=float, default=1.5,  help="Min stock price filter")
+    parser.add_argument("--min-mcap",  type=float, default=0.03, help="Min market cap in $B (default $30M)")
+    parser.add_argument(
+        "--include-small-mid",
+        type=int,
+        default=2500,
+        metavar="N",
+        help="Also add N small/mid names ($30M–$3B) via ascending screener (0=off, default 2500)",
+    )
     parser.add_argument("--workers",   type=int,   default=20,   help="Parallel threads")
     parser.add_argument(
         "--sector",
@@ -207,7 +298,7 @@ def main():
         print("❌ EODHD_API_KEY not set in .env"); sys.exit(1)
 
     sec = (args.sector or "").strip() or None
-    universe = build_universe(
+    large = build_universe(
         api_key    = api_key,
         min_price  = args.min_price,
         min_mcap_b = args.min_mcap,
@@ -216,6 +307,19 @@ def main():
         sector     = sec,
         sector_op  = args.sector_op,
     )
+    slices = [large]
+    if args.include_small_mid > 0 and not sec:
+        slices.append(
+            build_small_mid_cap_slice(
+                api_key,
+                min_price=args.min_price,
+                min_mcap_b=args.min_mcap,
+                max_mcap_b=3.0,
+                limit=args.include_small_mid,
+            )
+        )
+    universe = merge_universe_slices(*slices)
+    print(f"\n✅  Combined universe: {len(universe)} symbols (large + small/mid)")
 
     out_dir = PROJECT_ROOT / "outputs"
     out_dir.mkdir(exist_ok=True)

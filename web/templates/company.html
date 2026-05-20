@@ -95,10 +95,9 @@
   .price-chart-stack{padding:0 .75rem .5rem;overflow:visible}
   .price-chart-pane,.vol-chart-pane{overflow:hidden}
   #priceHover{
-    position:absolute;top:6px;right:6px;z-index:5;display:none;pointer-events:none;
-    max-width:min(100%,20rem);padding:.4rem .55rem;text-align:right;font-size:.6rem;line-height:1.4;
-    color:var(--dim);background:rgba(11,15,25,.92);border:1px solid var(--border);border-radius:3px;
-    backdrop-filter:blur(6px);box-shadow:0 4px 12px rgba(0,0,0,.35);
+    display:none;pointer-events:none;flex:0 1 auto;align-self:flex-start;min-width:0;max-width:min(100%,22rem);
+    margin-left:auto;padding:.35rem .5rem;text-align:right;font-size:.58rem;line-height:1.35;
+    color:var(--dim);background:rgba(11,15,25,.85);border:1px solid var(--border);border-radius:3px;
   }
   #hoverDate{color:var(--fg);font-weight:600;margin-bottom:.2rem;font-size:.62rem}
   #hoverPrice{color:var(--fg);letter-spacing:.02em;white-space:normal;word-break:break-word}
@@ -196,7 +195,7 @@
           <div class="price-range-row">
             <span class="section-h" style="margin-bottom:0">{{ company.symbol }}</span>
             <div id="rangeBar" style="display:flex;flex-wrap:wrap;gap:2px">
-              <button class="rbtn" data-r="1d" title="Last few sessions (daily EOD)">1D</button>
+              <button class="rbtn" data-r="1d" title="Last ~2 sessions, 1-minute bars">1D</button>
               <button class="rbtn" data-r="1w" title="~200 daily bars (EOD)">1W</button>
               <button class="rbtn" data-r="1m">1M</button>
               <button class="rbtn" data-r="3m">3M</button>
@@ -214,21 +213,25 @@
               </label>
             </div>
           </div>
-          <div id="priceHeader" style="display:flex;align-items:baseline;gap:.6rem;flex-wrap:wrap">
-            <span id="priceNow" style="font-size:1.4rem;font-weight:800;color:var(--fg)">–</span>
-            <span id="priceChange" style="font-size:.78rem;font-weight:600">–</span>
-            <span id="liveAsOf" style="font-size:.58rem;color:var(--dim);display:none"></span>
+          <div id="priceHeader" style="display:flex;flex-direction:column;align-items:flex-start;gap:.2rem;min-width:0">
+            <span id="priceRegularChg" style="display:none;font-size:.78rem;font-weight:600;line-height:1.35"></span>
+            <div style="display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap">
+              <span id="priceNow" style="font-size:1.4rem;font-weight:800;color:var(--fg)">–</span>
+              <span id="liveAsOf" style="font-size:.58rem;color:var(--dim);display:none"></span>
+            </div>
+            <span id="priceExtendedChg" style="display:none;font-size:.78rem;font-weight:600;line-height:1.35"></span>
+            <span id="priceChange" style="font-size:.78rem;font-weight:600;line-height:1.35">–</span>
           </div>
+        </div>
+        <div id="priceHover">
+          <div id="hoverDate"></div>
+          <div id="hoverPrice"></div>
+          <div id="hoverVol"></div>
         </div>
       </div>
       <!-- Price + volume (shared horizontal plot width) -->
       <div class="price-chart-stack">
         <div class="price-chart-pane" style="position:relative;height:260px">
-          <div id="priceHover">
-            <div id="hoverDate"></div>
-            <div id="hoverPrice"></div>
-            <div id="hoverVol"></div>
-          </div>
           <canvas id="chartPrice"></canvas>
         </div>
         <div class="vol-chart-pane" style="position:relative;height:60px">
@@ -367,7 +370,7 @@
   </div>
   <div class="gchat-body" id="gchatBody"></div>
   <div class="gchat-foot">
-    <div class="gchat-hint">Page: <b style="color:var(--accent2)">{{ company.symbol }}</b>. Replies stream as they generate (like ChatGPT). Snapshot + on-demand EODHD. Not financial advice.</div>
+    <div class="gchat-hint">Page: <b style="color:var(--accent2)">{{ company.symbol }}</b>. Streams like ChatGPT; uses <b>web search</b> and <b>EODHD</b> automatically when useful. Not financial advice.</div>
     <textarea id="gchatInput" placeholder="Sign in above to ask about this stock…" maxlength="12000" disabled></textarea>
     <button type="button" id="gchatSend" disabled>SEND</button>
     <div class="gchat-hint" id="gchatErr" style="color:#f472b6"></div>
@@ -481,7 +484,53 @@ function pickTtmCompareEstimate(ttm, estimates) {
   return estimates.findIndex(e => parseEstFy(e) === ttmFy);
 }
 
-/** Historical years + 1Y/2Y TTM each overlapped with a forward estimate column. */
+function findHistIdxForFy(pts, fy) {
+  if (fy == null) return -1;
+  const s = String(fy);
+  return pts.findIndex(p => p.hist && String(p.hist.year) === s);
+}
+
+function histRowForFy(hist, fy) {
+  if (fy == null) return null;
+  const s = String(fy);
+  return hist.find(h => String(h.year) === s) || null;
+}
+
+/** Baseline for compare column when forward FYxxxxE was dropped but annual is filed. */
+function reportedCompareEst(histRow, fy) {
+  if (!histRow) return null;
+  return {
+    year: `FY${fy}`,
+    fiscal_year: fy,
+    compareSource: 'reported',
+    revenue_usd: histRow.revenue_usd,
+    revenue_b: histRow.revenue_b,
+    net_income_usd: histRow.net_income_usd,
+    net_income_b: histRow.net_income_b,
+    eps: histRow.eps,
+    oeps: histRow.oeps,
+    pe_ratio: histRow.pe_ratio,
+  };
+}
+
+/** Place TTM (+ est or filed baseline) on one x-slot; replace hist-only row when present. */
+function placeTtmCompare(pts, ttm, est, kind, fy) {
+  const lbl = est?.year || `FY${fy}`;
+  const row = {
+    label: String(fy),
+    hist: null,
+    ttm,
+    ttm2: null,
+    est,
+    compare: true,
+    compareKind: kind,
+  };
+  const dup = findHistIdxForFy(pts, fy);
+  if (dup >= 0) pts[dup] = row;
+  else pts.push({ ...row, label: lbl });
+}
+
+/** Historical years + 1Y/2Y TTM each overlapped with estimate (or filed actual) on same x. */
 function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   const pts = hist.map(h => ({
     label: String(h.year),
@@ -494,16 +543,14 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   }));
   const usedEst = new Set();
 
-  const merge1 = pickTtmCompareEstimate(ttm, estimates);
-  if (ttm && merge1 >= 0) {
+  const ttmFy = ttm && ttm.fiscal_year != null ? Number(ttm.fiscal_year) : null;
+  const filed1 = ttmFy != null ? histRowForFy(hist, ttmFy) : null;
+  const merge1 = filed1 ? -1 : pickTtmCompareEstimate(ttm, estimates);
+  if (ttm && !filed1 && merge1 >= 0) {
     const est = estimates[merge1];
-    pts.push({
-      label: est.year || String(parseEstFy(est) || 'Est'),
-      hist: null, ttm, ttm2: null, est,
-      compare: true, compareKind: '1y',
-    });
+    placeTtmCompare(pts, ttm, est, '1y', parseEstFy(est) ?? ttmFy);
     usedEst.add(merge1);
-  } else if (ttm) {
+  } else if (ttm && !filed1) {
     pts.push({
       label: ttm.year || 'TTM',
       hist: null, ttm, ttm2: null, est: null,
@@ -511,22 +558,32 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
     });
   }
 
+  const ttm2Fy = ttm2 && ttm2.fiscal_year != null ? Number(ttm2.fiscal_year) : null;
+  const filed2 = ttm2Fy != null ? histRowForFy(hist, ttm2Fy) : null;
   let merge2 = -1;
-  if (ttm2) {
-    const ttm2Fy = ttm2.fiscal_year != null ? Number(ttm2.fiscal_year) : null;
-    if (ttm2Fy != null) {
-      merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
-    }
+  if (ttm2Fy != null && !filed2) {
+    merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
   }
-  if (ttm2 && merge2 >= 0) {
+  function placeTtm2Compare(est, fy) {
+    const row = {
+      label: String(fy),
+      hist: null,
+      ttm: null,
+      ttm2,
+      est,
+      compare: true,
+      compareKind: '2y',
+    };
+    const dup = findHistIdxForFy(pts, fy);
+    if (dup >= 0) pts[dup] = row;
+    else pts.push({ ...row, label: est?.year || `FY${fy}` });
+  }
+
+  if (ttm2 && !filed2 && merge2 >= 0) {
     const est = estimates[merge2];
-    pts.push({
-      label: est.year || String(parseEstFy(est) || 'Est'),
-      hist: null, ttm: null, ttm2, est,
-      compare: true, compareKind: '2y',
-    });
+    placeTtm2Compare(est, parseEstFy(est) ?? ttm2Fy);
     usedEst.add(merge2);
-  } else if (ttm2) {
+  } else if (ttm2 && !filed2) {
     pts.push({
       label: ttm2.year || '2Y avg',
       hist: null, ttm: null, ttm2, est: null,
@@ -536,6 +593,8 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
 
   estimates.forEach((e, i) => {
     if (usedEst.has(i)) return;
+    const fy = parseEstFy(e);
+    if (fy != null && histRowForFy(hist, fy)) return;
     pts.push({
       label: e.year, hist: null, ttm: null, ttm2: null, est: e,
       compare: false, compareKind: null,
@@ -546,8 +605,9 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
 
 function finChartLabels(pts) {
   return pts.map(p => {
-    if (p.compareKind === '2y') return `${p.label} · 2Y vs est`;
-    if (p.compare) return `${p.label} · TTM vs est`;
+    const vs = p.est?.compareSource === 'reported' ? 'filed' : 'est';
+    if (p.compareKind === '2y') return `${p.label} · 2Y vs ${vs}`;
+    if (p.compare) return `${p.label} · TTM vs ${vs}`;
     return p.label;
   });
 }
@@ -575,6 +635,7 @@ function compareTooltipFooter(pts, idx, pairs) {
   const p = pts[idx];
   if (!p || !p.compare) return '';
   const tag = p.compareKind === '2y' ? '2Y avg' : 'TTM';
+  const base = p.est?.compareSource === 'reported' ? 'filed' : 'est';
   const lines = [];
   pairs.forEach(([label, act, est]) => {
     const actCmp = compareActForEst(p, act);
@@ -582,7 +643,7 @@ function compareTooltipFooter(pts, idx, pairs) {
     if (d == null) return;
     const sign = d >= 0 ? '+' : '';
     const tone = d >= 0 ? 'ahead of' : 'behind';
-    lines.push(`${label}: ${tag} ${tone} est (${sign}${d.toFixed(1)}%)`);
+    lines.push(`${label}: ${tag} ${tone} ${base} (${sign}${d.toFixed(1)}%)`);
   });
   return lines.join('\n');
 }
@@ -598,10 +659,70 @@ const BAR_GROUP_OPTS = {
   },
 };
 
+const PRICE_RANGE_CHG_LABEL = {
+  '1d': 'today', '1w': '1W', '1m': '1M', '3m': '3M', '6m': '6M', 'ytd': 'YTD',
+  '1y': '1Y', '3y': '3Y', '5y': '5Y', '10y': '10Y', 'max': 'max',
+};
+
+function visibleFinYearOptions(histLen) {
+  const n = histLen || 0;
+  const out = [];
+  if (n >= 5) out.push(5);
+  if (n >= 10) out.push(10);
+  if (n >= 15) out.push(15);
+  if (n >= 1) out.push(99);
+  return out;
+}
+
+function pickDefaultFinYears(histLen) {
+  const opts = visibleFinYearOptions(histLen);
+  if (opts.includes(10)) return 10;
+  if (opts.includes(5)) return 5;
+  return 99;
+}
+
+function syncFinRangeBar() {
+  const n = _fullHist.length;
+  const visible = new Set(visibleFinYearOptions(n));
+  document.querySelectorAll('#finRangeBar .rbtn').forEach(btn => {
+    const fy = parseInt(btn.dataset.fy, 10);
+    const show = visible.has(fy);
+    btn.style.display = show ? '' : 'none';
+    btn.disabled = !show;
+  });
+  if (!visible.has(_finYears)) {
+    _finYears = pickDefaultFinYears(n);
+    document.querySelectorAll('#finRangeBar .rbtn').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.fy, 10) === _finYears);
+    });
+  }
+}
+
+function updatePriceHeaderFromSeries(prices, range) {
+  if (!prices?.length) return;
+  const first = Number(prices[0].close);
+  const last = Number(prices[prices.length - 1].close);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return;
+  const chg = last - first;
+  const chgPct = first ? (chg / first) * 100 : 0;
+  const isUp = chg >= 0;
+  const nowEl = document.getElementById('priceNow');
+  const chgEl = document.getElementById('priceChange');
+  const lbl = PRICE_RANGE_CHG_LABEL[range] || String(range || '').toUpperCase();
+  if (nowEl) nowEl.textContent = '$' + last.toFixed(2);
+  const sign = isUp ? '+' : '';
+  setPriceChgDisplay({
+    split: false,
+    singleText: sign + chg.toFixed(2) + ' (' + sign + chgPct.toFixed(2) + '%) · ' + lbl,
+    singleColor: isUp ? 'var(--pos)' : 'var(--neg)',
+  });
+}
+
 function renderFinancialCharts(years) {
   _finYears = years;
   document.querySelectorAll('#finRangeBar .rbtn').forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.fy) === years);
+    if (b.style.display === 'none') return;
+    b.classList.toggle('active', parseInt(b.dataset.fy, 10) === years);
   });
 
   Object.values(_finCharts).forEach(c => c.destroy());
@@ -847,10 +968,13 @@ async function loadHistory() {
           if (el) { el.style.display = 'block'; el.style.color = 'var(--dim)'; el.textContent = msg; }
         });
       }
+      syncFinRangeBar();
       renderAnalyst(d.analyst_ratings);
       return d;
     }
 
+    syncFinRangeBar();
+    _finYears = pickDefaultFinYears(_fullHist.length);
     renderFinancialCharts(_finYears);
     renderAnalyst(d.analyst_ratings);
     return d;
@@ -863,6 +987,7 @@ let _currentRange = '1y';
 let _priceChartRange = '1y';
 let _priceSeries = null;
 let _priceHoverIdx = null;
+let _priceHoverMouseY = null;
 const _priceCache = {};
 let _priceChartBooted = false;
 let _historyPayloadPromise = null;
@@ -906,7 +1031,15 @@ function fmtPriceDateShort(ds, range) {
 }
 
 function fmtPriceDateFull(ds) {
-  const parts = ds.split('-');
+  const s = String(ds || '');
+  const sp = s.indexOf(' ');
+  if (sp > 0) {
+    const parts = s.slice(0, sp).split('-');
+    const clock = s.slice(sp + 1).slice(0, 5);
+    return _PRICE_MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0]
+      + (clock ? ' · ' + clock : '');
+  }
+  const parts = s.split('-');
   return _PRICE_MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
 }
 
@@ -933,6 +1066,7 @@ function destroyPriceCharts() {
   if (priceChart) { priceChart.destroy(); priceChart = null; }
   if (volChart) { volChart.destroy(); volChart = null; }
   _priceHoverIdx = null;
+  _priceHoverMouseY = null;
 }
 
 function volumeBarColors(closes, volumes) {
@@ -944,22 +1078,60 @@ function volumeBarColors(closes, volumes) {
   });
 }
 
+function pointerInChartArea(chart, evt) {
+  const a = chart?.chartArea;
+  if (!a || evt == null || evt.x == null || evt.y == null) return false;
+  return evt.x >= a.left && evt.x <= a.right && evt.y >= a.top && evt.y <= a.bottom;
+}
+
+function clearPriceCrosshair() {
+  updatePriceHover(null);
+  _priceHoverMouseY = null;
+  if (priceChart) priceChart.update('none');
+  if (volChart) volChart.update('none');
+}
+
+function handlePriceChartHover(chart, evt, elems) {
+  if (!elems.length || !pointerInChartArea(chart, evt)) {
+    clearPriceCrosshair();
+    return;
+  }
+  updatePriceHover(elems[0].index);
+  _priceHoverMouseY = evt.y;
+  if (chart.canvas.id === 'chartPrice' && volChart) volChart.update('none');
+  else if (chart.canvas.id === 'chartVolume' && priceChart) priceChart.update('none');
+}
+
+function bindPriceCrosshairLeave(canvas) {
+  if (!canvas || canvas._crosshairLeaveBound) return;
+  canvas._crosshairLeaveBound = true;
+  canvas.addEventListener('mouseleave', clearPriceCrosshair);
+}
+
 const crosshairLinePlugin = {
   id: 'crosshairLine',
   afterDraw(chart) {
     if (_priceHoverIdx == null) return;
-    const { ctx, chartArea: { top, bottom } } = chart;
+    const { ctx, chartArea: { left, right, top, bottom } } = chart;
     const meta = chart.getDatasetMeta(0);
-    if (!meta.data[_priceHoverIdx]) return;
-    const x = meta.data[_priceHoverIdx].x;
+    const pt = meta.data[_priceHoverIdx];
+    if (!pt) return;
+    const x = pt.x;
     ctx.save();
-    ctx.beginPath();
     ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = 'rgba(148,163,184,.3)';
+    ctx.strokeStyle = 'rgba(148,163,184,.35)';
     ctx.lineWidth = 1;
+    ctx.beginPath();
     ctx.moveTo(x, top);
     ctx.lineTo(x, bottom);
     ctx.stroke();
+    if (chart.canvas.id === 'chartPrice' && _priceHoverMouseY != null) {
+      const y = Math.max(top, Math.min(bottom, _priceHoverMouseY));
+      ctx.beginPath();
+      ctx.moveTo(left, y);
+      ctx.lineTo(right, y);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 };
@@ -1022,7 +1194,7 @@ function renderPriceCharts(prices, range) {
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { left: 6, right: 14, top: 40, bottom: 4 } },
+      layout: { padding: { left: 6, right: 14, top: 8, bottom: 4 } },
       plugins: { legend: { display: false }, tooltip: { enabled: false } },
       scales: {
         x: {
@@ -1046,19 +1218,12 @@ function renderPriceCharts(prices, range) {
       },
       interaction: { intersect: false, mode: 'index' },
       onResize: () => alignVolumeChartToPrice(),
-      onHover: (evt, elems) => {
-        if (elems.length) {
-          updatePriceHover(elems[0].index);
-          if (volChart) volChart.update('none');
-        } else {
-          updatePriceHover(null);
-          if (volChart) volChart.update('none');
-        }
-      },
+      onHover: (evt, elems) => handlePriceChartHover(priceChart, evt, elems),
     },
     plugins: [crosshairLinePlugin, makeQuarterlyReportsPlugin()]
   });
   bindPriceChartReportClicks(ctxP);
+  bindPriceCrosshairLeave(ctxP);
 
   volChart = new Chart(ctxV, {
     type: 'bar',
@@ -1077,19 +1242,13 @@ function renderPriceCharts(prices, range) {
       },
       interaction: { intersect: false, mode: 'index' },
       onResize: () => alignVolumeChartToPrice(),
-      onHover: (evt, elems) => {
-        if (elems.length) {
-          updatePriceHover(elems[0].index);
-          priceChart.update('none');
-        } else {
-          updatePriceHover(null);
-          priceChart.update('none');
-        }
-      },
+      onHover: (evt, elems) => handlePriceChartHover(volChart, evt, elems),
     },
     plugins: [crosshairLinePlugin]
   });
+  bindPriceCrosshairLeave(ctxV);
   alignVolumeChartToPrice();
+  updatePriceHeaderFromSeries(prices, range);
 }
 
 let _quarterlyReports = [];
@@ -1279,6 +1438,49 @@ function _sessionAccent(session) {
   return null;
 }
 
+function fmtPctAbsChgLine(chgPct, chg, label) {
+  const pct = Number(chgPct);
+  const abs = Number(chg);
+  if (!Number.isFinite(pct) || !Number.isFinite(abs)) return '–';
+  const up = pct >= 0;
+  const sign = up ? '+' : '-';
+  return sign + Math.abs(pct).toFixed(2) + '% (' + sign + Math.abs(abs).toFixed(2) + ') · ' + label;
+}
+
+function chgLineColor(pct, extended) {
+  const p = Number(pct);
+  if (!Number.isFinite(p)) return 'var(--dim)';
+  if (extended) return p >= 0 ? '#fbbf24' : '#f87171';
+  return p >= 0 ? 'var(--pos)' : 'var(--neg)';
+}
+
+function setPriceChgDisplay({ split, regularPct, regularChg, regularLabel, extPct, extChg, extLabel, singleText, singleColor }) {
+  const chgEl = document.getElementById('priceChange');
+  const regEl = document.getElementById('priceRegularChg');
+  const extEl = document.getElementById('priceExtendedChg');
+  if (split) {
+    if (chgEl) chgEl.style.display = 'none';
+    if (regEl) {
+      regEl.style.display = 'block';
+      regEl.textContent = fmtPctAbsChgLine(regularPct, regularChg, regularLabel || 'At close');
+      regEl.style.color = chgLineColor(regularPct, false);
+    }
+    if (extEl) {
+      extEl.style.display = 'block';
+      extEl.textContent = fmtPctAbsChgLine(extPct, extChg, extLabel || 'After-hours');
+      extEl.style.color = chgLineColor(extPct, true);
+    }
+  } else {
+    if (regEl) regEl.style.display = 'none';
+    if (extEl) extEl.style.display = 'none';
+    if (chgEl) {
+      chgEl.style.display = 'inline';
+      chgEl.textContent = singleText || '–';
+      chgEl.style.color = singleColor || 'var(--dim)';
+    }
+  }
+}
+
 function applyLiveQuote(q) {
   if (!q || q.price == null) return;
   const price = Number(q.price);
@@ -1286,7 +1488,8 @@ function applyLiveQuote(q) {
   const chgPct = q.change_pct != null ? Number(q.change_pct) : 0;
   const isUp = chg >= 0;
   const session = q.session || 'closed';
-  const ext = session === 'pre_market' || session === 'after_hours';
+  const stale = !!q.stale;
+  const ext = !stale && (session === 'pre_market' || session === 'after_hours');
   const accent = _sessionAccent(session);
   _lastQuoteSession = session;
   if (q.poll_seconds && q.poll_seconds >= 5) {
@@ -1294,24 +1497,41 @@ function applyLiveQuote(q) {
   }
 
   const nowEl = document.getElementById('priceNow');
-  const chgEl = document.getElementById('priceChange');
   const asOfEl = document.getElementById('liveAsOf');
   if (nowEl) {
     nowEl.textContent = '$' + price.toFixed(2);
     nowEl.style.color = ext ? '#fbbf24' : 'var(--fg)';
   }
-  if (chgEl) {
+  const extLabel = session === 'pre_market' ? 'Pre-market' : 'After-hours';
+  if (q.show_session_split
+      && q.regular_change_pct != null
+      && q.extended_change_pct != null) {
+    setPriceChgDisplay({
+      split: true,
+      regularPct: q.regular_change_pct,
+      regularChg: q.regular_change,
+      regularLabel: 'At close',
+      extPct: q.extended_change_pct,
+      extChg: q.extended_change,
+      extLabel,
+    });
+  } else if (_currentRange === '1d') {
     const basis = q.change_label === 'vs close' ? 'vs close' : 'today';
-    chgEl.textContent = (isUp ? '+' : '') + chg.toFixed(2) + ' (' + (isUp ? '+' : '') + chgPct.toFixed(2) + '%) ' + basis;
-    chgEl.style.color = isUp ? (ext ? '#fbbf24' : 'var(--pos)') : 'var(--neg)';
+    const sign = isUp ? '+' : '';
+    setPriceChgDisplay({
+      split: false,
+      singleText: sign + chg.toFixed(2) + ' (' + sign + chgPct.toFixed(2) + '%) ' + basis,
+      singleColor: isUp ? (ext ? '#fbbf24' : 'var(--pos)') : 'var(--neg)',
+    });
   }
   if (asOfEl) {
-    const label = q.session_label || (q.stale || q.source === 'eod_daily' ? 'EOD' : 'Live');
+    const label = q.session_label
+      || (stale ? 'Last trade' : (q.source === 'eod_daily' ? 'EOD' : (session === 'closed' ? 'Closed' : 'Live')));
     let tail = '';
     if (q.as_of) tail = ' · ' + String(q.as_of).replace('T', ' ').slice(0, 19);
     asOfEl.textContent = label + tail;
     asOfEl.style.display = 'inline';
-    asOfEl.style.color = ext ? '#f59e0b' : 'var(--dim)';
+    asOfEl.style.color = ext ? '#f59e0b' : (stale ? 'var(--dim)' : 'var(--dim)');
   }
   if (q.market_cap_fmt) {
     const mcapEl = document.getElementById('liveMcap');
@@ -1636,7 +1856,10 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => loadPriceChart(btn.dataset.r));
   });
   document.querySelectorAll('#finRangeBar .rbtn').forEach(btn => {
-    btn.addEventListener('click', () => renderFinancialCharts(parseInt(btn.dataset.fy)));
+    btn.addEventListener('click', () => {
+      if (btn.disabled || btn.style.display === 'none') return;
+      renderFinancialCharts(parseInt(btn.dataset.fy, 10));
+    });
   });
   const panel = document.getElementById('gchat-panel');
   const toggle = document.getElementById('gchatToggle');

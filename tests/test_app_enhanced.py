@@ -144,6 +144,13 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         self.assertEqual(r.status_code, 503)
         self.assertIn("Sign in with ChatGPT", r.get_json().get("error", ""))
 
+    def test_chat_system_prompt_encourages_tools(self) -> None:
+        p = ae._chat_system_prompt('{"symbol":"TEST"}')
+        self.assertIn("do not hesitate", p.lower())
+        self.assertIn("eodhd_fundamentals_snapshot", p)
+        self.assertIn("web_search", p)
+        self.assertIn("just search", p.lower())
+
     def test_chat_requires_message(self) -> None:
         with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": True}):
             r = self.client.post(
@@ -664,6 +671,90 @@ class CompounderRankTests(unittest.TestCase):
         s = {}
         self.assertGreaterEqual(ae._long_term_growth_factor(m, s), 0.70)
 
+    def test_steady_midcap_compounder_listing_not_crushed(self) -> None:
+        """High-growth, consistent mid-caps should rank well without mega-cap scale."""
+        compounder = {
+            "symbol": "MID",
+            "sector": "Technology",
+            "industry": "Software - Application",
+            "data_quality": {"min_quarters": 25},
+            "investment_scores": {
+                "overall_score": 18.0,
+                "quality_score": 5.0,
+                "value_score": 4.0,
+                "growth_score": 4.2,
+                "safety_score": 5.0,
+                "peg_ratio": 0.5,
+                "revenue_cagr_3y_pct": 40.0,
+            },
+            "financial_metrics": {
+                "revenue": 1.1e9,
+                "net_income": 4.2e8,
+                "free_cash_flow": 2.8e8,
+                "gross_margin": 0.73,
+                "roe": 0.30,
+                "roic": 0.09,
+                "revenue_cagr_3y": 0.40,
+                "revenue_cagr_4y": 0.41,
+                "revenue_growth_1y": 0.35,
+                "revenue_growth_consistency": 0.94,
+                "revenue_acceleration": -0.04,
+                "fcf_conversion": 1.0,
+                "debt_to_equity": 0.0,
+                "altman_z_score": 6.0,
+                "current_ratio": 2.5,
+                "red_flag_count": 0,
+            },
+            "company_info": {"market_cap": 5.3e9, "pe_ratio": 13.0},
+        }
+        micro = {
+            "symbol": "MICRO",
+            "investment_scores": {"overall_score": 18.0},
+            "financial_metrics": {"revenue": 80e6, "gross_margin": 1.05},
+            "company_info": {"market_cap": 300e6},
+        }
+        ls_mid = ae._compounder_list_score(compounder)
+        ls_micro = ae._compounder_list_score(micro)
+        self.assertGreater(ls_mid, 12.0)
+        self.assertGreater(ls_mid, ls_micro)
+
+    def test_slow_revenue_grower_capped_out_of_top_tier(self) -> None:
+        """~7% revenue CAGR should not rank with mid-teens compounders."""
+        slow = {
+            "symbol": "SLOW",
+            "sector": "Consumer Cyclical",
+            "industry": "Apparel",
+            "data_quality": {"min_quarters": 25},
+            "investment_scores": {
+                "overall_score": 16.0,
+                "quality_score": 4.5,
+                "value_score": 3.25,
+                "growth_score": 3.3,
+                "safety_score": 5.0,
+                "peg_ratio": 1.2,
+                "revenue_cagr_3y_pct": 6.8,
+            },
+            "financial_metrics": {
+                "revenue": 6.5e9,
+                "net_income": 5e8,
+                "free_cash_flow": 4e8,
+                "gross_margin": 0.68,
+                "roe": 0.35,
+                "roic": 0.18,
+                "revenue_cagr_3y": 0.068,
+                "revenue_cagr_4y": 0.07,
+                "revenue_growth_1y": 0.127,
+                "revenue_growth_consistency": 0.70,
+                "fcf_conversion": 0.9,
+                "debt_to_equity": 0.3,
+                "altman_z_score": 5.0,
+                "current_ratio": 2.0,
+                "red_flag_count": 0,
+            },
+            "company_info": {"market_cap": 19e9, "pe_ratio": 22.0},
+        }
+        self.assertLess(ae._compounder_list_score(slow), 13.0)
+
 
 class LoadDataPriorityTests(unittest.TestCase):
     def test_rescored_wins_over_scaled_when_both_exist(self) -> None:
@@ -960,14 +1051,42 @@ class PriceHistorySliceTests(unittest.TestCase):
     def test_one_year_keeps_natural_density(self) -> None:
         prices = self._daily(300)
         out = ae._slice_and_downsample(prices, "1y")
-        self.assertGreaterEqual(len(out), 200)
-        self.assertLessEqual(len(out), 400)
+        self.assertGreaterEqual(len(out), ae._MIN_CHART_POINTS)
+        self.assertLessEqual(len(out), ae._MAX_CHART_POINTS)
 
-    def test_1d_stays_short_without_200_expansion(self) -> None:
+    def test_1d_daily_fallback_expands_to_min_points(self) -> None:
         prices = self._daily(400)
         out = ae._slice_and_downsample(prices, "1d")
-        self.assertLessEqual(len(out), 12)
-        self.assertGreaterEqual(len(out), 1)
+        self.assertGreaterEqual(len(out), ae._MIN_CHART_POINTS)
+        self.assertLessEqual(len(out), ae._MAX_CHART_POINTS)
+
+    def test_1d_prefers_intraday_when_available(self) -> None:
+        from datetime import datetime, timezone
+
+        base = int(datetime(2026, 5, 20, 14, 0, tzinfo=timezone.utc).timestamp())
+        mock_intra = []
+        for i in range(200):
+            ts = base + i * 60
+            mock_intra.append({
+                "date": datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0 + i * 0.01,
+                "volume": 1000,
+            })
+        with patch.object(ae, "_fetch_intraday_1d", return_value=mock_intra):
+            out = ae._chart_prices_for_range([], "1d", symbol="AAPL")
+        self.assertEqual(len(out), 200)
+        self.assertIn(":", out[0]["date"])
+
+    def test_parse_eodhd_intraday_list(self) -> None:
+        rows = ae._parse_eodhd_intraday([
+            {"datetime": 1700000000, "open": 10, "high": 11, "low": 9, "close": 10.5, "volume": 100},
+            {"datetime": 1700000060, "open": 10.5, "high": 11, "low": 10, "close": 10.8, "volume": 50},
+        ])
+        self.assertEqual(len(rows), 2)
+        self.assertIn("close", rows[0])
 
     def test_apply_price_density_quarter(self) -> None:
         prices = self._daily(400)
@@ -1006,6 +1125,44 @@ class LiveQuoteTests(unittest.TestCase):
         evening = datetime(2026, 5, 20, 17, 30, tzinfo=ae._ET)
         self.assertEqual(ae._us_market_session_now(evening), "after_hours")
 
+    def test_oslo_session_closed_evening(self) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        evening_oslo = datetime(2026, 5, 20, 22, 0, tzinfo=ZoneInfo("Europe/Oslo"))
+        self.assertEqual(ae._market_session_now("OL", evening_oslo), "closed")
+
+    def test_stale_quote_not_live_when_exchange_closed(self) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        evening_oslo = datetime(2026, 5, 20, 22, 0, tzinfo=ZoneInfo("Europe/Oslo"))
+        with unittest.mock.patch.object(ae, "_market_session_now", return_value="closed"):
+            q = ae._apply_quote_session_truth({
+                "price": 250.0,
+                "session": "regular",
+                "market_open": True,
+                "as_of": "2026-05-20 14:35:10",
+                "stale": False,
+            }, "OL")
+        self.assertEqual(q["session"], "closed")
+        self.assertFalse(q["market_open"])
+        self.assertEqual(q["session_label"], "Last trade")
+
+    def test_fresh_us_after_hours_label(self) -> None:
+        from datetime import datetime
+
+        recent = datetime.now(ae._ET).isoformat(timespec="seconds")
+        with unittest.mock.patch.object(ae, "_market_session_now", return_value="after_hours"):
+            q = ae._apply_quote_session_truth({
+                "price": 100.0,
+                "session": "regular",
+                "market_open": True,
+                "as_of": recent,
+            }, "US")
+        self.assertEqual(q["session"], "after_hours")
+        self.assertEqual(q["session_label"], "After-hours")
+
     def test_parse_us_quote_delayed_extended(self) -> None:
         row = {
             "lastTradePrice": 220.0,
@@ -1021,6 +1178,25 @@ class LiveQuoteTests(unittest.TestCase):
         self.assertEqual(q["price"], 222.5)
         self.assertEqual(q["session"], "after_hours")
         self.assertAlmostEqual(q["change"], 2.5, places=2)
+        self.assertTrue(q["show_session_split"])
+        self.assertAlmostEqual(q["regular_change"], 5.0, places=2)
+        self.assertAlmostEqual(q["extended_change"], 2.5, places=2)
+
+    def test_backfill_us_quote_previous_close(self) -> None:
+        quote = {
+            "source": "eodhd_us_quote",
+            "session": "after_hours",
+            "regular_close": 417.0,
+            "extended_price": 417.14,
+            "price": 417.14,
+            "previous_close": None,
+            "show_session_split": False,
+        }
+        with unittest.mock.patch.object(ae, "_eod_previous_close_from_store", return_value=404.0):
+            out = ae._backfill_us_quote_previous_close("TSLA", quote)
+        self.assertTrue(out["show_session_split"])
+        self.assertAlmostEqual(out["regular_change"], 13.0, places=2)
+        self.assertAlmostEqual(out["extended_change"], 0.14, places=2)
 
     def test_parse_us_quote_delayed_regular(self) -> None:
         row = {
@@ -1081,6 +1257,40 @@ class EodhdFundamentalsHelpersTests(unittest.TestCase):
         d = {"Highlights": {"PERatio": 10}, "PERatio": 12.0}
         h = ae._merged_highlights(d)
         self.assertEqual(h.get("PERatio"), 10)
+
+    def test_eodhd_chat_snapshot_financials_many_annual_rows(self) -> None:
+        years = {str(2000 + i): {"totalRevenue": i * 1e9, "netIncome": i * 1e8} for i in range(15)}
+        mock = {
+            "General": {"Name": "Test Co", "Code": "TST"},
+            "Highlights": {"PERatio": 20},
+            "Financials": {
+                "Income_Statement": {"yearly": years, "quarterly": {}},
+                "Cash_Flow": {"yearly": {k: {"totalCashFromOperatingActivities": 1e8} for k in years}},
+                "Balance_Sheet": {"yearly": {"2014-12-31": {"totalAssets": 5e9}}},
+            },
+        }
+        with patch.object(ae, "_get_fundamentals", return_value=mock):
+            raw = ae._eodhd_snapshot_for_tool("TST", "financials")
+        data = json.loads(raw)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["annual_income_count"], 12)
+        self.assertNotIn("annual_income_last_3", data)
+        self.assertIn("annual_cash_flow", data)
+
+    def test_eodhd_chat_snapshot_full_includes_quarterly(self) -> None:
+        q = {f"2025-{m:02d}-30": {"totalRevenue": 1e9, "netIncome": 1e8} for m in range(1, 13)}
+        mock = {
+            "General": {"Name": "Test Co"},
+            "Highlights": {},
+            "Financials": {
+                "Income_Statement": {"yearly": {"2024-12-31": {"totalRevenue": 4e9}}, "quarterly": q},
+                "Cash_Flow": {"yearly": {}},
+                "Balance_Sheet": {"yearly": {}},
+            },
+        }
+        with patch.object(ae, "_get_fundamentals", return_value=mock):
+            data = json.loads(ae._eodhd_snapshot_for_tool("TST", "full"))
+        self.assertEqual(data["quarterly_income_count"], 12)
 
     def test_eodhd_adjust_gross_profit(self) -> None:
         self.assertAlmostEqual(ae._eodhd_adjust_gross_profit(100.0, 100.0, 30.0), 70.0)

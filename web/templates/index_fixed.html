@@ -684,7 +684,7 @@ async function startAnalysis() {
   btn.disabled = true;
   btn.textContent = 'Scanning…';
   try {
-    const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:3804, workers:48}) });
+    const r = await fetch('/api/analysis/run', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({target:9500, workers:48}) });
     const d = await r.json();
     if (d.error) {
       if (d.error.toLowerCase().includes('already running')) {

@@ -369,9 +369,9 @@ def execute_chat_tool(
             return json.dumps(data, ensure_ascii=False)[:12000]
 
         if name == "eodhd_fundamentals_snapshot":
-            detail = args.get("detail_level") or "summary"
-            if detail not in ("summary", "financials"):
-                detail = "summary"
+            detail = args.get("detail_level") or "financials"
+            if detail not in ("summary", "financials", "full"):
+                detail = "financials"
             sym = default_symbol or str(args.get("symbol") or "")
             return eodhd_snapshot(sym, detail)
 
