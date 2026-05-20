@@ -29,9 +29,10 @@ The app loads the latest `outputs/scaled_analysis/scaled_analysis_*.jsonl` (plus
 | Variable | Purpose |
 |----------|---------|
 | `EODHD_API_KEY` | Required for web app and batch analysis |
-| `OPENAI_API_KEY` | Codex chat on company pages (optional) |
 | `EQUITY_SORTER_DATA_DIR` | Override `./data` (batch / bronze paths) |
 | `EQUITY_SORTER_OUTPUT_DIR` | Override `./outputs` |
+
+Chat uses **Sign in with ChatGPT** on company pages (OAuth tokens in `outputs/.chatgpt_session.json`), not an API key.
 
 ## Tests
 

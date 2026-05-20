@@ -3095,44 +3095,6 @@ def _eodhd_snapshot_for_tool(symbol: str, detail_level: str) -> str:
         return json.dumps({"ok": False, "error": "serialization failed"})
 
 
-def _openai_chat_round(
-    client,
-    model: str,
-    messages: list,
-    max_out: int,
-    temp: float,
-    *,
-    tools: list | None = None,
-):
-    """One completion; omits temperature or switches token param if the model rejects it."""
-    kwargs: dict = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_out,
-        "temperature": temp,
-    }
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
-    try:
-        return client.chat.completions.create(**kwargs)
-    except Exception as e1:
-        err = str(e1).lower()
-        if "temperature" in err or "unsupported" in err:
-            kwargs.pop("temperature", None)
-            try:
-                return client.chat.completions.create(**kwargs)
-            except Exception:
-                kwargs.pop("max_tokens", None)
-                kwargs["max_completion_tokens"] = max_out
-                return client.chat.completions.create(**kwargs)
-        if "max_tokens" in err or "max_completion_tokens" in err:
-            kwargs.pop("max_tokens", None)
-            kwargs["max_completion_tokens"] = max_out
-            return client.chat.completions.create(**kwargs)
-        raise
-
-
 def _chat_ndjson_line(obj: dict) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
 
@@ -3201,76 +3163,6 @@ def _chat_build_messages(c: dict, user_msg: str, history: list, max_in: int, max
     return sym, messages
 
 
-def _openai_stream_create(client, model: str, messages: list, max_out: int, temp: float | None):
-    kwargs: dict = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-        "max_tokens": max_out,
-    }
-    if temp is not None:
-        kwargs["temperature"] = temp
-    try:
-        return client.chat.completions.create(**kwargs)
-    except Exception as e1:
-        err = str(e1).lower()
-        if temp is not None and ("temperature" in err or "unsupported" in err):
-            kwargs.pop("temperature", None)
-            try:
-                return client.chat.completions.create(**kwargs)
-            except Exception:
-                kwargs.pop("max_tokens", None)
-                kwargs["max_completion_tokens"] = max_out
-                return client.chat.completions.create(**kwargs)
-        if "max_tokens" in err or "max_completion_tokens" in err:
-            kwargs.pop("max_tokens", None)
-            kwargs["max_completion_tokens"] = max_out
-            return client.chat.completions.create(**kwargs)
-        raise
-
-
-def _chat_run_tool_loop(client, model: str, messages: list, max_out: int, temp: float, sym: str, max_tool_rounds: int) -> str:
-    """Mutates messages; returns final assistant reply text."""
-    reply_text = ""
-    for _ in range(max_tool_rounds):
-        rsp = _openai_chat_round(client, model, messages, max_out, temp, tools=_CHAT_TOOLS)
-        assistant_msg = rsp.choices[0].message
-        tcalls = getattr(assistant_msg, "tool_calls", None) or []
-
-        if not tcalls:
-            reply_text = (assistant_msg.content or "").strip()
-            break
-
-        assistant_dict: dict = {"role": "assistant", "content": assistant_msg.content}
-        assistant_dict["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
-            }
-            for tc in tcalls
-        ]
-        messages.append(assistant_dict)
-
-        for tc in tcalls:
-            try:
-                args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
-            payload = _chat_tool_executor(sym)(tc.function.name, args)
-            messages.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
-
-    if not reply_text and messages:
-        for m in reversed(messages):
-            if m.get("role") == "assistant" and m.get("content"):
-                reply_text = str(m["content"]).strip()
-                break
-    if not reply_text:
-        rsp = _openai_chat_round(client, model, messages, max_out, temp, tools=None)
-        reply_text = (rsp.choices[0].message.content or "").strip()
-    return reply_text
-
-
 @app.route("/api/auth/status")
 def api_auth_status():
     return jsonify(codex_chat.auth_status(PROJECT_ROOT))
@@ -3307,18 +3199,16 @@ def _chat_tool_executor(sym: str):
 
 @app.route("/api/company/<symbol>/chat", methods=["POST"])
 def api_company_chat(symbol):
-    """Stock-aware chat via ChatGPT subscription (Codex) or legacy API key."""
+    """Stock-aware chat via ChatGPT subscription (Codex OAuth)."""
     if not _parse_symbol(symbol):
         return jsonify({"error": "Invalid symbol"}), 400
     c = get_company(symbol)
     if not c:
         return jsonify({"error": "Company not found"}), 404
 
-    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated")
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if not use_codex and not api_key:
+    if not codex_chat.auth_status(PROJECT_ROOT).get("authenticated"):
         return jsonify({
-            "error": "Sign in with ChatGPT (Ask AI panel) or set OPENAI_API_KEY on the server.",
+            "error": "Sign in with ChatGPT (Ask AI panel) to use chat.",
         }), 503
 
     body = request.get_json(silent=True) or {}
@@ -3337,34 +3227,23 @@ def api_company_chat(symbol):
     model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
 
-    max_out = min(int(os.getenv("OPENAI_CHAT_MAX_TOKENS", "512")), 8192)
-    temp = float(os.getenv("OPENAI_CHAT_TEMPERATURE", "0.35"))
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
 
     try:
-        if use_codex:
-            parts: list[str] = []
-            for ev in codex_chat.stream_codex_chat(
-                PROJECT_ROOT,
-                model=model,
-                messages=messages,
-                tools=_CHAT_TOOLS,
-                tool_executor=_chat_tool_executor(sym),
-                max_tool_rounds=max_tool_rounds,
-            ):
-                if ev.get("token"):
-                    parts.append(ev["token"])
-                if ev.get("error"):
-                    return jsonify({"error": ev["error"]}), 502
-            return jsonify({"reply": "".join(parts), "model": model, "provider": "chatgpt"})
-
-        from openai import OpenAI
-
-        client = OpenAI(api_key=api_key)
-        reply_text = _chat_run_tool_loop(
-            client, model, messages, max_out, temp, sym, max_tool_rounds,
-        )
-        return jsonify({"reply": reply_text, "model": model, "provider": "openai"})
+        parts: list[str] = []
+        for ev in codex_chat.stream_codex_chat(
+            PROJECT_ROOT,
+            model=model,
+            messages=messages,
+            tools=_CHAT_TOOLS,
+            tool_executor=_chat_tool_executor(sym),
+            max_tool_rounds=max_tool_rounds,
+        ):
+            if ev.get("token"):
+                parts.append(ev["token"])
+            if ev.get("error"):
+                return jsonify({"error": ev["error"]}), 502
+        return jsonify({"reply": "".join(parts), "model": model, "provider": "chatgpt"})
     except Exception as e:
         return jsonify({"error": f"Chat error: {e!s}"}), 502
 
@@ -3379,9 +3258,7 @@ def api_company_chat_stream(symbol):
     if not c:
         return Response(_chat_ndjson_line({"error": "Company not found", "done": True}), status=404, mimetype="application/x-ndjson")
 
-    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated")
-    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-    if not use_codex and not api_key:
+    if not codex_chat.auth_status(PROJECT_ROOT).get("authenticated"):
         return Response(
             _chat_ndjson_line({
                 "error": "Sign in with ChatGPT (Ask AI panel) to use chat.",
@@ -3404,83 +3281,22 @@ def api_company_chat_stream(symbol):
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
     model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
-    max_out = min(int(os.getenv("OPENAI_CHAT_STREAM_MAX_TOKENS", os.getenv("OPENAI_CHAT_MAX_TOKENS", "512"))), 2048)
-    temp = float(os.getenv("OPENAI_CHAT_TEMPERATURE", "0.35"))
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "4")), 8)
 
     @stream_with_context
     def gen():
         try:
-            if use_codex:
-                for ev in codex_chat.stream_codex_chat(
-                    PROJECT_ROOT,
-                    model=model,
-                    messages=messages,
-                    tools=_CHAT_TOOLS,
-                    tool_executor=_chat_tool_executor(sym),
-                    max_tool_rounds=max_tool_rounds,
-                ):
-                    yield _chat_ndjson_line(ev)
-                    if ev.get("done") or ev.get("error"):
-                        return
-                return
-
-            from openai import OpenAI
-
-            client = OpenAI(api_key=api_key)
-            msgs = [dict(m) for m in messages]
-
-            reply_text = ""
-            for _ in range(max_tool_rounds):
-                rsp = _openai_chat_round(client, model, msgs, max_out, temp, tools=_CHAT_TOOLS)
-                assistant_msg = rsp.choices[0].message
-                tcalls = getattr(assistant_msg, "tool_calls", None) or []
-
-                if not tcalls:
-                    reply_text = (assistant_msg.content or "").strip()
-                    break
-
-                tool_name = (tcalls[0].function.name or "").strip() or None
-                yield _chat_ndjson_line({"phase": "tool", **({"tool": tool_name} if tool_name else {})})
-                assistant_dict: dict = {"role": "assistant", "content": assistant_msg.content}
-                assistant_dict["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
-                    }
-                    for tc in tcalls
-                ]
-                msgs.append(assistant_dict)
-
-                for tc in tcalls:
-                    try:
-                        args = json.loads(tc.function.arguments or "{}")
-                    except json.JSONDecodeError:
-                        args = {}
-                    payload = _chat_tool_executor(sym)(tc.function.name, args)
-                    msgs.append({"role": "tool", "tool_call_id": tc.id, "content": payload})
-
-            if not reply_text and msgs:
-                for m in reversed(msgs):
-                    if m.get("role") == "assistant" and m.get("content"):
-                        reply_text = str(m["content"]).strip()
-                        break
-
-            if reply_text:
-                step = 6
-                for i in range(0, len(reply_text), step):
-                    yield _chat_ndjson_line({"token": reply_text[i : i + step]})
-            else:
-                stream = _openai_stream_create(client, model, msgs, max_out, temp)
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    piece = chunk.choices[0].delta.content
-                    if piece:
-                        yield _chat_ndjson_line({"token": piece})
-
-            yield _chat_ndjson_line({"done": True, "model": model})
+            for ev in codex_chat.stream_codex_chat(
+                PROJECT_ROOT,
+                model=model,
+                messages=messages,
+                tools=_CHAT_TOOLS,
+                tool_executor=_chat_tool_executor(sym),
+                max_tool_rounds=max_tool_rounds,
+            ):
+                yield _chat_ndjson_line(ev)
+                if ev.get("done") or ev.get("error"):
+                    return
         except Exception as e:
             yield _chat_ndjson_line({"error": str(e), "done": True})
 

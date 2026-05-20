@@ -134,19 +134,18 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         r = self.client.get("/api/company/%20/history")
         self.assertEqual(r.status_code, 400)
 
-    def test_chat_requires_openai_key(self) -> None:
-        with patch.dict(os.environ, {"OPENAI_API_KEY": ""}, clear=False):
-            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
-                r = self.client.post(
-                    "/api/company/AAPL/chat",
-                    json={"message": "What is revenue?"},
-                    content_type="application/json",
-                )
+    def test_chat_requires_chatgpt_sign_in(self) -> None:
+        with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
+            r = self.client.post(
+                "/api/company/AAPL/chat",
+                json={"message": "What is revenue?"},
+                content_type="application/json",
+            )
         self.assertEqual(r.status_code, 503)
-        self.assertIn("error", r.get_json())
+        self.assertIn("Sign in with ChatGPT", r.get_json().get("error", ""))
 
     def test_chat_requires_message(self) -> None:
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-fake"}, clear=False):
+        with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": True}):
             r = self.client.post(
                 "/api/company/AAPL/chat",
                 json={},
@@ -154,58 +153,41 @@ class AppEnhancedHistoryTests(unittest.TestCase):
             )
         self.assertEqual(r.status_code, 400)
 
-    def test_chat_success_with_mock_openai(self) -> None:
-        fake = MagicMock()
-        fake.choices = [MagicMock(message=MagicMock(content="Revenue is in the context."))]
+    def test_chat_success_with_mock_codex(self) -> None:
+        def _fake_stream(*_a, **_k):
+            yield {"token": "Revenue is in the context."}
+            yield {"done": True}
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-fake"}, clear=False):
-            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
-                with patch("openai.OpenAI") as MO:
-                    MO.return_value.chat.completions.create.return_value = fake
-                    with patch("app_enhanced._chat_run_tool_loop", return_value="Revenue is in the context."):
-                        r = self.client.post(
-                            "/api/company/AAPL/chat",
-                            json={"message": "Summarize revenue."},
-                            content_type="application/json",
-                        )
+        with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": True}):
+            with patch("app_enhanced.codex_chat.stream_codex_chat", side_effect=_fake_stream):
+                r = self.client.post(
+                    "/api/company/AAPL/chat",
+                    json={"message": "Summarize revenue."},
+                    content_type="application/json",
+                )
         self.assertEqual(r.status_code, 200, r.get_data(as_text=True))
         body = r.get_json()
         self.assertEqual(body.get("reply"), "Revenue is in the context.")
+        self.assertEqual(body.get("provider"), "chatgpt")
 
     def test_chat_stream_ndjson(self) -> None:
-        class _Msg:
-            content = "Hi stream."
-            tool_calls = None
+        def _fake_stream(*_a, **_k):
+            yield {"token": "Hi "}
+            yield {"token": "stream."}
+            yield {"done": True}
 
-        class _Choice:
-            message = _Msg()
-
-        class _Rsp:
-            choices = [_Choice()]
-
-        fake = _Rsp()
-
-        msg = MagicMock()
-        msg.content = "Hi stream."
-        msg.tool_calls = None
-        rsp = MagicMock()
-        rsp.choices = [MagicMock(message=msg)]
-
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-fake"}, clear=False):
-            with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": False}):
-                with patch("openai.OpenAI"):
-                    with patch("app_enhanced._openai_chat_round", return_value=rsp):
-                        r = self.client.post(
-                            "/api/company/AAPL/chat/stream",
-                            json={"message": "ping"},
-                            content_type="application/json",
-                        )
-                        raw = r.get_data(as_text=True)
+        with patch("app_enhanced.codex_chat.auth_status", return_value={"authenticated": True}):
+            with patch("app_enhanced.codex_chat.stream_codex_chat", side_effect=_fake_stream):
+                r = self.client.post(
+                    "/api/company/AAPL/chat/stream",
+                    json={"message": "ping"},
+                    content_type="application/json",
+                )
+                raw = r.get_data(as_text=True)
         self.assertEqual(r.status_code, 200, raw)
         self.assertEqual(r.mimetype, "application/x-ndjson")
         lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
         objs = [json.loads(ln) for ln in lines]
-        self.assertFalse(any(o.get("phase") == "thinking" for o in objs))
         tokens = "".join(o.get("token", "") for o in objs if "token" in o)
         self.assertIn("Hi stream.", tokens)
         self.assertTrue(any(o.get("done") for o in objs))
