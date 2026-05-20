@@ -20,19 +20,9 @@ Equity screener and company research UI backed by EODHD fundamentals, with batch
 3. Open http://localhost:3000 — dashboard screener and filters.  
    Company pages: http://localhost:3000/company/NVDA (charts, live US quotes, Codex chat).
 
-The server loads the latest `outputs/scaled_analysis/scaled_analysis_*.jsonl` universe (and any newer rescored overlay if present).
+On the dashboard, use **Universe scan** (top nav) to refresh fundamentals and rescore the saved symbol list. Progress is shown in the modal; the server reloads data when the run finishes.
 
-## Refresh the universe (batch scoring)
-
-Re-score companies from EODHD and write a new analysis file:
-
-```bash
-python scripts/scale_analysis_1000.py --target 1000 --workers 32
-```
-
-Output lands under `outputs/scaled_analysis/`. Restart the web server to pick up the new file.
-
-Other maintenance scripts (optional): `scripts/rescore_companies.py`, `scripts/discover_companies.py`, `scripts/validate_universe_smoke.py`.
+The app loads the latest `outputs/scaled_analysis/scaled_analysis_*.jsonl` (plus any newer rescored overlay).
 
 ## Environment
 
@@ -55,6 +45,6 @@ python -m unittest discover -s tests -p "test_*.py"
 |------|------|
 | `web/` | Flask app, templates, live quote + chart APIs |
 | `src/equity_sorter/` | Metrics, caching, EODHD client |
-| `scripts/` | Batch ingest, rescoring, universe tools |
+| `scripts/` | CLI tools (same pipeline as Universe scan; optional) |
 | `outputs/` | Analysis JSONL consumed by the app (gitignored) |
 | `docs/` | Older design notes and source research (optional reading) |
