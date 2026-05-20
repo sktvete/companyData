@@ -389,6 +389,17 @@ def calculate_comprehensive_metrics(financial_data: Dict[str, Any],
             else:
                 metrics['revenue_acceleration'] = 0.0
 
+    # Latest reported quarter vs same quarter one year ago (more short-term than TTM YoY).
+    if len(income_statement) >= 5:
+        rev_q0 = sg(income_statement[0], _I_REVENUE)
+        rev_q4 = sg(income_statement[4], _I_REVENUE)
+        if rev_q0 > 0 and rev_q4 > 0:
+            metrics['latest_quarter_revenue_growth'] = sd(rev_q0 - rev_q4, rev_q4)
+        eps_q0 = sg(income_statement[0], _I_EPS_DILUTED)
+        eps_q4 = sg(income_statement[4], _I_EPS_DILUTED)
+        if eps_q0 > 0 and eps_q4 > 0:
+            metrics['latest_quarter_eps_growth'] = sd(eps_q0 - eps_q4, eps_q4)
+
     # ── Revenue Growth Consistency ───────────────────────────────────────────
     # Compute rolling annual (TTM) revenue growth rates across available years.
     # A low coefficient of variation (stddev / |mean|) signals stable compounders;

@@ -17,12 +17,16 @@ import time
 import unicodedata
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request, Response, stream_with_context
-from datetime import datetime
+from datetime import datetime, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import requests as _req
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+_SCRIPTS_DIR = str(PROJECT_ROOT / "scripts")
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(1, _SCRIPTS_DIR)
 
 from equity_sorter.io_utils import read_jsonl, read_json
 from equity_sorter.cache import PriceStore
@@ -50,6 +54,11 @@ def _inject_glossary():
 # ── Global state ──────────────────────────────────────────────────────────────
 companies: list[dict] = []
 company_lookup: dict[str, dict] = {}
+screener_rank_by_symbol: dict[str, int] = {}
+_companies_listing_sorted: bool = False
+momentum_rank_by_symbol: dict[str, int] = {}
+_momentum_order_index: dict[str, int] = {}
+_companies_momentum_sorted: bool = False
 DATA_SOURCE = "none"
 DATA_FILE: Path | None = None  # primary universe jsonl (e.g. scaled)
 DATA_OVERLAY_FILE: Path | None = None  # rescored jsonl applied on top, if any
@@ -63,6 +72,19 @@ def _latest_nonempty(directory: Path, pattern: str) -> Path | None:
         if data:
             return f
     return None
+
+
+def _largest_nonempty(directory: Path, pattern: str) -> Path | None:
+    """Return the non-empty file with the most rows (primary universe, not a one-off batch)."""
+    best_f: Path | None = None
+    best_n = 0
+    for f in directory.glob(pattern):
+        data = read_jsonl(f)
+        n = len(data)
+        if n > best_n:
+            best_n = n
+            best_f = f
+    return best_f
 
 
 def _dedupe_rows_best_score(rows: list[dict]) -> list[dict]:
@@ -81,15 +103,119 @@ def _dedupe_rows_best_score(rows: list[dict]) -> list[dict]:
     )
 
 
+_calculate_scores_fn = None
+
+
+def _merge_dict_fieldwise(
+    base: dict | None,
+    patch: dict | None,
+    *,
+    skip_zero_for: frozenset[str] | None = None,
+) -> dict:
+    """Shallow field merge; skip None/empty and optional zero placeholders from stale overlays."""
+    out = dict(base or {})
+    if not patch:
+        return out
+    skip = skip_zero_for or frozenset()
+    for k, v in patch.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        if k in skip and isinstance(v, (int, float)) and float(v) == 0.0:
+            continue
+        out[k] = v
+    return out
+
+
+def _refresh_investment_scores(c: dict) -> bool:
+    """Recompute Q/V/G/S from financial_metrics (PEG-aware value score)."""
+    global _calculate_scores_fn
+    metrics = c.get("financial_metrics")
+    if not metrics or not isinstance(metrics, dict):
+        return False
+    if _calculate_scores_fn is None:
+        from scale_analysis_1000 import calculate_investment_scores as _fn
+
+        _calculate_scores_fn = _fn
+    scores = _calculate_scores_fn(
+        metrics,
+        is_primary_listing=bool(c.get("is_primary_listing", True)),
+        sector=str(c.get("sector") or ""),
+        industry=str(c.get("industry") or ""),
+    )
+    c["investment_scores"] = scores
+    return True
+
+
+def _status_print(msg: str) -> None:
+    """Print startup status (run_server.py may wrap sys.stdout)."""
+    stream = getattr(sys, "__stdout__", None) or sys.stdout
+    try:
+        print(msg, file=stream, flush=True)
+    except (ValueError, OSError):
+        pass
+
+
+def _refresh_all_investment_scores(rows: list[dict]) -> int:
+    t0 = time.perf_counter()
+    n = 0
+    for c in rows:
+        if _refresh_investment_scores(c):
+            n += 1
+    ms = (time.perf_counter() - t0) * 1000
+    _status_print(f"[OK] Refreshed investment_scores for {n} companies ({ms:.0f} ms)")
+    return n
+
+
+def _inject_analyst_ratings(rows: list[dict]) -> None:
+    """Back-fill EODHD buy/hold/sell from fundamentals cache (no Yahoo at startup)."""
+    cache_dir = PROJECT_ROOT / "outputs" / "fundamentals_cache"
+    if not cache_dir.is_dir():
+        return
+    from eodhd_analyst import extract_analyst_ratings, has_consensus_votes
+
+    patched = 0
+    stripped = 0
+    for c in rows:
+        stored = c.get("analyst_ratings") or {}
+        if has_consensus_votes(stored) and not stored.get("partial"):
+            continue
+        sym = str(c.get("symbol") or "").upper()
+        if not sym:
+            continue
+        if stored.get("partial"):
+            c.pop("analyst_ratings", None)
+            stripped += 1
+        fp = cache_dir / f"{sym}.json"
+        if not fp.is_file():
+            continue
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        extracted = extract_analyst_ratings(data)
+        if has_consensus_votes(extracted):
+            c["analyst_ratings"] = extracted
+            patched += 1
+    if patched or stripped:
+        print(f"[OK] Analyst inject: {patched} EODHD consensus, {stripped} estimate-only rows cleared")
+
+
 def _inject_eps_growth(rows: list[dict]) -> None:
-    """Back-fill eps_growth from EODHD Highlights for rows that are missing it."""
+    """Back-fill eps_growth and latest-quarter revenue growth from EODHD Highlights."""
     cache_dir = PROJECT_ROOT / "outputs" / "fundamentals_cache"
     if not cache_dir.is_dir():
         return
     patched = 0
+    rev_patched = 0
     for c in rows:
         m = c.get("financial_metrics") or c.get("metrics") or {}
-        if m.get("eps_growth"):
+        if not isinstance(m, dict):
+            continue
+        need_eps = not m.get("eps_growth")
+        need_rev_q = m.get("latest_quarter_revenue_growth") is None
+        if not need_eps and not need_rev_q:
             continue
         sym = c.get("symbol", "")
         fp = cache_dir / f"{sym}.json"
@@ -97,16 +223,28 @@ def _inject_eps_growth(rows: list[dict]) -> None:
             continue
         try:
             data = json.loads(fp.read_text(encoding="utf-8"))
-            val = (data.get("Highlights") or {}).get("QuarterlyEarningsGrowthYOY")
+        except Exception:
+            continue
+        hl = data.get("Highlights") or {}
+        if need_eps:
+            val = hl.get("QuarterlyEarningsGrowthYOY")
             if val is not None and val != "":
                 eg = float(val) if isinstance(val, (int, float)) else float(str(val).strip())
                 if eg != 0.0:
                     m["eps_growth"] = eg
                     patched += 1
-        except Exception:
-            pass
-    if patched:
-        print(f"[OK] Injected eps_growth for {patched} companies from EODHD Highlights")
+        if need_rev_q:
+            rv = hl.get("QuarterlyRevenueGrowthYOY")
+            if rv is not None and rv != "":
+                rq = float(rv) if isinstance(rv, (int, float)) else float(str(rv).strip())
+                if rq != 0.0:
+                    m["latest_quarter_revenue_growth"] = rq
+                    rev_patched += 1
+    if patched or rev_patched:
+        print(
+            f"[OK] Highlights inject: eps_growth={patched}, "
+            f"latest_quarter_revenue_growth={rev_patched}"
+        )
 
 
 def load_data() -> bool:
@@ -116,11 +254,13 @@ def load_data() -> bool:
     ``scaled_analysis_*.jsonl`` — we always keep the scaled universe and only patch
     ``investment_scores`` / ``name`` from rescored for matching symbols.
     """
-    global companies, company_lookup, DATA_SOURCE, DATA_FILE, DATA_OVERLAY_FILE, sector_valuation_medians
+    global companies, company_lookup, screener_rank_by_symbol, _companies_listing_sorted
+    global momentum_rank_by_symbol, _momentum_order_index, _companies_momentum_sorted
+    global DATA_SOURCE, DATA_FILE, DATA_OVERLAY_FILE, sector_valuation_medians
 
     output_dir = PROJECT_ROOT / "outputs"
 
-    scaled_f = _latest_nonempty(output_dir / "scaled_analysis", "scaled_analysis_*.jsonl")
+    scaled_f = _largest_nonempty(output_dir / "scaled_analysis", "scaled_analysis_*.jsonl")
     rescored_f = _latest_nonempty(output_dir / "rescored_analysis", "rescored_*.jsonl")
     final_f = _latest_nonempty(output_dir / "final_working_analysis", "*analysis_*.jsonl")
 
@@ -141,6 +281,11 @@ def load_data() -> bool:
     else:
         companies = []
         company_lookup = {}
+        screener_rank_by_symbol = {}
+        _companies_listing_sorted = False
+        momentum_rank_by_symbol = {}
+        _momentum_order_index = {}
+        _companies_momentum_sorted = False
         sector_valuation_medians = {}
         DATA_SOURCE = "none"
         DATA_FILE = None
@@ -149,6 +294,24 @@ def load_data() -> bool:
         return False
 
     base_rows = _dedupe_rows_best_score(base_rows)
+    def _merge_overlay_jsonl(filename: str, label: str) -> None:
+        nonlocal base_rows
+        path = output_dir / filename
+        if not path.is_file():
+            return
+        rows = read_jsonl(path)
+        if not rows:
+            return
+        by_sym = {str(c["symbol"]).upper(): c for c in base_rows if c.get("symbol")}
+        for c in rows:
+            sym = str(c.get("symbol") or "").upper()
+            if sym:
+                by_sym[sym] = c
+        base_rows = list(by_sym.values())
+        print(f"[OK] Merged {len(rows)} {label} row(s) from {path.name}")
+
+    _merge_overlay_jsonl("extra_companies.jsonl", "extra universe")
+    _merge_overlay_jsonl("nordic_companies.jsonl", "Nordic")
     rescored_map = {c["symbol"]: c for c in rescored_rows} if rescored_rows else {}
     overlay_used = False
     # Only apply overlay if it's NEWER than the base data (prevents stale pre-TTM scores)
@@ -160,12 +323,21 @@ def load_data() -> bool:
                 sym = c["symbol"]
                 if sym in rescored_map:
                     rc = rescored_map[sym]
-                    c["investment_scores"] = dict(rc.get("investment_scores") or c.get("investment_scores", {}))
                     if rc.get("name"):
                         c["name"] = rc["name"]
+                    c["financial_metrics"] = _merge_dict_fieldwise(
+                        c.get("financial_metrics"),
+                        rc.get("financial_metrics"),
+                    )
+                    c["company_info"] = _merge_dict_fieldwise(
+                        c.get("company_info"),
+                        rc.get("company_info"),
+                    )
                     overlay_used = True
         else:
             print(f"[SKIP] Overlay {rescored_f.name} is older than base — not applying")
+
+    _refresh_all_investment_scores(base_rows)
 
     companies = sorted(
         base_rows,
@@ -178,9 +350,14 @@ def load_data() -> bool:
         _load_margin_history(syms_to_load)
     # Inject eps_growth from EODHD Highlights where stored metrics lack it
     _inject_eps_growth(companies)
-    # Re-rank for dashboard default order: prefer scale + margin reliability over raw model peak.
-    companies = sorted(companies, key=_compounder_list_score, reverse=True)
+    _inject_analyst_ratings(companies)
+    # Lookup must exist before listing sort: _compounder_list_score applies duplicate-share penalties.
     company_lookup = {c["symbol"]: c for c in companies}
+    # Re-rank for dashboard default order: prefer scale + margin reliability over raw model peak.
+    companies = sorted(companies, key=_listing_sort_key)
+    screener_rank_by_symbol = {c["symbol"]: i + 1 for i, c in enumerate(companies)}
+    _companies_listing_sorted = True
+    _rebuild_momentum_ranks()
     sector_valuation_medians = build_sector_valuation_medians(companies)
 
     if overlay_used and base_label == "scaled":
@@ -360,6 +537,11 @@ def _long_term_growth_factor(m: dict, s: dict) -> float:
     # Sustained runway: both 3y and 4y revenue CAGRs solid and not collapsing.
     if rev4 >= 0.06 and rev3 >= 0.05 and rev3 >= rev4 * 0.65:
         blended = min(1.0, blended * 1.10)
+    rev1y = float(m.get("revenue_growth_1y") or 0.0)
+    if rev1y >= 0.25:
+        blended = min(1.0, blended * 1.10)
+    elif rev1y >= 0.15:
+        blended = min(1.0, blended * 1.06)
     # Penalize revenue shrinking over the long window even if one year bounced.
     if rev4 < 0 or rev3 < 0:
         blended *= 0.55
@@ -385,6 +567,149 @@ def _per_share_growth_distortion_factor(m: dict) -> float:
     if gap <= 0.32:
         return 0.84
     return 0.78
+
+
+def _rebuild_screener_ranks() -> None:
+    """Rebuild universe rank map after tests or in-memory company list edits."""
+    global screener_rank_by_symbol, _companies_listing_sorted
+    screener_rank_by_symbol = {c["symbol"]: i + 1 for i, c in enumerate(companies)}
+    _companies_listing_sorted = False
+
+
+def _screener_rank(symbol: str) -> int | None:
+    return screener_rank_by_symbol.get((symbol or "").strip().upper())
+
+
+def _cached_listing_score(c: dict) -> float:
+    """Listing score computed once at load; avoid O(n) recompute on every API page."""
+    cached = c.get("_listing_score")
+    if cached is not None:
+        return float(cached)
+    val = _compounder_list_score(c)
+    c["_listing_score"] = val
+    return val
+
+
+def _listing_sort_key(c: dict) -> tuple[float, str]:
+    return (-_cached_listing_score(c), (c.get("symbol") or ""))
+
+
+def _growth_pct_to_unit(g: float, cap: float = 0.60) -> float:
+    """Map a YoY growth ratio (0.25 = 25%) to 0–1."""
+    x = float(g or 0.0)
+    if not math.isfinite(x) or x <= 0:
+        return 0.0
+    return _clamp01(x / cap)
+
+
+def _short_term_growth_score(c: dict) -> float:
+    """Short-term high-growth rank (0–20) from quarterly-derived metrics already in the universe.
+
+    Uses TTM revenue/EPS growth, revenue acceleration (recent 4Q vs prior 4Q), and the latest
+    reported quarter YoY when available. Designed to surface names for deeper quarterly review
+    without re-parsing 4k+ filings on every dashboard request.
+    """
+    m = c.get("financial_metrics") or {}
+    min_q = int((c.get("data_quality") or {}).get("min_quarters", 0) or 0)
+
+    rev_ttm = float(m.get("revenue_growth_1y") or 0.0)
+    rev_q = float(m.get("latest_quarter_revenue_growth") or 0.0)
+    rev_near = max(rev_ttm, rev_q) if (rev_q > 0 or rev_ttm <= 0) else rev_ttm
+
+    rev_accel = float(m.get("revenue_acceleration") or 0.0)
+    eps_g = float(m.get("eps_growth") or 0.0)
+    ni_g = float(m.get("net_income_growth") or 0.0)
+    earn_g = max(eps_g, ni_g)
+
+    if rev_near < 0.05 and earn_g > 0.40:
+        earn_g = min(0.15, rev_near * 2.0 + 0.05)
+
+    u_rev = _growth_pct_to_unit(rev_near, 0.65)
+    u_accel = _clamp01((rev_accel + 0.08) / 0.40)
+    u_earn = _growth_pct_to_unit(earn_g, 0.75)
+    u_ttm = _growth_pct_to_unit(rev_ttm, 0.55)
+
+    base = (0.38 * u_rev) + (0.24 * u_accel) + (0.26 * u_earn) + (0.12 * u_ttm)
+
+    if rev_near < 0.10 and rev_accel < 0.02 and earn_g < 0.12:
+        base *= 0.30
+    if rev_near < 0:
+        base *= 0.12
+
+    conf = 1.0
+    if min_q < 4:
+        conf *= 0.50
+    elif min_q < 8:
+        conf *= 0.72
+    elif min_q >= 12:
+        conf = min(1.0, conf * 1.04)
+
+    red = int(m.get("red_flag_count") or 0)
+    if red >= 3:
+        conf *= 0.68
+    elif red >= 1:
+        conf *= 0.88
+
+    gm_exp = float(m.get("gross_margin_expansion") or 0.0)
+    if gm_exp > 0.02:
+        base = min(1.0, base * 1.05)
+
+    return round(base * conf * 20.0, 2)
+
+
+def _cached_momentum_score(c: dict) -> float:
+    cached = c.get("_momentum_score")
+    if cached is not None:
+        return float(cached)
+    val = _short_term_growth_score(c)
+    c["_momentum_score"] = val
+    return val
+
+
+def _momentum_sort_key(c: dict) -> tuple[float, str]:
+    return (-_cached_momentum_score(c), (c.get("symbol") or ""))
+
+
+def _rebuild_momentum_ranks() -> None:
+    """Precompute momentum order for fast dashboard sort (quarterly-growth screener)."""
+    global momentum_rank_by_symbol, _momentum_order_index, _companies_momentum_sorted
+    ordered = sorted(companies, key=_momentum_sort_key)
+    momentum_rank_by_symbol = {
+        (c.get("symbol") or "").strip().upper(): i + 1 for i, c in enumerate(ordered)
+    }
+    _momentum_order_index = {
+        (c.get("symbol") or "").strip().upper(): i for i, c in enumerate(ordered)
+    }
+    _companies_momentum_sorted = True
+
+
+def _momentum_rank(symbol: str) -> int | None:
+    return momentum_rank_by_symbol.get((symbol or "").strip().upper())
+
+
+def _momentum_score_breakdown(c: dict) -> dict:
+    m = c.get("financial_metrics") or {}
+    rev_ttm = float(m.get("revenue_growth_1y") or 0.0)
+    rev_q = float(m.get("latest_quarter_revenue_growth") or 0.0)
+    return {
+        "momentum_score": _cached_momentum_score(c),
+        "momentum_rank": _momentum_rank(c.get("symbol") or ""),
+        "revenue_growth_ttm_pct": round(rev_ttm * 100, 1),
+        "revenue_growth_latest_q_pct": round(rev_q * 100, 1),
+        "revenue_acceleration_pct": round(float(m.get("revenue_acceleration") or 0) * 100, 1),
+        "eps_growth_ttm_pct": round(float(m.get("eps_growth") or 0) * 100, 1),
+        "min_quarters": int((c.get("data_quality") or {}).get("min_quarters", 0) or 0),
+    }
+
+
+def _analyst_for_list_api(c: dict) -> dict | None:
+    """Dashboard rows: stored consensus only — never hit Yahoo on list requests."""
+    from eodhd_analyst import has_consensus_votes
+
+    ar = c.get("analyst_ratings") or {}
+    if has_consensus_votes(ar) and not ar.get("partial"):
+        return _fmt_analyst(ar)
+    return None
 
 
 def _compounder_list_score(c: dict) -> float:
@@ -441,8 +766,8 @@ def _compounder_list_score(c: dict) -> float:
     if rev_long_for_g < 0.12 and earn_long_for_g > 0.25:
         g = min(g, _cagr_to_unit(rev_long_for_g) + 0.10)
 
-    # Weights: value ↑ safety ↑ for margin of safety; growth still material for 3y upside; quality via blend + confidence.
-    base = (0.18 * q) + (0.24 * g) + (0.30 * sf) + (0.28 * v)
+    # Weights: growth + stability matter for 3y upside; value/safety for margin of safety.
+    base = (0.16 * q) + (0.28 * g) + (0.28 * sf) + (0.28 * v)
     base = max(base, float(s.get("overall_score", 0.0) or 0.0) / 20.0 * 0.7)
 
     rev = float(m.get("revenue", 0.0) or 0.0)
@@ -644,9 +969,47 @@ def _parse_symbol(raw: str) -> str | None:
     return s
 
 
+def _normalize_exchange_code(ex: str) -> str:
+    """Map listing metadata to EODHD suffix (OL, ST, CO, HE, US)."""
+    u = (ex or "US").strip().upper()
+    if u in ("OL", "OS", "XOSL", "OSE"):
+        return "OL"
+    if u in ("ST", "STO", "XSTO", "SSE"):
+        return "ST"
+    if u in ("CO", "CPH", "XCSE", "CPSE"):
+        return "CO"
+    if u in ("HE", "HEL", "XHEL"):
+        return "HE"
+    return u or "US"
+
+
+def _eodhd_ticker(symbol: str, company: dict | None = None) -> str | None:
+    """EODHD symbol with exchange suffix (AAPL.US, EQNR.OL, NOVO-B.CO)."""
+    sym = _parse_symbol(symbol)
+    if not sym:
+        return None
+    if "." in sym:
+        base, suf = sym.rsplit(".", 1)
+        if base and len(suf) <= 6 and suf in ("US", "OL", "ST", "CO", "HE"):
+            return sym
+    ex = _normalize_exchange_code(
+        (company or {}).get("exchange") or (company or {}).get("eodhd_exchange") or "US"
+    )
+    if ex == "US":
+        return f"{sym}.US"
+    return f"{sym}.{ex}"
+
+
 def get_company(symbol: str) -> dict | None:
     ps = _parse_symbol(symbol)
-    return company_lookup.get(ps) if ps else None
+    if not ps:
+        return None
+    if ps in company_lookup:
+        return company_lookup[ps]
+    if "." in ps:
+        base = ps.rsplit(".", 1)[0]
+        return company_lookup.get(base)
+    return None
 
 
 def _lynch_peg(pe_display: float, m: dict) -> dict[str, float | str] | None:
@@ -767,6 +1130,9 @@ def filter_sort(sector=None, category=None, min_score=0.0,
             else:
                 roic_p = rr
         rc = _fnum(s.get("revenue_cagr_3y_pct"))
+        r1 = _fnum(c.get("rev_growth_1y_pct"))
+        if r1 == 0.0:
+            r1 = _fnum((m.get("revenue_growth_1y") or 0) * 100.0)
         oe = _fnum(s.get("oeps_cagr_pct"))
         # Tie-break %s are hints only; uncapped bad rows (double-counted ROIC, FX slips)
         # should not reorder the whole table.
@@ -775,7 +1141,7 @@ def filter_sort(sector=None, category=None, min_score=0.0,
                 return 0.0
             return max(lo, min(hi, x))
 
-        return (g, max(_clip_pct(roic_p), _clip_pct(rc), _clip_pct(oe)))
+        return (g, max(_clip_pct(roic_p), _clip_pct(rc), _clip_pct(r1), _clip_pct(oe)))
 
     def _pe_key(c: dict) -> float:
         ci = c.get("company_info") or {}
@@ -795,7 +1161,8 @@ def filter_sort(sector=None, category=None, min_score=0.0,
 
     key_map = {
         "overall_score":  lambda c: _fnum(_score(c)),
-        "listing_score":  lambda c: _compounder_list_score(c),
+        "listing_score":  _cached_listing_score,
+        "momentum_score": _cached_momentum_score,
         "custom_score":   lambda c: weighted_blend_score(c, wq, wv, wg, ws, wa),
         "quality_score":  lambda c: _fnum((c.get("investment_scores") or {}).get("quality_score")),
         "value_score":    lambda c: _fnum((c.get("investment_scores") or {}).get("value_score")),
@@ -811,14 +1178,55 @@ def filter_sort(sector=None, category=None, min_score=0.0,
         "peg_ratio":      _peg_key,
         "oeps_cagr":      lambda c: _fnum((c.get("investment_scores") or {}).get("oeps_cagr_pct")),
         "revenue_cagr":   lambda c: _fnum((c.get("investment_scores") or {}).get("revenue_cagr_3y_pct")),
-        "analyst":        lambda c: _fnum(
-            (c.get("analyst_ratings") or {}).get("Rating")
-            or (c.get("analyst_ratings") or {}).get("rating"),
+        "analyst":        lambda c: (
+            _fnum(
+                (c.get("analyst_ratings") or {}).get("Rating")
+                or (c.get("analyst_ratings") or {}).get("rating"),
+            )
+            if not (c.get("analyst_ratings") or {}).get("partial")
+            else _fnum((c.get("analyst_ratings") or {}).get("total_analysts")) * 0.01
         ),
     }
     key_fn = key_map.get(sort_by, key_map["listing_score"])
-    result = sorted(result, key=key_fn, reverse=(so == "desc"))
+    if not (
+        sort_by == "listing_score"
+        and so == "desc"
+        and _companies_listing_sorted
+        and _rows_keep_listing_order(result)
+    ) and not (
+        sort_by == "momentum_score"
+        and so == "desc"
+        and _companies_momentum_sorted
+        and _rows_keep_momentum_order(result)
+    ):
+        result = sorted(result, key=key_fn, reverse=(so == "desc"))
     return result
+
+
+def _rows_keep_momentum_order(rows: list[dict]) -> bool:
+    if not rows or not _momentum_order_index:
+        return True
+    last = -1
+    for c in rows:
+        i = _momentum_order_index.get((c.get("symbol") or "").strip().upper(), -1)
+        if i < last:
+            return False
+        last = i
+    return True
+
+
+def _rows_keep_listing_order(rows: list[dict]) -> bool:
+    """True when row order matches the pre-sorted universe (filters only, no reorder)."""
+    if not rows:
+        return True
+    idx = {c["symbol"]: i for i, c in enumerate(companies)}
+    last = -1
+    for c in rows:
+        i = idx.get(c.get("symbol"), -1)
+        if i < last:
+            return False
+        last = i
+    return True
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
@@ -877,7 +1285,7 @@ def api_summary():
         "top_overall": {
             "symbol": top_overall.get("symbol"),
             "score": _score(top_overall),
-            "listing_score": round(_compounder_list_score(top_overall), 2) if top_overall else 0.0,
+            "listing_score": round(_cached_listing_score(top_overall), 2) if top_overall else 0.0,
         },
         "top_growth": {
             "symbol": top_growth.get("symbol"),
@@ -929,7 +1337,10 @@ def api_companies():
             "name":          c.get("name", c["symbol"]),
             "sector":        c.get("sector", "Unknown"),
             "overall_score": s.get("overall_score", 0),
-            "listing_score": _compounder_list_score(c),
+            "listing_score": round(_cached_listing_score(c), 2),
+            "momentum_score": round(_cached_momentum_score(c), 2),
+            "screener_rank": _screener_rank(c["symbol"]),
+            "momentum_rank": _momentum_rank(c["symbol"]),
             "custom_score":  round(weighted_blend_score(c, wq, wv, wg, ws, wa), 4),
             "quality_score": s.get("quality_score", 0),
             "value_score":   s.get("value_score", 0),
@@ -958,7 +1369,7 @@ def api_companies():
             "market_cap_b":  round(ci.get("market_cap", 0) / 1e9, 2),
             "market_cap_fmt": _format_usd_compact(ci.get("market_cap", 0)),
             "data_quality":  c.get("data_quality", {}).get("quality", "N/A"),
-            "analyst_ratings": _fmt_analyst(c.get("analyst_ratings", {})),
+            "analyst_ratings": _analyst_for_list_api(c),
             # Factor columns
             "rev_growth_1y_pct":  round(m.get("revenue_growth_1y", 0) * 100, 1),
             "earnings_growth_1y_pct": round(m.get("eps_growth", 0) * 100, 1),
@@ -984,17 +1395,78 @@ def api_companies():
         "use_custom_weights": use_custom,
     })
 
+
+@app.route("/api/screener/high-growth-shortlist")
+def api_high_growth_shortlist():
+    """Top names by short-term quarterly growth score — candidates for deeper report review."""
+    try:
+        limit = max(1, min(int(request.args.get("limit", 200)), 500))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        min_score = float(request.args.get("min_score", 8.0))
+    except (TypeError, ValueError):
+        min_score = 8.0
+    try:
+        min_rev_pct = float(request.args.get("min_rev_growth_pct", 15.0))
+    except (TypeError, ValueError):
+        min_rev_pct = 15.0
+    min_rev = min_rev_pct / 100.0
+
+    pool = []
+    for c in companies:
+        m = c.get("financial_metrics") or {}
+        rev_ttm = float(m.get("revenue_growth_1y") or 0.0)
+        rev_q = float(m.get("latest_quarter_revenue_growth") or 0.0)
+        if max(rev_ttm, rev_q) < min_rev:
+            continue
+        ms = _cached_momentum_score(c)
+        if ms < min_score:
+            continue
+        row = {
+            "symbol": c.get("symbol"),
+            "name": c.get("name", c.get("symbol")),
+            "sector": c.get("sector", "Unknown"),
+            **_momentum_score_breakdown(c),
+        }
+        pool.append(row)
+    pool.sort(key=lambda r: (-r["momentum_score"], r.get("symbol") or ""))
+    page = pool[:limit]
+    return jsonify({
+        "candidates": page,
+        "total_qualified": len(pool),
+        "limit": limit,
+        "min_score": min_score,
+        "min_rev_growth_pct": min_rev_pct,
+        "description": (
+            "Pre-screened from quarterly TTM and latest-quarter growth already in the universe. "
+            "Use company pages for full quarterly report timelines."
+        ),
+    })
+
+
 def _fmt_analyst(ar: dict) -> dict | None:
     if not ar:
         return None
-    r = ar.get("Rating") or ar.get("rating")
-    if not r:
+    from eodhd_analyst import has_consensus_votes
+
+    if ar.get("partial") and not has_consensus_votes(ar):
         return None
+
     strong_buy = int(ar.get("StrongBuy") or ar.get("strong_buy") or 0)
     buy = int(ar.get("Buy") or ar.get("buy") or 0)
     hold = int(ar.get("Hold") or ar.get("hold") or 0)
     sell = int(ar.get("Sell") or ar.get("sell") or 0)
     strong_sell = int(ar.get("StrongSell") or ar.get("strong_sell") or 0)
+    total = strong_buy + buy + hold + sell + strong_sell
+
+    r = ar.get("Rating") if ar.get("Rating") is not None else ar.get("rating")
+    if r is None or str(r).strip() in ("", "0", "0.0"):
+        if total < 1:
+            return None
+        weighted = (5 * strong_buy + 4 * buy + 3 * hold + 2 * sell + 1 * strong_sell) / total
+        r = weighted
+
     rr = float(r)
     if rr >= 4.5:
         detail = "Strong Buy"
@@ -1014,9 +1486,27 @@ def _fmt_analyst(ar: dict) -> dict | None:
         "hold":        hold,
         "sell":        sell,
         "strong_sell": strong_sell,
-        "total_analysts": strong_buy + buy + hold + sell + strong_sell,
+        "total_analysts": total,
         "rating_detail": detail,
+        "partial": False,
+        "source": ar.get("source") or "eodhd",
     }
+
+
+def _analyst_ratings_for_company(c: dict) -> dict | None:
+    """Buy/hold/sell consensus: EODHD, then primary listing, then Yahoo Finance."""
+    from eodhd_analyst import has_consensus_votes, resolve_consensus_analyst_ratings
+
+    sym = str(c.get("symbol") or "").upper()
+    if not sym:
+        return None
+    stored = c.get("analyst_ratings")
+    if has_consensus_votes(stored) and not stored.get("partial"):
+        return stored
+
+    fundamentals = _read_fundamentals_cache_file(sym)
+    ar = resolve_consensus_analyst_ratings(sym, fundamentals=fundamentals, stored=stored)
+    return ar if has_consensus_votes(ar) else None
 
 
 _CACHE_DIR  = PROJECT_ROOT / "outputs" / "fundamentals_cache"
@@ -1044,6 +1534,184 @@ def _safe_float(x, default: float = 0.0) -> float:
         return float(str(x).strip().replace(",", ""))
     except (TypeError, ValueError):
         return default
+
+
+_CHART_MONEY_SCALARS = (
+    "revenue_usd", "revenue_b",
+    "net_income_usd", "net_income_b",
+    "op_income_usd", "op_income_b",
+    "ocf_usd", "ocf_b",
+    "capex_usd", "capex_b",
+    "fcf_usd", "fcf_b",
+    "owner_earnings_usd", "owner_earnings_b",
+)
+
+
+def _statement_currency(d: dict) -> str:
+    """Currency on filed income statements (may differ from ADR General.CurrencyCode)."""
+    inc_y = (d.get("Financials") or {}).get("Income_Statement", {}).get("yearly") or {}
+    for k in sorted(inc_y.keys(), reverse=True):
+        c = (inc_y[k].get("currency_symbol") or "").strip().upper()
+        if c:
+            return c
+    return ((d.get("General") or {}).get("CurrencyCode") or "USD").strip().upper()
+
+
+_FX_TO_USD_CACHE: dict[str, tuple[float, float]] = {}
+
+
+def _local_to_usd_factor(ccy: str) -> tuple[float, str | None]:
+    """Multiply local-currency amounts by factor to get USD (e.g. TWD × 0.0317)."""
+    ccy = (ccy or "USD").strip().upper()
+    if ccy in ("USD", ""):
+        return 1.0, None
+    now = time.time()
+    cached = _FX_TO_USD_CACHE.get(ccy)
+    if cached and now - cached[1] < 12 * 3600:
+        return cached[0], f"Financials converted from {ccy} to USD"
+
+    api_key = (os.getenv("EODHD_API_KEY") or "").strip()
+    factor = 0.0
+    if api_key:
+        try:
+            resp = _req.get(
+                f"https://eodhd.com/api/real-time/{ccy}USD.FOREX",
+                params={"api_token": api_key, "fmt": "json"},
+                timeout=12,
+            )
+            if resp.status_code == 200:
+                factor = _safe_float((resp.json() or {}).get("close"))
+        except Exception:
+            factor = 0.0
+    if factor <= 0:
+        fallbacks = {"TWD": 0.0317, "SEK": 0.095, "NOK": 0.092, "DKK": 0.14, "KRW": 0.00072}
+        factor = fallbacks.get(ccy, 0.0)
+    if factor <= 0:
+        return 1.0, None
+    _FX_TO_USD_CACHE[ccy] = (factor, now)
+    return factor, f"Financials converted from {ccy} to USD (EODHD {ccy}USD)"
+
+
+def _looks_like_local_ccy_amount(usd_val: float | None, threshold: float = 250e9) -> bool:
+    """Values above ~250B USD are usually local currency (TWD/SEK) mislabeled."""
+    return bool(usd_val and usd_val > threshold)
+
+
+def _recompute_chart_per_share_from_usd(row: dict | None, shares_out: float) -> None:
+    """After TWD→USD on totals, per-share lines must use converted USD (not local EPS)."""
+    if not row or shares_out <= 0:
+        return
+    ni = row.get("net_income_usd")
+    if ni is not None:
+        row["eps"] = round(ni / shares_out, 4)
+    oe = row.get("owner_earnings_usd")
+    if oe is not None:
+        row["oeps"] = round(oe / shares_out, 4)
+
+
+def _scale_chart_money_row(
+    row: dict | None,
+    factor: float,
+    *,
+    shares_out: float = 0.0,
+) -> None:
+    """Convert statement currency → USD; skip fields already in USD scale (common on ADRs)."""
+    if not row or factor == 1.0:
+        return
+    rev = row.get("revenue_usd")
+    ni = row.get("net_income_usd")
+    convert_rev = _looks_like_local_ccy_amount(rev)
+    convert_ni = _looks_like_local_ccy_amount(ni) and not (
+        ni and rev and ni < 250e9 and rev > 500e9
+    )
+    field_groups = []
+    if convert_rev:
+        field_groups.extend(("revenue_usd", "revenue_b", "op_income_usd", "op_income_b",
+                             "ocf_usd", "ocf_b", "capex_usd", "capex_b", "fcf_usd", "fcf_b",
+                             "owner_earnings_usd", "owner_earnings_b"))
+    if convert_ni:
+        field_groups.extend(("net_income_usd", "net_income_b"))
+    for key in field_groups:
+        if key.endswith("_usd") and row.get(key) is not None:
+            row[key] = row[key] * factor
+        elif key.endswith("_b") and row.get(key) is not None:
+            row[key] = round(row[key] * factor, 2)
+    if convert_rev or convert_ni:
+        _recompute_chart_per_share_from_usd(row, shares_out)
+
+
+def _scale_chart_revenue_estimate(est: dict, factor: float) -> None:
+    """Revenue estimates from EODHD are usually in listing currency; EPS/NI est. often USD."""
+    if not est or factor == 1.0:
+        return
+    rev = est.get("revenue_usd")
+    if rev:
+        est["revenue_usd"] = rev * factor
+        est["revenue_b"] = round(est["revenue_usd"] / 1e9, 2)
+    # earningsEstimateAvg is USD/ADR share; SharesOutstanding is often local — drop bogus NI est.
+    if est.get("eps"):
+        est.pop("net_income_usd", None)
+        est.pop("net_income_b", None)
+
+
+def _sanitize_revenue_estimate(rev_est: float | None, ref_rev: float | None) -> float | None:
+    """Fix EODHD revenueEstimateAvg when it is clearly not USD (common on dual-listed ADRs).
+
+    E.g. GFI: EODHD ~214B vs ~11B USD consensus — ~214B ZAR / ~18 ≈ 11.9B USD.
+    """
+    if not rev_est or rev_est <= 0:
+        return None
+    if not ref_rev or ref_rev <= 0:
+        return rev_est
+    ratio = rev_est / ref_rev
+    if 0.2 <= ratio <= 3.0:
+        return rev_est
+    for divisor in (18.5, 18.0, 17.5, 19.0, 16.0):
+        fixed = rev_est / divisor
+        if 0.2 <= fixed / ref_rev <= 3.0:
+            return fixed
+    return None
+
+
+def _historical_fiscal_years(history: list[dict]) -> set[int]:
+    years: set[int] = set()
+    for row in history:
+        try:
+            years.add(int(str(row.get("year", ""))[:4]))
+        except (ValueError, TypeError):
+            pass
+    return years
+
+
+def _drop_estimates_for_reported_years(
+    history: list[dict], estimates: list[dict]
+) -> list[dict]:
+    """Remove FYxxxxE rows when filed annuals for that fiscal year are already in history."""
+    reported = _historical_fiscal_years(history)
+    if not reported:
+        return estimates
+    return [
+        e for e in estimates
+        if int(e.get("fiscal_year") or 0) not in reported
+    ]
+
+
+def _prune_implausible_revenue_estimates(
+    estimates: list[dict],
+    ttm: dict | None,
+    history: list[dict],
+) -> None:
+    """Drop forward revenue bars that are far below TTM (bad EODHD rows, e.g. cyclical energy)."""
+    ref = _safe_float((ttm or {}).get("revenue_usd"))
+    if not ref and history:
+        ref = _safe_float(history[0].get("revenue_usd"))
+    if not ref:
+        return
+    for est in estimates:
+        rev = _safe_float(est.get("revenue_usd"))
+        if rev > 0 and rev < ref * 0.35:
+            est.pop("revenue_usd", None)
+            est["revenue_b"] = None
 
 
 # Top-level fields some EODHD envelopes expose instead of nested Highlights.
@@ -1110,8 +1778,10 @@ def _get_fundamentals(symbol: str) -> dict | None:
     api_key = (os.getenv("EODHD_API_KEY") or "").strip()
     if api_key:
         try:
+            c = get_company(sym)
+            eodhd_sym = _eodhd_ticker(sym, c) or f"{sym}.US"
             r = _req.get(
-                f"https://eodhd.com/api/fundamentals/{sym}.US",
+                f"https://eodhd.com/api/fundamentals/{eodhd_sym}",
                 params={"api_token": api_key, "fmt": "json"}, timeout=15,
             )
             r.raise_for_status()
@@ -1132,9 +1802,229 @@ def _get_fundamentals(symbol: str) -> dict | None:
     return _read_fundamentals_cache_file(sym)
 
 
+_FYE_MONTH = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+_MONTH_ABBR = ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _fiscal_year_end_month(general: dict) -> int:
+    raw = (general.get("FiscalYearEnd") or "December").strip().lower()
+    return _FYE_MONTH.get(raw, 12)
+
+
+def _quarter_report_label(period_end: str, form: str) -> str:
+    try:
+        y = period_end[:4]
+        m = int(period_end[5:7])
+        abbr = _MONTH_ABBR[m] if 1 <= m <= 12 else period_end[5:7]
+        return f"{form} · {abbr} '{y[2:]}"
+    except (ValueError, IndexError, TypeError):
+        return form
+
+
+_SEC_SUBMISSIONS_CACHE: dict[str, tuple[float, dict]] = {}
+_SEC_SUBMISSIONS_TTL = 86400.0
+
+
+def _sec_cik_int(cik: str) -> str:
+    raw = str(cik or "").strip().lstrip("0")
+    return raw or "0"
+
+
+def _sec_edgar_document_url(cik: str, accession: str, primary_document: str) -> str:
+    """Direct link to the primary filing HTML (10-Q / 10-K)."""
+    acc = str(accession or "").replace("-", "")
+    doc = str(primary_document or "").strip()
+    if not acc or not doc:
+        return ""
+    return f"https://www.sec.gov/Archives/edgar/data/{_sec_cik_int(cik)}/{acc}/{doc}"
+
+
+def _fetch_sec_submissions(cik: str) -> dict | None:
+    cik10 = str(cik or "").strip().zfill(10)
+    if not cik10.strip("0"):
+        return None
+    now = time.time()
+    cached = _SEC_SUBMISSIONS_CACHE.get(cik10)
+    if cached and (now - cached[0]) < _SEC_SUBMISSIONS_TTL:
+        return cached[1]
+    ua = (os.getenv("SEC_EDGAR_USER_AGENT") or "companyData equity-research contact@example.com").strip()
+    try:
+        r = _req.get(
+            f"https://data.sec.gov/submissions/CIK{cik10}.json",
+            headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"},
+            timeout=12,
+        )
+        r.raise_for_status()
+        data = r.json()
+        if isinstance(data, dict):
+            _SEC_SUBMISSIONS_CACHE[cik10] = (now, data)
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _match_sec_filing(
+    submissions: dict,
+    form: str,
+    filing_date: str,
+    *,
+    max_day_slop: int = 14,
+) -> tuple[str, str] | None:
+    """Map EODHD filing_date + form to SEC accession + primary document."""
+    recent = (submissions.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    dates = recent.get("filingDate") or []
+    accessions = recent.get("accessionNumber") or []
+    primaries = recent.get("primaryDocument") or []
+    if not forms or not dates:
+        return None
+    target_s = str(filing_date or "")[:10]
+    if len(target_s) < 10:
+        return None
+    try:
+        target = datetime.strptime(target_s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+    def _row(i: int) -> tuple[str, str] | None:
+        if i >= len(accessions) or i >= len(primaries):
+            return None
+        acc = str(accessions[i] or "").strip()
+        doc = str(primaries[i] or "").strip()
+        if acc and doc:
+            return acc, doc
+        return None
+
+    for i, f in enumerate(forms):
+        if f != form or i >= len(dates):
+            continue
+        if str(dates[i])[:10] == target_s:
+            hit = _row(i)
+            if hit:
+                return hit
+
+    best: tuple[str, str] | None = None
+    best_delta = max_day_slop + 1
+    for i, f in enumerate(forms):
+        if f != form or i >= len(dates):
+            continue
+        try:
+            fd = datetime.strptime(str(dates[i])[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        delta = abs((fd - target).days)
+        if delta <= max_day_slop and delta < best_delta:
+            hit = _row(i)
+            if hit:
+                best_delta = delta
+                best = hit
+    return best
+
+
+def _sec_edgar_browse_url(cik: str, form: str, filing_date: str) -> str:
+    """Fallback: EDGAR filing list filtered around filing_date."""
+    cik_str = str(cik).strip()
+    if not cik_str:
+        return ""
+    try:
+        dt = datetime.strptime(str(filing_date)[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return f"https://www.sec.gov/edgar/browse/?CIK={_sec_cik_int(cik_str)}"
+    datea = (dt - timedelta(days=7)).strftime("%Y%m%d")
+    dateb = (dt + timedelta(days=7)).strftime("%Y%m%d")
+    return (
+        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+        f"&CIK={cik_str}&type={form}&dateb={dateb}&datea={datea}&owner=exclude&count=20"
+    )
+
+
+def _sec_edgar_filing_url(
+    cik: str,
+    form: str,
+    filing_date: str,
+    submissions: dict | None = None,
+) -> str:
+    """Prefer direct 10-Q/10-K document; fall back to browse-edgar."""
+    cik_str = str(cik).strip()
+    if not cik_str:
+        return ""
+    if filing_date:
+        sub = submissions if submissions is not None else _fetch_sec_submissions(cik_str)
+        if sub:
+            match = _match_sec_filing(sub, form, filing_date)
+            if match:
+                doc_url = _sec_edgar_document_url(cik_str, match[0], match[1])
+                if doc_url:
+                    return doc_url
+        return _sec_edgar_browse_url(cik_str, form, filing_date)
+    return f"https://www.sec.gov/edgar/browse/?CIK={_sec_cik_int(cik_str)}"
+
+
+def _build_quarterly_report_events(fundamentals: dict | None) -> list[dict]:
+    """Quarterly SEC filings + earnings dates for price-chart markers."""
+    if not fundamentals or not isinstance(fundamentals, dict):
+        return []
+    gen = fundamentals.get("General") or {}
+    cik = str(gen.get("CIK") or "").strip()
+    if not cik:
+        return []
+    fye_month = _fiscal_year_end_month(gen)
+    q_inc = (fundamentals.get("Financials") or {}).get("Income_Statement", {}).get("quarterly") or {}
+    earn_hist = (fundamentals.get("Earnings") or {}).get("History") or {}
+
+    earn_by_period: dict[str, str] = {}
+    for key, row in earn_hist.items():
+        if not isinstance(row, dict):
+            continue
+        pe = str(row.get("date") or key)[:10]
+        rd = str(row.get("reportDate") or "")[:10]
+        if pe and rd:
+            earn_by_period[pe] = rd
+
+    submissions = _fetch_sec_submissions(cik)
+
+    events: list[dict] = []
+    for period_key, inc in q_inc.items():
+        if not isinstance(inc, dict):
+            continue
+        period_end = str(inc.get("date") or period_key)[:10]
+        if len(period_end) < 10:
+            continue
+        filing_date = str(inc.get("filing_date") or "")[:10]
+        if filing_date and len(filing_date) < 10:
+            filing_date = ""
+        try:
+            period_month = int(period_end[5:7])
+        except ValueError:
+            period_month = 0
+        form = "10-K" if period_month == fye_month else "10-Q"
+        earnings_date = earn_by_period.get(period_end) or None
+        marker_date = filing_date or earnings_date or period_end
+        sec_url = _sec_edgar_filing_url(cik, form, filing_date, submissions) if filing_date else (
+            f"https://www.sec.gov/edgar/browse/?CIK={_sec_cik_int(cik)}"
+        )
+        events.append({
+            "period_end": period_end,
+            "filing_date": filing_date or None,
+            "earnings_date": earnings_date,
+            "marker_date": marker_date,
+            "form": form,
+            "label": _quarter_report_label(period_end, form),
+            "sec_url": sec_url,
+        })
+
+    events.sort(key=lambda e: e.get("marker_date") or "")
+    return events
+
+
 def _empty_history_payload(message: str) -> dict:
     return {
         "history":         [],
+        "quarterly_reports": [],
         "analyst_ratings": None,
         "price":           0.0,
         "eps_ttm":         0.0,
@@ -1142,12 +2032,321 @@ def _empty_history_payload(message: str) -> dict:
         "market_cap_b":    0.0,
         "market_cap_usd":  0.0,
         "market_cap_fmt":  "$0",
+        "price_chart_1y":  [],
         "partial":         True,
         "message":         message,
     }
 
 
 _price_store = PriceStore(PROJECT_ROOT / "outputs" / "fundamentals.db")
+_LIVE_QUOTE_CACHE: dict[str, tuple[dict, float]] = {}
+_LIVE_POLL_OPEN_SEC = 5
+_LIVE_QUOTE_TTL_OPEN_SEC = 4.0
+_LIVE_QUOTE_TTL_CLOSED_SEC = 60.0
+_ET = ZoneInfo("America/New_York")
+
+
+def _is_us_equity_listing(c: dict | None, symbol: str) -> bool:
+    sym = (_parse_symbol(symbol) or "").upper()
+    if "." in sym:
+        suf = sym.rsplit(".", 1)[-1]
+        if suf in ("OL", "ST", "CO", "HE", "L", "PA", "MI", "TO", "V"):
+            return False
+    ex = _normalize_exchange_code((c or {}).get("exchange") or (c or {}).get("eodhd_exchange") or "US")
+    return ex == "US"
+
+
+def _us_market_session_now(when: datetime | None = None) -> str:
+    """US cash session bucket in America/New_York (no holiday calendar)."""
+    now = when or datetime.now(_ET)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=_ET)
+    else:
+        now = now.astimezone(_ET)
+    if now.weekday() >= 5:
+        return "closed"
+    t = now.time()
+    if dt_time(4, 0) <= t < dt_time(9, 30):
+        return "pre_market"
+    if dt_time(9, 30) <= t < dt_time(16, 0):
+        return "regular"
+    if dt_time(16, 0) <= t < dt_time(20, 0):
+        return "after_hours"
+    return "closed"
+
+
+def _ms_to_iso(ms: object) -> str | None:
+    if ms in (None, "", 0):
+        return None
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=_ET).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _parse_us_quote_delayed(row: dict, session: str) -> dict | None:
+    """Build display quote from EODHD us-quote-delayed row (incl. extended hours)."""
+    reg = _safe_float(row.get("lastTradePrice"))
+    eth = _safe_float(row.get("ethPrice"))
+    prev = _safe_float(row.get("previousClosePrice"))
+    reg_ms = int(_safe_float(row.get("lastTradeTime")) or 0)
+    eth_ms = int(_safe_float(row.get("ethTime")) or 0)
+
+    use_extended = False
+    if session in ("pre_market", "after_hours") and eth > 0:
+        use_extended = True
+    elif session == "closed" and eth > 0 and eth_ms > reg_ms > 0:
+        use_extended = True
+
+    if use_extended:
+        price = eth
+        ref = reg if reg > 0 else prev
+        disp_session = session if session != "closed" else "after_hours"
+        as_of = _ms_to_iso(eth_ms) or _ms_to_iso(row.get("timestamp"))
+    else:
+        price = reg if reg > 0 else prev
+        ref = prev if prev > 0 else reg
+        disp_session = "regular" if session == "regular" else "closed"
+        as_of = _ms_to_iso(reg_ms) or _ms_to_iso(row.get("timestamp"))
+
+    if price <= 0:
+        return None
+
+    chg = _safe_float(row.get("change"))
+    chg_p = _safe_float(row.get("changePercent"))
+    if use_extended and ref > 0:
+        chg = price - ref
+        chg_p = (chg / ref) * 100.0
+    elif (chg == 0.0 or chg_p == 0.0) and ref > 0:
+        chg = price - ref
+        chg_p = (chg / ref) * 100.0
+
+    is_live = disp_session in ("regular", "pre_market", "after_hours")
+    return {
+        "price": round(price, 4),
+        "regular_close": round(reg, 4) if reg > 0 else None,
+        "extended_price": round(eth, 4) if eth > 0 else None,
+        "previous_close": round(prev, 4) if prev > 0 else None,
+        "change": round(chg, 4),
+        "change_pct": round(chg_p, 3),
+        "bid": round(_safe_float(row.get("bidPrice")), 4) or None,
+        "ask": round(_safe_float(row.get("askPrice")), 4) or None,
+        "volume": int(_safe_float(row.get("volume")) or 0),
+        "eth_volume": int(_safe_float(row.get("ethVolume")) or 0),
+        "as_of": as_of,
+        "session": disp_session,
+        "market_open": is_live,
+        "change_label": "vs close" if use_extended else "today",
+        "source": "eodhd_us_quote",
+        "stale": False,
+        "pe_snapshot": round(_safe_float(row.get("pe")), 2) or None,
+        "market_cap_usd_api": _safe_float(row.get("marketCap")) or None,
+    }
+
+
+def _fetch_eodhd_us_quote_delayed(symbol: str) -> dict | None:
+    api_key = (os.getenv("EODHD_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    c = get_company(symbol)
+    eodhd_sym = _eodhd_ticker(symbol, c) or f"{_parse_symbol(symbol)}.US"
+    try:
+        resp = _req.get(
+            "https://eodhd.com/api/us-quote-delayed",
+            params={"api_token": api_key, "s": eodhd_sym, "fmt": "json"},
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            return None
+        payload = resp.json() or {}
+        row = (payload.get("data") or {}).get(eodhd_sym)
+        if not row and payload.get("data"):
+            row = next(iter(payload["data"].values()), None)
+        if not isinstance(row, dict):
+            return None
+        return _parse_us_quote_delayed(row, _us_market_session_now())
+    except Exception:
+        return None
+
+
+def _live_quote_cache_ttl(session: str) -> float:
+    if session in ("regular", "pre_market", "after_hours"):
+        return _LIVE_QUOTE_TTL_OPEN_SEC
+    return _LIVE_QUOTE_TTL_CLOSED_SEC
+
+
+def _parse_eodhd_realtime_quote(raw: object) -> dict | None:
+    """Normalize EODHD real-time JSON to a small quote dict."""
+    if isinstance(raw, list):
+        raw = raw[0] if raw else None
+    if not isinstance(raw, dict):
+        return None
+    close = _safe_float(raw.get("close"))
+    if close <= 0:
+        close = _safe_float(raw.get("adjusted_close"))
+    prev = _safe_float(raw.get("previousClose") or raw.get("previous_close"))
+    if close <= 0 and prev > 0:
+        close = prev
+    if close <= 0:
+        return None
+    chg = _safe_float(raw.get("change"))
+    chg_p = _safe_float(raw.get("change_p"))
+    if chg == 0.0 and prev > 0:
+        chg = close - prev
+    if chg_p == 0.0 and prev > 0:
+        chg_p = (chg / prev) * 100.0
+    ts = raw.get("timestamp")
+    as_of = None
+    if ts is not None:
+        try:
+            as_of = datetime.fromtimestamp(int(ts)).isoformat(timespec="seconds")
+        except (TypeError, ValueError, OSError):
+            as_of = None
+    session = _us_market_session_now()
+    return {
+        "price": round(close, 4),
+        "previous_close": round(prev, 4) if prev > 0 else None,
+        "change": round(chg, 4),
+        "change_pct": round(chg_p, 3),
+        "open": round(_safe_float(raw.get("open")), 4) or None,
+        "high": round(_safe_float(raw.get("high")), 4) or None,
+        "low": round(_safe_float(raw.get("low")), 4) or None,
+        "volume": int(_safe_float(raw.get("volume")) or 0),
+        "as_of": as_of,
+        "code": raw.get("code"),
+        "session": session,
+        "market_open": session in ("regular", "pre_market", "after_hours"),
+        "change_label": "today",
+        "source": "eodhd_realtime",
+        "stale": False,
+    }
+
+
+def _fetch_eodhd_live_quote(symbol: str) -> dict | None:
+    """EODHD real-time endpoint (delay depends on subscription tier)."""
+    api_key = (os.getenv("EODHD_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    c = get_company(symbol)
+    eodhd_sym = _eodhd_ticker(symbol, c) or f"{_parse_symbol(symbol)}.US"
+    try:
+        resp = _req.get(
+            f"https://eodhd.com/api/real-time/{eodhd_sym}",
+            params={"api_token": api_key, "fmt": "json"},
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            return None
+        return _parse_eodhd_realtime_quote(resp.json())
+    except Exception:
+        return None
+
+
+def _live_quote_fallback_from_eod(symbol: str) -> dict | None:
+    """When real-time is unavailable, use the latest stored daily close."""
+    prices = _price_store.get(symbol) or _fetch_full_price_history(symbol)
+    if not prices:
+        return None
+    last = prices[-1]
+    prev = prices[-2] if len(prices) > 1 else None
+    close = float(last.get("close") or 0)
+    if close <= 0:
+        return None
+    prev_c = float(prev.get("close") or 0) if prev else 0.0
+    chg = close - prev_c if prev_c > 0 else 0.0
+    chg_p = (chg / prev_c * 100.0) if prev_c > 0 else 0.0
+    return {
+        "price": round(close, 4),
+        "previous_close": round(prev_c, 4) if prev_c > 0 else None,
+        "change": round(chg, 4),
+        "change_pct": round(chg_p, 3),
+        "open": last.get("open"),
+        "high": last.get("high"),
+        "low": last.get("low"),
+        "volume": int(last.get("volume") or 0),
+        "as_of": last.get("date"),
+        "code": None,
+        "stale": True,
+        "session": "closed",
+        "market_open": False,
+        "change_label": "today",
+    }
+
+
+def _enrich_live_quote_out(quote: dict, sym: str) -> dict:
+    c = get_company(sym) or {}
+    m = c.get("financial_metrics") or {}
+    price = float(quote["price"])
+    shares = _safe_float(m.get("diluted_shares") or m.get("shares_outstanding"))
+    if shares <= 0:
+        try:
+            d = _get_fundamentals(sym)
+            if d:
+                shares = _safe_float((d.get("SharesStats") or {}).get("SharesOutstanding"))
+        except Exception:
+            shares = 0.0
+
+    eps_ttm = _safe_float(m.get("eps_diluted"))
+    if eps_ttm <= 0:
+        try:
+            h = _merged_highlights(_get_fundamentals(sym) or {})
+            eps_ttm = _safe_float(h.get("EarningsShare"))
+        except Exception:
+            pass
+
+    out = {**quote, "symbol": sym, "shares_outstanding": shares if shares > 0 else None}
+    mcap_api = _safe_float(quote.get("market_cap_usd_api"))
+    if mcap_api > 0:
+        out["market_cap_usd"] = mcap_api
+        out["market_cap_fmt"] = _format_usd_compact(mcap_api)
+    elif shares > 0:
+        mcap = price * shares
+        out["market_cap_usd"] = mcap
+        out["market_cap_fmt"] = _format_usd_compact(mcap)
+    pe_snap = quote.get("pe_snapshot")
+    if pe_snap and pe_snap > 0:
+        out["pe_ttm"] = pe_snap
+    elif eps_ttm > 0:
+        out["pe_ttm"] = round(price / eps_ttm, 2)
+        out["eps_ttm"] = round(eps_ttm, 4)
+    sess = str(quote.get("session") or "closed")
+    out["poll_seconds"] = _LIVE_POLL_OPEN_SEC if quote.get("market_open") else 60
+    out["session_label"] = {
+        "regular": "Live",
+        "pre_market": "Pre-market",
+        "after_hours": "After-hours",
+        "closed": "Closed",
+    }.get(sess, "Closed")
+    return out
+
+
+def _get_live_quote(symbol: str) -> dict | None:
+    sym = (_parse_symbol(symbol) or "").upper()
+    if not sym:
+        return None
+    now = time.time()
+    cached = _LIVE_QUOTE_CACHE.get(sym)
+    if cached:
+        ttl = _live_quote_cache_ttl(str(cached[0].get("session") or "closed"))
+        if now - cached[1] < ttl:
+            return dict(cached[0])
+
+    c = get_company(sym) or {}
+    quote = None
+    if _is_us_equity_listing(c, sym):
+        quote = _fetch_eodhd_us_quote_delayed(sym)
+    if not quote:
+        quote = _fetch_eodhd_live_quote(sym)
+    if not quote:
+        quote = _live_quote_fallback_from_eod(sym)
+        if quote:
+            quote["source"] = "eod_daily"
+    if not quote:
+        return None
+
+    out = _enrich_live_quote_out(quote, sym)
+    _LIVE_QUOTE_CACHE[sym] = (out, now)
+    return out
 
 
 def _parse_eodhd_prices(data: list) -> list:
@@ -1190,8 +2389,10 @@ def _fetch_full_price_history(symbol: str) -> list:
         else:
             start_str = (datetime.now() - timedelta(days=365 * 25)).strftime("%Y-%m-%d")
 
+        c = get_company(symbol)
+        eodhd_sym = _eodhd_ticker(symbol, c) or f"{symbol}.US"
         resp = _req.get(
-            f"https://eodhd.com/api/eod/{symbol}.US",
+            f"https://eodhd.com/api/eod/{eodhd_sym}",
             params={
                 "api_token": api_key, "fmt": "json",
                 "from": start_str,
@@ -1212,17 +2413,49 @@ def _fetch_full_price_history(symbol: str) -> list:
         return existing
 
 
+_MIN_CHART_POINTS = 200
+_MAX_CHART_POINTS = 400
+
+
+def _downsample_prices_evenly(prices: list, target: int) -> list:
+    """Evenly spaced sample of exactly ``target`` points (first and last bar included)."""
+    n = len(prices)
+    if n <= target:
+        return list(prices)
+    if target <= 1:
+        return [prices[-1]]
+    return [prices[round(i * (n - 1) / (target - 1))] for i in range(target)]
+
+
+def _apply_price_density(prices: list, density: float) -> list:
+    """Return a fraction of points (evenly spaced) for fast chart preview."""
+    if not prices or density >= 1.0:
+        return list(prices)
+    d = max(0.1, min(1.0, float(density)))
+    target = max(12, int(len(prices) * d))
+    if target >= len(prices):
+        return list(prices)
+    return _downsample_prices_evenly(prices, target)
+
+
 def _slice_and_downsample(prices: list, rng: str) -> list:
-    """Slice full history to the requested range, downsample if needed."""
+    """Slice EOD history to a range; keep 200–400 points when enough data exists."""
     from datetime import timedelta
     if not prices:
         return []
     now = datetime.now()
-    # How many calendar days back each range needs
+    # Calendar lookback per button (daily bars; 1D stays short — no 200-pt expansion).
     range_days = {
-        "1d": 7, "1w": 18, "1m": 45, "3m": 100,
-        "6m": 190, "1y": 370, "3y": 1100,
-        "5y": 1830, "10y": 3660, "max": 999999,
+        "1d": 5,
+        "1w": 30,
+        "1m": 60,
+        "3m": 100,
+        "6m": 190,
+        "1y": 370,
+        "3y": 1100,
+        "5y": 1830,
+        "10y": 3660,
+        "max": 999999,
     }
     if rng == "ytd":
         cutoff = datetime(now.year, 1, 1).strftime("%Y-%m-%d")
@@ -1236,18 +2469,23 @@ def _slice_and_downsample(prices: list, rng: str) -> list:
     if not sliced:
         return []
 
-    # Downsample: keep at most ~500 points for smooth rendering
-    max_pts = 500
-    if len(sliced) <= max_pts:
-        return sliced
-    step = len(sliced) / max_pts
-    sampled = []
-    i = 0.0
-    while int(i) < len(sliced) - 1:
-        sampled.append(sliced[int(i)])
-        i += step
-    sampled.append(sliced[-1])  # always include latest
-    return sampled
+    # Short ranges (except 1D): extend backward until at least _MIN_CHART_POINTS.
+    if rng != "1d" and len(sliced) < _MIN_CHART_POINTS and len(prices) > len(sliced):
+        need = _MIN_CHART_POINTS - len(sliced)
+        first_idx = len(prices) - len(sliced)
+        start_idx = max(0, first_idx - need)
+        sliced = prices[start_idx:]
+
+    if len(sliced) > _MAX_CHART_POINTS:
+        return _downsample_prices_evenly(sliced, _MAX_CHART_POINTS)
+    return sliced
+
+
+def _chart_prices_for_range(all_prices: list, rng: str = "1y") -> list:
+    """Slice/downsample stored EOD bars for a chart range."""
+    if not all_prices:
+        return []
+    return _slice_and_downsample(all_prices, rng)
 
 
 @app.route('/api/company/<symbol>/price-history')
@@ -1256,14 +2494,37 @@ def api_company_price_history(symbol):
     if not _parse_symbol(symbol):
         return jsonify({"error": "Invalid symbol"}), 400
     rng = request.args.get("range", "1y").lower()
+    density_raw = request.args.get("density", "1")
+    try:
+        density_f = float(density_raw)
+    except (TypeError, ValueError):
+        density_f = 1.0
     try:
         all_prices = _fetch_full_price_history(symbol)
         if not all_prices:
             return jsonify({"error": "No price data", "prices": []}), 200
-        prices = _slice_and_downsample(all_prices, rng)
-        return jsonify({"prices": prices})
+        prices = _chart_prices_for_range(all_prices, rng)
+        preview = density_f < 1.0
+        if preview:
+            prices = _apply_price_density(prices, density_f)
+        return jsonify({
+            "prices": prices,
+            "preview": preview,
+            "count": len(prices),
+        })
     except Exception as ex:
         return jsonify({"error": str(ex)[:200], "prices": []}), 200
+
+
+@app.route("/api/company/<symbol>/quote")
+def api_company_quote(symbol):
+    """Near-live quote (EODHD real-time with short server cache; falls back to last EOD close)."""
+    if not _parse_symbol(symbol):
+        return jsonify({"error": "Invalid symbol"}), 400
+    q = _get_live_quote(symbol)
+    if not q:
+        return jsonify({"error": "No quote available", "symbol": symbol}), 200
+    return jsonify(q)
 
 
 def _build_ttm_window(
@@ -1464,6 +2725,7 @@ def api_company_history(symbol):
 
     # ── Historical P/E: join year-end prices with annual EPS ──
     price_data = _fetch_full_price_history(symbol)
+    price_chart_1y = _chart_prices_for_range(price_data, "1y")
     price_by_date = {p["date"]: p["close"] for p in price_data} if price_data else {}
     for entry in history:
         yr = entry["year"]
@@ -1496,6 +2758,11 @@ def api_company_history(symbol):
     # ── Analyst estimates from Earnings.Trend ──
     estimates = []
     trend = d.get("Earnings", {}).get("Trend", {})
+    ref_rev = _safe_float(_hl.get("RevenueTTM"))
+    if not ref_rev and ttm:
+        ref_rev = _safe_float(ttm.get("revenue_usd"))
+    if not ref_rev and history:
+        ref_rev = _safe_float(history[0].get("revenue_usd"))
     now_year = datetime.now().year
     seen_est_years = set()
     for date_key in sorted(trend.keys(), reverse=True):
@@ -1514,7 +2781,9 @@ def api_company_history(symbol):
             continue
         seen_est_years.add(fy_year)
         eps_est = _safe_float(t.get("earningsEstimateAvg"))
-        rev_est = _safe_float(t.get("revenueEstimateAvg"))
+        rev_est = _sanitize_revenue_estimate(
+            _safe_float(t.get("revenueEstimateAvg")) or None, ref_rev or None
+        )
         if eps_est or rev_est:
             sh_est = _safe_float(shares_stats.get("SharesOutstanding")) or shares_out
             ni_est = (eps_est * sh_est) if (eps_est and sh_est) else None
@@ -1531,15 +2800,20 @@ def api_company_history(symbol):
                 est_entry["pe_ratio"] = round(price_data[-1]["close"] / eps_est, 1)
             estimates.append(est_entry)
     estimates.sort(key=lambda e: e["year"])
+    estimates = _drop_estimates_for_reported_years(history, estimates)
 
-    analyst = _fmt_analyst(d.get("AnalystRatings", {}))
+    co = get_company(symbol) or {}
+    analyst = _fmt_analyst(_analyst_ratings_for_company({**co, "symbol": symbol}) or {})
     h = _merged_highlights(d)
+    quarterly_reports = _build_quarterly_report_events(d)
     if not history:
         return jsonify({
             **_empty_history_payload(
                 "Fundamentals file has no annual income statement — charts skipped."
             ),
+            "quarterly_reports": quarterly_reports,
             "analyst_ratings": analyst,
+            "price_chart_1y":  price_chart_1y,
             "price":           _safe_float(h.get("WallStreetTargetPrice")),
             "eps_ttm":         _safe_float(h.get("EarningsShare")),
             "pe_ttm":          _safe_float(h.get("PERatio")),
@@ -1549,19 +2823,36 @@ def api_company_history(symbol):
         })
 
     mcap_usd = _safe_float(h.get("MarketCapitalization"))
+    chart_fx_note = None
+    fx_factor, fx_note = _local_to_usd_factor(_statement_currency(d))
+    if fx_factor != 1.0:
+        for row in history:
+            _scale_chart_money_row(row, fx_factor, shares_out=shares_out)
+        _scale_chart_money_row(ttm, fx_factor, shares_out=shares_out)
+        _scale_chart_money_row(ttm2, fx_factor, shares_out=shares_out)
+        for est in estimates:
+            _scale_chart_revenue_estimate(est, fx_factor)
+        chart_fx_note = fx_note
+
+    _prune_implausible_revenue_estimates(estimates, ttm, history)
+
     return jsonify({
         "history":         history,
+        "quarterly_reports": quarterly_reports,
         "ttm":             ttm,
         "ttm2":            ttm2,
         "estimates":       estimates,
         "analyst_ratings": analyst,
+        "price_chart_1y":  price_chart_1y,
         "price":           _safe_float(h.get("WallStreetTargetPrice")),
         "eps_ttm":         _safe_float(h.get("EarningsShare")),
         "pe_ttm":          _safe_float(h.get("PERatio")),
         "market_cap_b":    round(mcap_usd / 1e9, 2) if mcap_usd else 0.0,
         "market_cap_usd":  mcap_usd,
         "market_cap_fmt":  _format_usd_compact(mcap_usd),
+        "shares_outstanding": shares_out if shares_out > 0 else None,
         "partial":         False,
+        "chart_fx_note":   chart_fx_note,
     })
 
 
@@ -1579,6 +2870,7 @@ def api_company(symbol):
     pe_disp = float(ci.get("pe_ratio") or m.get("pe_ratio") or 0)
     lynch_peg = _lynch_peg(pe_disp, m)
 
+    ls = round(_compounder_list_score(c), 2)
     return jsonify({
         "symbol":   c["symbol"],
         "name":     c.get("name", c["symbol"]),
@@ -1586,6 +2878,10 @@ def api_company(symbol):
         "industry": c.get("industry", "Unknown"),
         "exchange": c.get("exchange", "US"),
         "description": ci.get("description", ""),
+        "listing_score": ls,
+        "momentum_score": round(_cached_momentum_score(c), 2),
+        "screener_rank": _screener_rank(c["symbol"]),
+        "momentum_rank": _momentum_rank(c["symbol"]),
         "investment_scores": s,
         "financial_metrics": {
             "revenue_b":        round(m.get("revenue", 0) / 1e9, 2),
@@ -1620,7 +2916,7 @@ def api_company(symbol):
             "pe_ratio":     ci.get("pe_ratio", 0),
         },
         "data_quality": c.get("data_quality", {}),
-        "analyst_ratings": _fmt_analyst(c.get("analyst_ratings", {})),
+        "analyst_ratings": _fmt_analyst(_analyst_ratings_for_company(c) or {}),
     })
 
 
@@ -2279,6 +3575,10 @@ def company_detail(symbol):
             "income_statement": 0, "balance_sheet": 0,
             "cash_flow": 0, "quality": "N/A",
         }),
+        "listing_score": round(_compounder_list_score(c), 2),
+        "momentum_score": round(_cached_momentum_score(c), 2),
+        "screener_rank": _screener_rank(c["symbol"]),
+        "momentum_rank": _momentum_rank(c["symbol"]),
         "investment_scores": {
             "overall_score":        s.get("overall_score", 0),
             "quality_score":        s.get("quality_score", 0),
@@ -2323,7 +3623,7 @@ def company_detail(symbol):
             "pe_ratio":      ci.get("pe_ratio", 0),
             "description":   ci.get("description", ""),
         },
-        "analyst_ratings": _fmt_analyst(c.get("analyst_ratings", {})),
+        "analyst_ratings": _fmt_analyst(_analyst_ratings_for_company(c) or {}),
         "technicals": {"high_52w": None, "low_52w": None, "ma_50": None, "ma_200": None, "beta": None},
     }
     try:
