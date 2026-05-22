@@ -86,6 +86,18 @@
   .reports-toggle.active .reports-toggle-track{background:rgba(245,158,11,.22);border-color:rgba(245,158,11,.55)}
   .reports-toggle.active .reports-toggle-track::after{left:calc(100% - .55rem - 2px);background:#fbbf24;box-shadow:0 0 6px rgba(245,158,11,.55)}
   .reports-toggle-label{line-height:1}
+  .ms-rec{display:inline-flex;align-items:center;padding:.25rem .8rem;font-size:.82rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;border-radius:3px;border:1px solid}
+  .ms-rec-buy{color:#4ade80;border-color:rgba(34,197,94,.45);background:rgba(34,197,94,.08)}
+  .ms-rec-watchlist{color:#fbbf24;border-color:rgba(245,158,11,.45);background:rgba(245,158,11,.08)}
+  .ms-rec-no-buy{color:#f87171;border-color:rgba(239,68,68,.45);background:rgba(239,68,68,.08)}
+  .ms-conf{font-size:.6rem;letter-spacing:.06em;text-transform:uppercase;padding:.13rem .48rem;border-radius:2px;border:1px solid}
+  .ms-conf-high{color:var(--pos);border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.07)}
+  .ms-conf-medium{color:var(--warn);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.07)}
+  .ms-conf-low{color:var(--neg);border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.07)}
+  .ms-flag-high{color:#f87171}.ms-flag-medium{color:#fbbf24}.ms-flag-low{color:var(--dim)}
+  .ms-list{list-style:disc;padding-left:1.1rem;font-size:.82rem;line-height:1.75;color:#94a3b8}.ms-list li{margin-bottom:.35rem}
+  .ms-toggle{cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.63rem;color:var(--dim);padding:.35rem 0;letter-spacing:.06em;text-transform:uppercase;user-select:none}
+  .ms-toggle:hover{color:var(--fg)}.ms-toggle-icon{font-size:.65rem;transition:transform .15s;display:inline-block}
   #chartPrice{cursor:crosshair}
   #chartPrice.reports-hit{cursor:pointer}
   .price-chart-card{overflow:visible}
@@ -198,6 +210,76 @@
     </div>
   </div>
 
+  <!-- ── Moonstocks AI Analysis ─────────────────────────────────────── -->
+  <div id="msSection" class="card mb-6 p-5" style="display:none">
+    <div class="section-h" style="margin-bottom:.85rem">Moonstocks AI Analysis</div>
+
+    <div id="msLoading" style="display:flex;align-items:center;gap:.65rem;color:var(--dim);font-size:.75rem">
+      <span class="blink" style="color:var(--accent)">■</span> Fetching analysis…
+    </div>
+
+    <div id="msNotFound" style="display:none">
+      <div style="color:var(--dim);font-size:.75rem;margin-bottom:.75rem">
+        No AI analysis available for <b style="color:var(--fg)">{{ company.ms_ticker if company.ms_ticker is defined else company.symbol ~ '.US' }}</b> yet.
+      </div>
+      <button id="msTriggerBtn" class="run-btn">Trigger Analysis</button>
+      <span id="msTriggerStatus" style="font-size:.7rem;color:var(--dim);margin-left:.75rem;display:none"></span>
+    </div>
+
+    <div id="msError" style="display:none;font-size:.75rem;color:var(--neg)">Could not load Moonstocks analysis.</div>
+
+    <div id="msContent" style="display:none">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1.25rem;margin-bottom:.9rem">
+        <div style="display:flex;flex-direction:column;align-items:center;min-width:3rem">
+          <span id="msScore" style="font-size:2.2rem;font-weight:800;line-height:1"></span>
+          <span style="font-size:.52rem;color:var(--dim);letter-spacing:.1em;text-transform:uppercase">/100</span>
+        </div>
+        <span id="msRec" class="ms-rec"></span>
+        <span id="msConf" class="ms-conf"></span>
+        <span id="msDate" style="font-size:.62rem;color:var(--dim)"></span>
+        <a id="msLink" href="#" target="_blank" rel="noopener" style="margin-left:auto;font-size:.62rem;color:var(--accent);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">View on Moonstocks ↗</a>
+      </div>
+
+      <div id="msMainReason" style="font-size:.84rem;color:var(--fg);line-height:1.75;border-left:3px solid var(--accent);padding:.4rem .75rem;background:rgba(59,130,246,.06);border-radius:0 4px 4px 0;margin-bottom:.9rem"></div>
+
+      <div id="msScores" style="display:flex;flex-wrap:wrap;gap:.35rem .9rem;margin-bottom:.9rem;font-size:.65rem"></div>
+
+      <div id="msDetailsToggle" class="ms-toggle" onclick="msToggleDetails()" style="margin-bottom:.4rem">
+        <span id="msDetailsIcon" class="ms-toggle-icon">▶</span>
+        <span style="color:var(--fg)">Analysis details</span>
+      </div>
+      <div id="msDetailsWrap" style="display:none">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <div style="font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem">
+              <span class="bull">Bull case</span>
+              <span id="msBullCount" style="color:var(--dim)"></span>
+            </div>
+            <ul id="msBullList" class="ms-list"></ul>
+          </div>
+          <div>
+            <div style="font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem">
+              <span class="bear">Bear case</span>
+              <span id="msBearCount" style="color:var(--dim)"></span>
+            </div>
+            <ul id="msBearList" class="ms-list"></ul>
+          </div>
+          <div>
+            <div style="font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem">
+              <span style="color:var(--warn)">Red flags</span>
+              <span id="msFlagCount" style="color:var(--dim)"></span>
+            </div>
+            <div id="msFlagList"></div>
+          </div>
+        </div>
+        <div id="msWwcWrap" style="display:none;margin-top:.75rem">
+          <div style="font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem">What would change the decision</div>
+          <ul id="msWwcList" class="ms-list"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Stock price + Financials row -->
   {% set m = company.financial_metrics %}
   {% set ci = company.company_info %}
@@ -305,11 +387,14 @@
   <!-- Financial charts range bar -->
   <div class="flex items-center gap-2 mb-3" style="font-size:.62rem">
     <span class="section-h" style="margin-bottom:0">Financials</span>
-    <div id="finRangeBar" style="display:flex;gap:2px">
-      <button class="rbtn" data-fy="5">5Y</button>
-      <button class="rbtn active" data-fy="10">10Y</button>
-      <button class="rbtn" data-fy="15">15Y</button>
-      <button class="rbtn" data-fy="99">All</button>
+    <div id="finRangeBar" style="display:flex;gap:2px;flex-wrap:wrap;align-items:center">
+      <button class="rbtn" data-qtr="20" title="20 quarters (~5 years)">5Y</button>
+      <button class="rbtn active" data-qtr="40" title="40 quarters (~10 years)">10Y</button>
+      <button class="rbtn" data-qtr="60" title="60 quarters (~15 years)">15Y</button>
+      <button class="rbtn" data-qtr="99">All</button>
+      <span style="color:var(--border);margin:0 5px;user-select:none">|</span>
+      <button class="rbtn active" id="finCadenceQ">Quarterly</button>
+      <button class="rbtn" id="finCadenceA">Yearly</button>
     </div>
   </div>
 
@@ -426,7 +511,7 @@ function pickMoneyScale(maxAbsUsd) {
 const CHARTJS_DEFAULTS = {
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
+  plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } }, onClick: () => {} } },
   scales: {
     x: { ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 30, minRotation: 0 }, grid: { color: 'rgba(30,45,61,.6)' } },
     y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(30,45,61,.6)' } }
@@ -466,11 +551,14 @@ function renderAnalyst(ar) {
 }
 
 let _fullHist = [];
+let _annualHist = [];
 let _ttmData = null;
 let _ttm2Data = null;
 let _estData = [];
+let _cadence = 'quarterly';
+let _viewMode = 'quarterly';
 let _finCharts = {};
-let _finYears = 10;
+let _finQuarters = 40;
 
 function barDataset(label, data, color, opts) {
   return { label, data, skipNull: true, backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3, ...(opts || {}) };
@@ -516,13 +604,18 @@ function pickTtmCompareEstimate(ttm, estimates) {
 function findHistIdxForFy(pts, fy) {
   if (fy == null) return -1;
   const s = String(fy);
-  return pts.findIndex(p => p.hist && String(p.hist.year) === s);
+  let last = -1;
+  pts.forEach((p, i) => {
+    if (p.hist && String(p.hist.fiscal_year ?? p.hist.year) === s) last = i;
+  });
+  return last;
 }
 
 function histRowForFy(hist, fy) {
   if (fy == null) return null;
   const s = String(fy);
-  return hist.find(h => String(h.year) === s) || null;
+  const rows = hist.filter(h => String(h.fiscal_year ?? h.year) === s);
+  return rows.length ? rows[rows.length - 1] : null;
 }
 
 /** Baseline for compare column when forward FYxxxxE was dropped but annual is filed. */
@@ -693,38 +786,50 @@ const PRICE_RANGE_CHG_LABEL = {
   '1y': '1Y', '3y': '3Y', '5y': '5Y', '10y': '10Y', 'max': 'max',
 };
 
-function visibleFinYearOptions(histLen) {
+function visibleFinQuarterOptions(histLen) {
   const n = histLen || 0;
   const out = [];
-  if (n >= 5) out.push(5);
-  if (n >= 10) out.push(10);
-  if (n >= 15) out.push(15);
-  if (n >= 1) out.push(99);
+  if (_viewMode === 'yearly') {
+    if (n >= 5)  out.push(20);
+    if (n >= 10) out.push(40);
+    if (n >= 15) out.push(60);
+    if (n >= 1)  out.push(99);
+  } else {
+    if (n >= 20) out.push(20);
+    if (n >= 40) out.push(40);
+    if (n >= 60) out.push(60);
+    if (n >= 1)  out.push(99);
+  }
   return out;
 }
 
-function pickDefaultFinYears(histLen) {
-  const opts = visibleFinYearOptions(histLen);
-  if (opts.includes(10)) return 10;
-  if (opts.includes(5)) return 5;
+function pickDefaultFinQuarters(histLen) {
+  const opts = visibleFinQuarterOptions(histLen);
+  if (opts.includes(40)) return 40;
+  if (opts.includes(20)) return 20;
   return 99;
 }
 
 function syncFinRangeBar() {
-  const n = _fullHist.length;
-  const visible = new Set(visibleFinYearOptions(n));
-  document.querySelectorAll('#finRangeBar .rbtn').forEach(btn => {
-    const fy = parseInt(btn.dataset.fy, 10);
-    const show = visible.has(fy);
+  const useAnnual = _viewMode === 'yearly';
+  const n = useAnnual ? _annualHist.length : _fullHist.length;
+  const visible = new Set(visibleFinQuarterOptions(n));
+  document.querySelectorAll('#finRangeBar .rbtn[data-qtr]').forEach(btn => {
+    const qtr = parseInt(btn.dataset.qtr, 10);
+    const show = visible.has(qtr);
     btn.style.display = show ? '' : 'none';
     btn.disabled = !show;
   });
-  if (!visible.has(_finYears)) {
-    _finYears = pickDefaultFinYears(n);
-    document.querySelectorAll('#finRangeBar .rbtn').forEach(b => {
-      b.classList.toggle('active', parseInt(b.dataset.fy, 10) === _finYears);
+  if (!visible.has(_finQuarters)) {
+    _finQuarters = pickDefaultFinQuarters(n);
+    document.querySelectorAll('#finRangeBar .rbtn[data-qtr]').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.qtr, 10) === _finQuarters);
     });
   }
+  const btnQ = document.getElementById('finCadenceQ');
+  const btnA = document.getElementById('finCadenceA');
+  if (btnQ) btnQ.classList.toggle('active', !useAnnual);
+  if (btnA) btnA.classList.toggle('active', useAnnual);
 }
 
 function updatePriceHeaderFromSeries(prices, range) {
@@ -747,30 +852,35 @@ function updatePriceHeaderFromSeries(prices, range) {
   });
 }
 
-function renderFinancialCharts(years) {
-  _finYears = years;
-  document.querySelectorAll('#finRangeBar .rbtn').forEach(b => {
+function renderFinancialCharts(quarters) {
+  _finQuarters = quarters;
+  document.querySelectorAll('#finRangeBar .rbtn[data-qtr]').forEach(b => {
     if (b.style.display === 'none') return;
-    b.classList.toggle('active', parseInt(b.dataset.fy, 10) === years);
+    b.classList.toggle('active', parseInt(b.dataset.qtr, 10) === quarters);
   });
 
   Object.values(_finCharts).forEach(c => c.destroy());
   _finCharts = {};
 
-  let hist = _fullHist.slice();
-  if (years < 99) hist = hist.slice(-years);
+  const useAnnual = _viewMode === 'yearly';
+  let hist = useAnnual ? _annualHist.slice() : _fullHist.slice();
+  const sliceCount = (quarters >= 99) ? 99 : (useAnnual ? Math.ceil(quarters / 4) : quarters);
+  if (sliceCount < 99) hist = hist.slice(-sliceCount);
 
   const pts = buildFinChartPoints(hist, _ttmData, _ttm2Data, _estData);
   const labels = finChartLabels(pts);
 
+  // Annual estimates shown alongside quarterly bars need to be divided by 4 for non-compare slots.
+  const qScale = (v, p) => (v != null && !p.compare && !useAnnual && _cadence === 'quarterly') ? v / 4 : v;
+
   const revHist = pts.map(p => rowUsd(p.hist, 'revenue_usd', 'revenue_b'));
   const revTtm  = pts.map(p => rowUsd(p.ttm, 'revenue_usd', 'revenue_b'));
   const revTtm2 = pts.map(p => rowUsd(p.ttm2, 'revenue_usd', 'revenue_b'));
-  const revEst  = pts.map(p => rowUsd(p.est, 'revenue_usd', 'revenue_b'));
+  const revEst  = pts.map((p, i) => qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p));
   const niHist  = pts.map(p => rowUsd(p.hist, 'net_income_usd', 'net_income_b'));
   const niTtm   = pts.map(p => rowUsd(p.ttm, 'net_income_usd', 'net_income_b'));
   const niTtm2  = pts.map(p => rowUsd(p.ttm2, 'net_income_usd', 'net_income_b'));
-  const niEst   = pts.map(p => rowUsd(p.est, 'net_income_usd', 'net_income_b'));
+  const niEst   = pts.map((p, i) => qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p));
 
   const allRevNi = [...revHist, ...revTtm, ...revTtm2, ...revEst, ...niHist, ...niTtm, ...niTtm2, ...niEst].filter(v => v != null);
   const maxRN = Math.max(1e-9, ...allRevNi.map(v => Math.abs(v)));
@@ -813,32 +923,16 @@ function renderFinancialCharts(years) {
     },
   });
 
-  const epsActual = pts.map(p => {
-    if (p.compareKind === '2y' && p.ttm2 && p.ttm2.eps != null) return p.ttm2.eps;
-    if (p.ttm && p.ttm.eps != null) return p.ttm.eps;
-    if (p.hist && p.hist.eps != null) return p.hist.eps;
-    return null;
-  });
-  const oepsActual = pts.map(p => {
-    let v = null;
-    if (p.compareKind === '2y' && p.ttm2) v = p.ttm2.oeps;
-    else if (p.ttm) v = p.ttm.oeps;
-    else if (p.hist) v = p.hist.oeps;
-    return (v != null && v > 0) ? v : null;
-  });
-  const epsEst = pts.map(p => (p.est && p.est.eps != null ? p.est.eps : null));
+  const epsEst = pts.map(p => qScale(p.est && p.est.eps != null ? p.est.eps : null, p));
   hideLoader('epsLoading');
+  const epsHist = pts.map(p => (p.hist && p.hist.eps != null ? p.hist.eps : null));
+  const oepsHist = pts.map(p => (p.hist && p.hist.oeps != null ? p.hist.oeps : null));
   const epsDS = [
-    lineDataset('EPS', epsActual, '#a855f7', { spanGaps: true, pointRadius: 4 }),
-    lineDataset('OEPS', oepsActual, '#f59e0b', { spanGaps: true, pointRadius: 4 }),
+    barDataset('EPS', epsHist, '#a855f7'),
+    barDataset('OEPS', oepsHist, '#f59e0b'),
   ];
-  if (epsEst.some(v => v != null)) {
-    epsDS.push(lineDataset('EPS Est.', bridgeForwardLine(epsActual, epsEst), '#a855f7', {
-      borderDash: [5, 3], fill: false, pointStyle: 'rectRot',
-      backgroundColor: 'transparent', spanGaps: true, pointRadius: 4,
-    }));
-  }
-  _finCharts.eps = mkChartRet('chartEPS', 'line', labels, epsDS);
+  if (epsEst.some(v => v != null)) epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc'));
+  _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 
   const ocfHist = pts.map(p => rowUsd(p.hist, 'ocf_usd', 'ocf_b'));
   const ocfTtm  = pts.map(p => rowUsd(p.ttm, 'ocf_usd', 'ocf_b'));
@@ -883,10 +977,10 @@ function renderFinancialCharts(years) {
     return null;
   });
   hideLoader('marginLoading');
-  _finCharts.margin = mkChartRet('chartMargin', 'line', labels, [
-    lineDataset('Gross Margin %', gm, '#34d399', { spanGaps: true, pointRadius: 4 }),
-    lineDataset('Net Margin %', nm, '#f472b6', { spanGaps: true, pointRadius: 4 }),
-  ]);
+  _finCharts.margin = mkChartRet('chartMargin', 'bar', labels, [
+    barDataset('Gross Margin %', gm, '#34d399'),
+    barDataset('Net Margin %', nm, '#f472b6'),
+  ], BAR_GROUP_OPTS);
 
   const peTtm = pts.map(p => (p.ttm ? p.ttm.pe_ratio : null));
   const peTtm2 = pts.map(p => (p.ttm2 ? p.ttm2.pe_ratio : null));
@@ -902,45 +996,12 @@ function renderFinancialCharts(years) {
       if (p.compareKind === '2y') return peTtm2[i] ?? peHist[i] ?? null;
       return peTtm[i] ?? peHist[i] ?? null;
     });
-    const peFwd = pts.map((p, i) => {
-      if (peEst[i] != null) return peEst[i];
-      if (p.compare) return peTtm2[i] ?? peTtm[i] ?? null;
-      return null;
-    });
-    const connectFwd = peActual.map((v, i) => (v != null ? v : (i > 0 && peFwd[i - 1] != null ? peFwd[i - 1] : null)));
-    _finCharts.pe = new Chart(peCtx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [
-          {
-            label: 'P/E', data: peActual,
-            borderColor: '#f59e0b', backgroundColor: '#f59e0b22',
-            pointRadius: 4, pointBackgroundColor: peActual.map(v =>
-              v == null ? 'transparent' : v > 30 ? '#ef4444' : v > 20 ? '#f59e0b' : '#22c55e'
-            ),
-            tension: 0.25, fill: true, spanGaps: true,
-          },
-          {
-            label: 'Fwd P/E', data: peFwd.map((v, i) => v ?? connectFwd[i]),
-            borderColor: '#f59e0b80', borderDash: [5, 3],
-            pointRadius: 4, pointStyle: 'rectRot',
-            pointBackgroundColor: peFwd.map(v =>
-              v == null ? 'transparent' : v > 30 ? '#ef444488' : v > 20 ? '#f59e0b88' : '#22c55e88'
-            ),
-            tension: 0.25, fill: false, spanGaps: true,
-          },
-          {
-            label: 'Avg (20)', data: labels.map(() => 20),
-            borderColor: 'rgba(148,163,184,.3)', borderDash: [6, 4],
-            borderWidth: 1, pointRadius: 0, fill: false,
-          },
-        ],
-      },
-      options: {
-        ...CHARTJS_DEFAULTS, maintainAspectRatio: true,
-        plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } } } },
-      },
+    const peDS = [barDataset('P/E', peHist, '#f59e0b')];
+    if (peTtm.some(v => v != null)) peDS.push(ttmBarDataset('P/E TTM', peTtm, '#fbbf24'));
+    if (peEst.some(v => v != null)) peDS.push(estBarDataset('Fwd P/E', peEst, '#fcd34d'));
+    _finCharts.pe = mkChartRet('chartPE', 'bar', labels, peDS, {
+      ...BAR_GROUP_OPTS,
+      plugins: { ...CHARTJS_DEFAULTS.plugins },
     });
   } else if (peCtx) {
     const el = document.getElementById('peLoading');
@@ -967,7 +1028,7 @@ function applyDisplayMetrics(dm) {
   if (note && flow) {
     let t = 'Flows: TTM (last 4 quarters)';
     if (flow.period_end) t += ' · ended ' + flow.period_end;
-    if (fy && fy.basis) t += ' · Charts also show ' + fy.basis;
+    if (fy && fy.basis) t += ' · Filed annual: ' + fy.basis;
     note.textContent = t;
     note.style.display = 'block';
     note.title = dm.note || '';
@@ -1015,8 +1076,11 @@ async function loadHistory() {
 
     _quarterlyReports = d.quarterly_reports || [];
     _fullHist = d.history || [];
+    _annualHist = d.annual_history || [];
     _ttmData = d.ttm || null;
     _ttm2Data = d.ttm2 || null;
+    _cadence = d.history_cadence || 'quarterly';
+    _viewMode = 'quarterly';
     _estData = d.estimates || [];
     const revH = document.getElementById('revNIHeading');
     if (revH) {
@@ -1038,8 +1102,8 @@ async function loadHistory() {
     }
 
     syncFinRangeBar();
-    _finYears = pickDefaultFinYears(_fullHist.length);
-    renderFinancialCharts(_finYears);
+    _finQuarters = pickDefaultFinQuarters(_fullHist.length);
+    renderFinancialCharts(_finQuarters);
     renderAnalyst(d.analyst_ratings);
     return d;
   } catch(e) { console.error(e); return null; }
@@ -1952,12 +2016,21 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
     btn.addEventListener('click', () => loadPriceChart(btn.dataset.r));
   });
-  document.querySelectorAll('#finRangeBar .rbtn').forEach(btn => {
+  document.querySelectorAll('#finRangeBar .rbtn[data-qtr]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (btn.disabled || btn.style.display === 'none') return;
-      renderFinancialCharts(parseInt(btn.dataset.fy, 10));
+      renderFinancialCharts(parseInt(btn.dataset.qtr, 10));
     });
   });
+  const _switchCadence = (mode) => {
+    _viewMode = mode;
+    syncFinRangeBar();
+    renderFinancialCharts(_finQuarters);
+  };
+  const btnCadQ = document.getElementById('finCadenceQ');
+  const btnCadA = document.getElementById('finCadenceA');
+  if (btnCadQ) btnCadQ.addEventListener('click', () => _switchCadence('quarterly'));
+  if (btnCadA) btnCadA.addEventListener('click', () => _switchCadence('yearly'));
   const panel = document.getElementById('gchat-panel');
   const toggle = document.getElementById('gchatToggle');
   const resize = document.getElementById('gchatResize');
@@ -2020,6 +2093,170 @@ document.addEventListener('DOMContentLoaded', () => {
   if (logoutBtn) logoutBtn.addEventListener('click', gchatLogout);
   gchatRefreshAuth();
 });
+
+// ── Moonstocks AI ──────────────────────────────────────────────────────────
+(function () {
+  const MS_TICKER = {{ (company.ms_ticker if company.ms_ticker is defined else company.symbol ~ '.US') | tojson }};
+  const MS_ORIGIN = 'http://moonstocks-lb-prod-15318164.eu-north-1.elb.amazonaws.com';
+  const REC_LABELS = { buy: 'BUY', watchlist: 'WATCHLIST', no_buy: 'NO BUY' };
+  const SCORE_KEYS = [
+    ['quality_score', 'Quality'], ['growth_score', 'Growth'],
+    ['valuation_score', 'Valuation'], ['balance_sheet_score', 'Balance Sheet'],
+    ['earnings_quality_score', 'Earn. Quality'], ['catalyst_score', 'Catalyst'],
+    ['sentiment_score', 'Sentiment'], ['technical_score', 'Technical'],
+  ];
+
+  window.msToggle = function (listId, btn) {
+    const el = document.getElementById(listId);
+    if (!el) return;
+    const icon = btn.querySelector('.ms-toggle-icon');
+    const show = el.style.display === 'none';
+    el.style.display = show ? '' : 'none';
+    if (icon) icon.style.transform = show ? 'rotate(90deg)' : '';
+  };
+
+  function msShow(id) { const el = document.getElementById(id); if (el) el.style.display = ''; }
+  function msHide(id) { const el = document.getElementById(id); if (el) el.style.display = 'none'; }
+  function msText(id, txt) { const el = document.getElementById(id); if (el) el.textContent = txt; }
+
+  function msRender(data) {
+    const r = data.report;
+    const score = r.overall_score || 0;
+    const scoreEl = document.getElementById('msScore');
+    scoreEl.textContent = score;
+    scoreEl.style.color = score >= 70 ? 'var(--pos)' : score >= 50 ? 'var(--warn)' : 'var(--neg)';
+
+    const rec = (r.recommendation || '').replace('_', '-');
+    const recEl = document.getElementById('msRec');
+    recEl.textContent = REC_LABELS[r.recommendation] || r.recommendation.toUpperCase();
+    recEl.className = 'ms-rec ms-rec-' + rec;
+
+    const confEl = document.getElementById('msConf');
+    confEl.textContent = 'Confidence: ' + (r.confidence || '');
+    confEl.className = 'ms-conf ms-conf-' + (r.confidence || 'low');
+
+    msText('msDate', r.analysis_date ? 'Analysis: ' + r.analysis_date : '');
+
+    const linkEl = document.getElementById('msLink');
+    linkEl.href = MS_ORIGIN + '/analyses/' + encodeURIComponent(data.tickerAndExchangeCode);
+
+    const ds = r.decision_summary || {};
+    const reasonEl = document.getElementById('msMainReason');
+    reasonEl.textContent = ds.main_reason_for_recommendation || '';
+    reasonEl.style.display = ds.main_reason_for_recommendation ? '' : 'none';
+
+    const scoresEl = document.getElementById('msScores');
+    const sc = r.scores || {};
+    SCORE_KEYS.forEach(([key, label]) => {
+      const val = sc[key];
+      if (val == null) return;
+      const chip = document.createElement('span');
+      chip.style.cssText = 'color:var(--dim);white-space:nowrap';
+      chip.innerHTML = `<span style="color:var(--fg);font-weight:600">${label}</span>&thinsp;<span style="color:var(--accent2)">${val}</span>`;
+      scoresEl.appendChild(chip);
+    });
+
+    const bull = ds.bull_case || [];
+    msText('msBullCount', bull.length ? `(${bull.length})` : '');
+    const bullList = document.getElementById('msBullList');
+    bull.forEach(item => { const li = document.createElement('li'); li.textContent = item; bullList.appendChild(li); });
+
+    const bear = ds.bear_case || [];
+    msText('msBearCount', bear.length ? `(${bear.length})` : '');
+    const bearList = document.getElementById('msBearList');
+    bear.forEach(item => { const li = document.createElement('li'); li.textContent = item; bearList.appendChild(li); });
+
+    const flags = r.red_flags || [];
+    msText('msFlagCount', flags.length ? `(${flags.length})` : '');
+    const flagList = document.getElementById('msFlagList');
+    flags.forEach(f => {
+      const div = document.createElement('div');
+      div.style.cssText = 'font-size:.72rem;margin-bottom:.35rem;line-height:1.5';
+      div.innerHTML = `<span class="ms-flag-${f.severity || 'low'}" style="font-weight:600;font-size:.6rem;text-transform:uppercase;letter-spacing:.05em">${f.severity || ''}</span> <span style="color:#94a3b8;font-size:.8rem">${f.detail || f.description || ''}</span>`;
+      flagList.appendChild(div);
+    });
+
+    const wwc = ds.what_would_change_the_decision || [];
+    if (wwc.length) {
+      msShow('msWwcWrap');
+      const wwcList = document.getElementById('msWwcList');
+      wwc.forEach(item => { const li = document.createElement('li'); li.textContent = item; wwcList.appendChild(li); });
+    }
+
+    msHide('msLoading');
+    msShow('msContent');
+    msShow('msSection');
+  }
+
+  function msInit() {
+    const sec = document.getElementById('msSection');
+    if (!sec) return;
+    sec.style.display = '';
+
+    fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER))
+      .then(r => {
+        if (r.status === 404) {
+          msHide('msLoading');
+          msShow('msNotFound');
+          return null;
+        }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(data => { if (data) msRender(data); })
+      .catch(() => { msHide('msLoading'); msShow('msError'); });
+
+    const triggerBtn = document.getElementById('msTriggerBtn');
+    if (triggerBtn) {
+      triggerBtn.addEventListener('click', () => {
+        triggerBtn.disabled = true;
+        const status = document.getElementById('msTriggerStatus');
+        status.style.display = 'block';
+        status.style.color = 'var(--dim)';
+        status.textContent = 'Requesting analysis…';
+        const sentAt = new Date();
+        const sentStr = sentAt.toLocaleDateString('en-GB', {day:'2-digit',month:'2-digit',year:'numeric'})
+          + ' at ' + sentAt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+        fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/trigger', { method: 'POST' })
+          .then(r => {
+            if (r.ok) {
+              triggerBtn.style.display = 'none';
+              let secs = 180;
+              const tick = () => {
+                const m = Math.floor(secs / 60);
+                const s = String(secs % 60).padStart(2, '0');
+                status.style.color = 'var(--pos)';
+                status.textContent = `Analysis queued — arriving in ~${m}:${s}`;
+                if (secs > 0) { secs--; setTimeout(tick, 1000); }
+                else { status.style.color = 'var(--dim)'; status.textContent = 'Analysis should be ready — refresh the page to check.'; }
+              };
+              tick();
+            } else {
+              return r.json().catch(() => null).then(body => {
+                throw new Error((body && (body.error || body.message)) || 'HTTP ' + r.status);
+              });
+            }
+          })
+          .catch(err => {
+            triggerBtn.disabled = false;
+            status.style.color = 'var(--neg)';
+            status.textContent = `Analysis sent ${sentStr} failed — ${err.message || 'unknown error'}.`;
+          });
+      });
+    }
+  }
+
+  window.msToggleDetails = function () {
+    const wrap = document.getElementById('msDetailsWrap');
+    const icon = document.getElementById('msDetailsIcon');
+    if (!wrap) return;
+    const open = wrap.style.display !== 'none';
+    wrap.style.display = open ? 'none' : '';
+    if (icon) icon.style.transform = open ? '' : 'rotate(90deg)';
+  };
+
+  document.addEventListener('DOMContentLoaded', msInit);
+})();
 </script>
 </body>
 </html>

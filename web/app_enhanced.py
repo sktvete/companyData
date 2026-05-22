@@ -44,6 +44,11 @@ from metric_tones import build_sector_valuation_medians, row_tones
 
 load_dotenv()
 
+MOONSTOCKS_API_BASE = os.environ.get(
+    "MOONSTOCKS_API_URL",
+    "http://moonstocks-lb-prod-15318164.eu-north-1.elb.amazonaws.com",
+).rstrip("/")
+
 app = Flask(__name__)
 
 
@@ -1800,11 +1805,179 @@ def _sanitize_revenue_estimate(rev_est: float | None, ref_rev: float | None) -> 
 def _historical_fiscal_years(history: list[dict]) -> set[int]:
     years: set[int] = set()
     for row in history:
+        fy = row.get("fiscal_year")
+        if fy is not None:
+            try:
+                years.add(int(fy))
+                continue
+            except (ValueError, TypeError):
+                pass
         try:
             years.add(int(str(row.get("year", ""))[:4]))
         except (ValueError, TypeError):
             pass
     return years
+
+
+def _quarter_chart_label(period_end: str) -> str:
+    try:
+        d = datetime.strptime(str(period_end)[:10], "%Y-%m-%d")
+        q = (d.month - 1) // 3 + 1
+        return f"Q{q} '{d.strftime('%y')}"
+    except (TypeError, ValueError):
+        return str(period_end)[:7]
+
+
+def _price_on_or_before(price_by_date: dict, period_end: str, lookback_days: int = 10) -> float:
+    if not price_by_date or not period_end:
+        return 0.0
+    try:
+        end = datetime.strptime(str(period_end)[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return 0.0
+    from datetime import timedelta as _td
+
+    for d_off in range(lookback_days + 1):
+        d_str = (end - _td(days=d_off)).strftime("%Y-%m-%d")
+        px = _safe_float(price_by_date.get(d_str))
+        if px > 0:
+            return px
+    return 0.0
+
+
+def _fundamentals_period_row(
+    inc: dict,
+    cf: dict,
+    *,
+    period_end: str,
+    label: str,
+    fiscal_year: int | None,
+    shares_default: float,
+    price_by_date: dict | None = None,
+    eps_periods: int = 1,
+) -> dict:
+    rev = _safe_float(inc.get("totalRevenue"))
+    ni = _safe_float(inc.get("netIncome"))
+    op = _safe_float(inc.get("operatingIncome") or inc.get("ebit"))
+    ocf = _safe_float(cf.get("totalCashFromOperatingActivities"))
+    capex = abs(_safe_float(cf.get("capitalExpenditures")))
+    sbc = _safe_float(cf.get("stockBasedCompensation"))
+    sh = _safe_float(
+        inc.get("weightedAverageShsOutDil")
+        or inc.get("weightedAverageShsOut")
+    ) or shares_default or 1.0
+    eps = _safe_float(inc.get("dilutedEPS"))
+    if eps <= 0 and sh > 0 and ni != 0:
+        eps = ni / sh
+    fcf = ocf - capex
+    oe = ocf - capex - sbc
+    oeps = oe / sh if sh else 0.0
+    cor = _safe_float(inc.get("costOfRevenue"))
+    gp = _eodhd_adjust_gross_profit(rev, _safe_float(inc.get("grossProfit")), cor)
+    row = {
+        "period_end": period_end,
+        "year": label,
+        "fiscal_year": fiscal_year,
+        "revenue_usd": rev,
+        "revenue_b": round(rev / 1e9, 2),
+        "net_income_usd": ni,
+        "net_income_b": round(ni / 1e9, 2),
+        "op_income_usd": op,
+        "op_income_b": round(op / 1e9, 2),
+        "ocf_usd": ocf,
+        "ocf_b": round(ocf / 1e9, 2),
+        "capex_usd": capex,
+        "capex_b": round(capex / 1e9, 2),
+        "fcf_usd": fcf,
+        "fcf_b": round(fcf / 1e9, 2),
+        "owner_earnings_usd": oe,
+        "owner_earnings_b": round(oe / 1e9, 2),
+        "eps": round(eps, 4),
+        "oeps": round(oeps, 4),
+        "gross_margin_pct": round(gp / rev * 100, 1) if rev else 0,
+        "net_margin_pct": round(ni / rev * 100, 1) if rev else 0,
+        "pe_ratio": None,
+        "ye_price": None,
+    }
+    if price_by_date:
+        px = _price_on_or_before(price_by_date, period_end)
+        if px > 0 and eps > 0:
+            row["pe_ratio"] = round(px / (eps * eps_periods), 1)
+            row["ye_price"] = round(px, 2)
+    return row
+
+
+def _build_annual_history(
+    annual: dict,
+    bs_ann: dict,
+    cf_ann: dict,
+    shares_out: float,
+    price_by_date: dict | None,
+    *,
+    max_years: int = 15,
+) -> list[dict]:
+    history: list[dict] = []
+    for yr in sorted(annual.keys())[-max_years:]:
+        inc = annual[yr]
+        bs = bs_ann.get(yr, {})
+        cf = cf_ann.get(yr, {})
+        eq = _safe_float(bs.get("totalStockholderEquity")) or 1.0
+        sh = _safe_float(bs.get("commonStockSharesOutstanding"))
+        if not sh:
+            sh = _safe_float(
+                inc.get("weightedAverageShsOutDil") or inc.get("weightedAverageShsOut")
+            )
+        if not sh:
+            sh = shares_out or 1.0
+        row = _fundamentals_period_row(
+            inc, cf,
+            period_end=yr,
+            label=yr[:4],
+            fiscal_year=int(yr[:4]) if yr[:4].isdigit() else None,
+            shares_default=sh,
+            price_by_date=price_by_date,
+        )
+        row["roe_pct"] = round(_safe_float(row["net_income_usd"]) / eq * 100, 1) if eq else 0
+        if price_by_date and row.get("pe_ratio") is None:
+            eps_val = row.get("eps", 0)
+            ye_price = _price_on_or_before(price_by_date, f"{yr[:4]}-12-31", lookback_days=12)
+            if ye_price > 0 and eps_val and eps_val > 0:
+                row["pe_ratio"] = round(ye_price / eps_val, 1)
+                row["ye_price"] = round(ye_price, 2)
+        history.append(row)
+    return history
+
+
+def _build_quarterly_history(
+    q_inc: dict,
+    q_cf: dict,
+    shares_out: float,
+    price_by_date: dict | None,
+    *,
+    max_quarters: int = 80,
+) -> list[dict]:
+    keys = sorted(q_inc.keys())[-max_quarters:]
+    history: list[dict] = []
+    for period_end in keys:
+        inc = q_inc[period_end]
+        cf = q_cf.get(period_end, {})
+        try:
+            fiscal_year = int(str(period_end)[:4])
+        except (TypeError, ValueError):
+            fiscal_year = None
+        history.append(
+            _fundamentals_period_row(
+                inc,
+                cf,
+                period_end=period_end,
+                label=_quarter_chart_label(period_end),
+                fiscal_year=fiscal_year,
+                shares_default=shares_out,
+                price_by_date=price_by_date,
+                eps_periods=4,
+            )
+        )
+    return history
 
 
 def _drop_estimates_for_reported_years(
@@ -2148,6 +2321,8 @@ def _build_quarterly_report_events(fundamentals: dict | None) -> list[dict]:
 def _empty_history_payload(message: str) -> dict:
     return {
         "history":         [],
+        "annual_history":  [],
+        "history_cadence": "quarterly",
         "quarterly_reports": [],
         "analyst_ratings": None,
         "price":           0.0,
@@ -3087,7 +3262,7 @@ def _build_ttm_window(
 
 @app.route('/api/company/<symbol>/history')
 def api_company_history(symbol):
-    """Serve historical annual financials + analyst data (cache-first)."""
+    """Serve quarterly financial chart series + annual filed FY for metrics (cache-first)."""
     if not _parse_symbol(symbol):
         return jsonify({"error": "Invalid symbol"}), 400
     try:
@@ -3106,83 +3281,21 @@ def api_company_history(symbol):
     shares_stats = d.get("SharesStats", {})
     shares_out   = _safe_float(shares_stats.get("SharesOutstanding")) or 1.0
 
-    history = []
-    for yr in sorted(annual.keys())[-15:]:
-        inc = annual[yr]
-        bs  = bs_ann.get(yr, {})
-        cf  = cf_ann.get(yr, {})
-        rev  = _safe_float(inc.get("totalRevenue"))
-        ni   = _safe_float(inc.get("netIncome"))
-        op   = _safe_float(inc.get("operatingIncome") or inc.get("ebit"))
-        ocf  = _safe_float(cf.get("totalCashFromOperatingActivities"))
-        capex = abs(_safe_float(cf.get("capitalExpenditures")))
-        sbc  = _safe_float(cf.get("stockBasedCompensation"))
-        eq   = _safe_float(bs.get("totalStockholderEquity")) or 1.0
-        # Prefer period diluted/weighted shares from statements; fall back to Highlights.
-        sh = _safe_float(bs.get("commonStockSharesOutstanding"))
-        if not sh:
-            sh = _safe_float(
-                inc.get("weightedAverageShsOutDil")
-                or inc.get("weightedAverageShsOut")
-            )
-        if not sh:
-            sh = shares_out or 1.0
-        eps  = ni / sh if sh else 0.0
-        fcf  = ocf - capex
-        oe   = ocf - capex - sbc
-        oeps = oe / sh if sh else 0.0
-        cor = _safe_float(inc.get("costOfRevenue"))
-        gp = _safe_float(inc.get("grossProfit"))
-        # EODHD sometimes sets grossProfit == totalRevenue while costOfRevenue is non-zero (DUOL 2021).
-        if rev > 0 and cor > 0 and gp >= rev * 0.999:
-            gp = rev - cor
-        history.append({
-            "year":      yr[:4],
-            "revenue_usd":    rev,
-            "revenue_b":      round(rev / 1e9, 2),
-            "net_income_usd": ni,
-            "net_income_b":   round(ni / 1e9, 2),
-            "op_income_usd":  op,
-            "op_income_b":    round(op / 1e9, 2),
-            "ocf_usd":        ocf,
-            "ocf_b":          round(ocf / 1e9, 2),
-            "capex_usd":      capex,
-            "capex_b":        round(capex / 1e9, 2),
-            "fcf_usd":        fcf,
-            "fcf_b":          round(fcf / 1e9, 2),
-            "owner_earnings_usd": oe,
-            "owner_earnings_b":   round(oe / 1e9, 2),
-            "eps":          round(eps, 4),
-            "oeps":         round(oeps, 4),
-            "roe_pct":      round(ni / eq * 100, 1) if eq else 0,
-            "gross_margin_pct": round(gp / rev * 100, 1) if rev else 0,
-            "net_margin_pct": round(ni / rev * 100, 1) if rev else 0,
-        })
-
-    # ── Historical P/E: join year-end prices with annual EPS ──
     price_data = _fetch_full_price_history(symbol)
     price_chart_1y = _chart_prices_for_range(price_data, "1y")
     price_by_date = {p["date"]: p["close"] for p in price_data} if price_data else {}
-    for entry in history:
-        yr = entry["year"]
-        eps_val = entry.get("eps", 0)
-        ye_price = None
-        # Find closest trading day to fiscal year end (try Dec 31 backwards)
-        for d_offset in range(0, 10):
-            from datetime import timedelta as _td
-            try_date = (datetime(int(yr), 12, 31) - _td(days=d_offset)).strftime("%Y-%m-%d")
-            if try_date in price_by_date:
-                ye_price = price_by_date[try_date]
-                break
-        if ye_price and eps_val and eps_val > 0:
-            entry["pe_ratio"] = round(ye_price / eps_val, 1)
-            entry["ye_price"] = round(ye_price, 2)
-        else:
-            entry["pe_ratio"] = None
-            entry["ye_price"] = ye_price
+
+    annual_history = _build_annual_history(
+        annual, bs_ann, cf_ann, shares_out, price_by_date, max_years=15,
+    )
 
     q_inc = d.get("Financials", {}).get("Income_Statement", {}).get("quarterly", {})
     q_cf = d.get("Financials", {}).get("Cash_Flow", {}).get("quarterly", {})
+    history = _build_quarterly_history(
+        q_inc, q_cf, shares_out, price_by_date, max_quarters=80,
+    )
+    if not history and annual_history:
+        history = annual_history
     _hl = _merged_highlights(d)
     ttm = _build_ttm_window(
         q_inc, q_cf, shares_stats, shares_out, price_data, trailing_years=1, highlights=_hl
@@ -3197,7 +3310,9 @@ def api_company_history(symbol):
     ref_rev = _safe_float(_hl.get("RevenueTTM"))
     if not ref_rev and ttm:
         ref_rev = _safe_float(ttm.get("revenue_usd"))
-    if not ref_rev and history:
+    if not ref_rev and annual_history:
+        ref_rev = _safe_float(annual_history[-1].get("revenue_usd"))
+    elif not ref_rev and history:
         ref_rev = _safe_float(history[-1].get("revenue_usd"))
     now_year = datetime.now().year
     seen_est_years = set()
@@ -3236,16 +3351,16 @@ def api_company_history(symbol):
                 est_entry["pe_ratio"] = round(price_data[-1]["close"] / eps_est, 1)
             estimates.append(est_entry)
     estimates.sort(key=lambda e: e["year"])
-    estimates = _drop_estimates_for_reported_years(history, estimates)
+    estimates = _drop_estimates_for_reported_years(annual_history, estimates)
 
     co = get_company(symbol) or {}
     analyst = _fmt_analyst(_analyst_ratings_for_company({**co, "symbol": symbol}) or {})
     h = _merged_highlights(d)
     quarterly_reports = _build_quarterly_report_events(d)
-    if not history:
+    if not history and not annual_history:
         return jsonify({
             **_empty_history_payload(
-                "Fundamentals file has no annual income statement — charts skipped."
+                "Fundamentals file has no quarterly or annual income statement — charts skipped."
             ),
             "quarterly_reports": quarterly_reports,
             "analyst_ratings": analyst,
@@ -3264,18 +3379,22 @@ def api_company_history(symbol):
     if fx_factor != 1.0:
         for row in history:
             _scale_chart_money_row(row, fx_factor, shares_out=shares_out)
+        for row in annual_history:
+            _scale_chart_money_row(row, fx_factor, shares_out=shares_out)
         _scale_chart_money_row(ttm, fx_factor, shares_out=shares_out)
         _scale_chart_money_row(ttm2, fx_factor, shares_out=shares_out)
         for est in estimates:
             _scale_chart_revenue_estimate(est, fx_factor)
         chart_fx_note = fx_note
 
-    _prune_implausible_revenue_estimates(estimates, ttm, history)
+    _prune_implausible_revenue_estimates(estimates, ttm, annual_history)
 
-    display_metrics = _eodhd_display_metrics(history, ttm, h)
+    display_metrics = _eodhd_display_metrics(annual_history, ttm, h)
 
     return jsonify({
         "history":         history,
+        "annual_history":  annual_history,
+        "history_cadence": "quarterly" if q_inc else "annual",
         "quarterly_reports": quarterly_reports,
         "ttm":             ttm,
         "ttm2":            ttm2,
@@ -3925,6 +4044,7 @@ def company_detail(symbol):
         "sector":   c.get("sector", "Unknown"),
         "industry": c.get("industry", "Unknown"),
         "exchange": c.get("exchange", "US"),
+        "ms_ticker": _eodhd_ticker(symbol, c) or f"{symbol}.US",
         "data_quality": c.get("data_quality", {
             "income_statement": 0, "balance_sheet": 0,
             "cash_flow": 0, "quality": "N/A",
@@ -3995,6 +4115,45 @@ def company_detail(symbol):
     except Exception:
         pass
     return render_template('company.html', company=view)
+
+
+@app.route('/api/moonstocks/<path:ticker>')
+def moonstocks_analysis(ticker):
+    try:
+        resp = _req.get(
+            f"{MOONSTOCKS_API_BASE}/api/analyses",
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+    match = next(
+        (a for a in items if a.get("tickerAndExchangeCode", "").upper() == ticker.upper()),
+        None,
+    )
+    if not match:
+        return jsonify(None), 404
+    return jsonify({
+        "tickerAndExchangeCode": match["tickerAndExchangeCode"],
+        "generatedTime": match["generatedTime"],
+        "report": match.get("report"),
+    })
+
+
+@app.route('/api/moonstocks/<path:ticker>/trigger', methods=['POST'])
+def moonstocks_trigger(ticker):
+    try:
+        resp = _req.post(
+            f"{MOONSTOCKS_API_BASE}/api/analyses/{ticker}/trigger",
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+        body = resp.json() if resp.content else {}
+        return jsonify(body), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route('/sectors')

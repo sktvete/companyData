@@ -69,12 +69,16 @@ class AppEnhancedHistoryTests(unittest.TestCase):
             r = self.client.get("/api/company/AAPL/history")
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
-        hist_years = {h["year"] for h in body.get("history", [])}
+        reported_fy = {
+            int(h["fiscal_year"])
+            for h in body.get("annual_history", body.get("history", []))
+            if h.get("fiscal_year") is not None
+        }
         for est in body.get("estimates", []):
-            fy = str(est.get("fiscal_year", ""))
+            fy = int(est.get("fiscal_year") or 0)
             self.assertNotIn(
                 fy,
-                hist_years,
+                reported_fy,
                 msg=f"estimate {est.get('year')} overlaps reported FY{fy}",
             )
 
@@ -110,10 +114,15 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         self.assertNotIn("error", body)
         hist = body["history"]
         self.assertGreater(len(hist), 0)
-        row = next(h for h in hist if h["year"] == "2024")
+        annual = body.get("annual_history") or [
+            h for h in hist if h.get("period_end") and len(str(h.get("period_end"))) <= 4
+        ]
+        row = next((h for h in annual if int(h.get("fiscal_year") or 0) == 2024), None)
+        if row is None:
+            row = next((h for h in hist if str(h.get("fiscal_year")) == "2024"), None)
+        self.assertIsNotNone(row)
         self.assertIn("oeps", row)
         self.assertGreater(row["oeps"], 0)
-        # OEPS should be same order of magnitude as EPS for a profitable year
         self.assertLess(abs(row["oeps"] - row["eps"]), max(row["eps"], 0.01) * 2)
 
     def test_history_chronological_and_display_metrics(self) -> None:
@@ -121,8 +130,9 @@ class AppEnhancedHistoryTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         body = r.get_json()
         hist = body.get("history") or []
+        self.assertEqual(body.get("history_cadence"), "quarterly")
         if len(hist) >= 2:
-            self.assertLessEqual(int(hist[0]["year"]), int(hist[-1]["year"]))
+            self.assertLessEqual(hist[0]["period_end"], hist[-1]["period_end"])
         dm = body.get("display_metrics") or {}
         self.assertEqual(dm.get("source"), "eodhd")
         self.assertIn("flow", dm)
