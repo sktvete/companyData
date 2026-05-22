@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import requests as _req
+import sqlite3
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -50,6 +51,27 @@ MOONSTOCKS_API_BASE = os.environ.get(
 ).rstrip("/")
 
 app = Flask(__name__)
+
+# Moonstocks AI Analysis Database (SQLite)
+_MOONSTOCKS_DB = PROJECT_ROOT / "outputs" / "moonstocks_analyses.db"
+
+
+def _init_moonstocks_db():
+    """Initialize SQLite database for Moonstocks AI analyses."""
+    _MOONSTOCKS_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_MOONSTOCKS_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS analyses (
+            ticker_and_exchange_code TEXT PRIMARY KEY,
+            json_report TEXT NOT NULL,
+            generated_time INTEGER NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+_init_moonstocks_db()
 
 
 @app.context_processor
@@ -4119,34 +4141,103 @@ def company_detail(symbol):
 
 @app.route('/api/moonstocks/<path:ticker>')
 def moonstocks_analysis(ticker):
+    """Get Moonstocks AI analysis for a ticker from local database."""
     try:
-        resp = _req.get(
-            f"{MOONSTOCKS_API_BASE}/api/analyses",
-            headers={"Accept": "application/json"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        items = resp.json()
+        conn = sqlite3.connect(_MOONSTOCKS_DB)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT ticker_and_exchange_code, json_report, generated_time FROM analyses WHERE ticker_and_exchange_code = ?",
+            (ticker.upper(),)
+        ).fetchone()
+        conn.close()
+        if not row:
+            return jsonify(None), 404
+        return jsonify({
+            "tickerAndExchangeCode": row["ticker_and_exchange_code"],
+            "generatedTime": row["generated_time"],
+            "report": json.loads(row["json_report"]) if row["json_report"] else None,
+        })
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
-    match = next(
-        (a for a in items if a.get("tickerAndExchangeCode", "").upper() == ticker.upper()),
-        None,
-    )
-    if not match:
-        return jsonify(None), 404
-    return jsonify({
-        "tickerAndExchangeCode": match["tickerAndExchangeCode"],
-        "generatedTime": match["generatedTime"],
-        "report": match.get("report"),
-    })
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/moonstocks/<path:ticker>/trigger', methods=['POST'])
 def moonstocks_trigger(ticker):
+    """Trigger Moonstocks AI analysis by calling the external analyzer service."""
     try:
+        analyzer_url = os.environ.get(
+            "MOONSTOCKS_ANALYZER_URL",
+            "http://moonstocks-ai-analyzer-lb-prod-15318164.eu-north-1.elb.amazonaws.com"
+        ).rstrip("/")
         resp = _req.post(
-            f"{MOONSTOCKS_API_BASE}/api/analyses/{ticker}/trigger",
+            f"{analyzer_url}/{ticker}",
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+        body = resp.json() if resp.content else {}
+        return jsonify(body), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.route('/api/analysis', methods=['GET'])
+def get_all_analyses():
+    """Get all Moonstocks AI analyses (for moonstocks-app compatibility)."""
+    try:
+        conn = sqlite3.connect(_MOONSTOCKS_DB)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ticker_and_exchange_code, json_report, generated_time FROM analyses ORDER BY generated_time DESC"
+        ).fetchall()
+        conn.close()
+        return jsonify([
+            {
+                "tickerAndExchangeCode": r["ticker_and_exchange_code"],
+                "jsonReport": r["json_report"],
+                "generatedTime": r["generated_time"],
+            }
+            for r in rows
+        ])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/analysis/<ticker_and_exchange_code>', methods=['POST'])
+def create_analysis(ticker_and_exchange_code):
+    """Store a Moonstocks AI analysis (called by analyzer service)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        json_report = data.get("jsonReport") or data.get("json_report")
+        if not json_report:
+            return jsonify({"error": "Missing jsonReport"}), 400
+        
+        generated_time = int(datetime.now().timestamp() * 1000)
+        
+        conn = sqlite3.connect(_MOONSTOCKS_DB)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO analyses (ticker_and_exchange_code, json_report, generated_time)
+            VALUES (?, ?, ?)
+            """,
+            (ticker_and_exchange_code.upper(), json_report, generated_time)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "created", "tickerAndExchangeCode": ticker_and_exchange_code})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/analysis/<ticker_and_exchange_code>/trigger', methods=['POST'])
+def trigger_analysis_api(ticker_and_exchange_code):
+    """Trigger Moonstocks AI analysis (for moonstocks-app compatibility)."""
+    try:
+        analyzer_url = os.environ.get(
+            "MOONSTOCKS_ANALYZER_URL",
+            "http://moonstocks-ai-analyzer-lb-prod-15318164.eu-north-1.elb.amazonaws.com"
+        ).rstrip("/")
+        resp = _req.post(
+            f"{analyzer_url}/{ticker_and_exchange_code}",
             headers={"Accept": "application/json"},
             timeout=30,
         )
