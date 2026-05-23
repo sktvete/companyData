@@ -1,0 +1,55 @@
+# Local stack: equity-os + analyzer + Postgres (production-like storage)
+# Usage: docker compose -f docker-compose.moonstocks.yml up --build
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: moonstocks
+      POSTGRES_PASSWORD: moonstocks
+      POSTGRES_DB: moonstocks
+    volumes:
+      - moonstocks-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moonstocks -d moonstocks"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  equity-os:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      MOONSTOCKS_ANALYZER_URL: http://analyzer:8000
+      MOONSTOCKS_DATABASE_URL: postgresql://moonstocks:moonstocks@postgres:5432/moonstocks
+    volumes:
+      - ./outputs:/app/outputs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+
+  analyzer:
+    build: ./moonstocks-ai-analyzer
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      ANALYSIS_API_BASE_URL: http://equity-os:3000
+      ANALYZER_LLM_PROVIDER: openai
+    depends_on:
+      equity-os:
+        condition: service_healthy
+
+volumes:
+  moonstocks-pg:
+

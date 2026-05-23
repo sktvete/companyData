@@ -21,9 +21,9 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 import requests as _req
-import sqlite3
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_web_dir = Path(__file__).resolve().parent
+# Repo root when app lives in web/ (local dev and Docker WORKDIR=/app/web).
+PROJECT_ROOT = _web_dir.parent if (_web_dir.parent / "src").is_dir() else _web_dir
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 _SCRIPTS_DIR = str(PROJECT_ROOT / "scripts")
 if _SCRIPTS_DIR not in sys.path:
@@ -42,8 +42,10 @@ import codex_chat
 import chat_tools
 from glossary_data import GLOSSARY
 from metric_tones import build_sector_valuation_medians, row_tones
+import moonstocks_store as ms_store
 
-load_dotenv()
+load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(_web_dir / ".env")
 
 MOONSTOCKS_API_BASE = os.environ.get(
     "MOONSTOCKS_API_URL",
@@ -52,26 +54,34 @@ MOONSTOCKS_API_BASE = os.environ.get(
 
 app = Flask(__name__)
 
-# Moonstocks AI Analysis Database (SQLite)
-_MOONSTOCKS_DB = PROJECT_ROOT / "outputs" / "moonstocks_analyses.db"
+def _moonstocks_analyzer_url() -> str:
+    return (
+        os.environ.get("MOONSTOCKS_ANALYZER_URL")
+        or "http://moonstocks-ai-analyzer-lb-prod-15318164.eu-north-1.elb.amazonaws.com"
+    ).rstrip("/")
 
 
-def _init_moonstocks_db():
-    """Initialize SQLite database for Moonstocks AI analyses."""
-    _MOONSTOCKS_DB.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_MOONSTOCKS_DB)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS analyses (
-            ticker_and_exchange_code TEXT PRIMARY KEY,
-            json_report TEXT NOT NULL,
-            generated_time INTEGER NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+def _moonstocks_analyzer_headers() -> dict[str, str]:
+    headers = {"Accept": "application/json"}
+    key = (os.environ.get("ANALYZER_API_KEY") or "").strip()
+    if key:
+        headers["X-API-Key"] = key
+    return headers
 
 
-_init_moonstocks_db()
+def _moonstocks_ingest_authorized() -> bool:
+    """Optional shared secret for POST /api/analysis (analyzer callback)."""
+    expected = (
+        os.environ.get("MOONSTOCKS_INGEST_API_KEY")
+        or os.environ.get("ANALYZER_API_KEY")
+        or ""
+    ).strip()
+    if not expected:
+        return True
+    return request.headers.get("X-API-Key") == expected
+
+
+ms_store.init_store(PROJECT_ROOT)
 
 
 @app.context_processor
@@ -4067,6 +4077,7 @@ def company_detail(symbol):
         "industry": c.get("industry", "Unknown"),
         "exchange": c.get("exchange", "US"),
         "ms_ticker": _eodhd_ticker(symbol, c) or f"{symbol}.US",
+        "ms_app_url": MOONSTOCKS_API_BASE,
         "data_quality": c.get("data_quality", {
             "income_statement": 0, "balance_sheet": 0,
             "cash_flow": 0, "quality": "N/A",
@@ -4139,24 +4150,23 @@ def company_detail(symbol):
     return render_template('company.html', company=view)
 
 
+@app.route("/health")
+def health():
+    return jsonify({
+        "status": "ok",
+        "service": "equity-os",
+        "moonstocks_storage": "postgres" if ms_store.uses_postgres() else "sqlite",
+    })
+
+
 @app.route('/api/moonstocks/<path:ticker>')
 def moonstocks_analysis(ticker):
     """Get Moonstocks AI analysis for a ticker from local database."""
     try:
-        conn = sqlite3.connect(_MOONSTOCKS_DB)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT ticker_and_exchange_code, json_report, generated_time FROM analyses WHERE ticker_and_exchange_code = ?",
-            (ticker.upper(),)
-        ).fetchone()
-        conn.close()
+        row = ms_store.get_analysis(PROJECT_ROOT, ticker)
         if not row:
             return jsonify(None), 404
-        return jsonify({
-            "tickerAndExchangeCode": row["ticker_and_exchange_code"],
-            "generatedTime": row["generated_time"],
-            "report": json.loads(row["json_report"]) if row["json_report"] else None,
-        })
+        return jsonify(ms_store.row_to_moonstocks_json(row))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4165,13 +4175,9 @@ def moonstocks_analysis(ticker):
 def moonstocks_trigger(ticker):
     """Trigger Moonstocks AI analysis by calling the external analyzer service."""
     try:
-        analyzer_url = os.environ.get(
-            "MOONSTOCKS_ANALYZER_URL",
-            "http://moonstocks-ai-analyzer-lb-prod-15318164.eu-north-1.elb.amazonaws.com"
-        ).rstrip("/")
         resp = _req.post(
-            f"{analyzer_url}/{ticker}",
-            headers={"Accept": "application/json"},
+            f"{_moonstocks_analyzer_url()}/{ticker}",
+            headers=_moonstocks_analyzer_headers(),
             timeout=30,
         )
         body = resp.json() if resp.content else {}
@@ -4184,20 +4190,8 @@ def moonstocks_trigger(ticker):
 def get_all_analyses():
     """Get all Moonstocks AI analyses (for moonstocks-app compatibility)."""
     try:
-        conn = sqlite3.connect(_MOONSTOCKS_DB)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT ticker_and_exchange_code, json_report, generated_time FROM analyses ORDER BY generated_time DESC"
-        ).fetchall()
-        conn.close()
-        return jsonify([
-            {
-                "tickerAndExchangeCode": r["ticker_and_exchange_code"],
-                "jsonReport": r["json_report"],
-                "generatedTime": r["generated_time"],
-            }
-            for r in rows
-        ])
+        rows = ms_store.list_analyses(PROJECT_ROOT)
+        return jsonify([ms_store.row_to_compat_json(r) for r in rows])
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4205,24 +4199,20 @@ def get_all_analyses():
 @app.route('/api/analysis/<ticker_and_exchange_code>', methods=['POST'])
 def create_analysis(ticker_and_exchange_code):
     """Store a Moonstocks AI analysis (called by analyzer service)."""
+    if not _moonstocks_ingest_authorized():
+        return jsonify({"error": "Unauthorized"}), 401
     try:
         data = request.get_json(silent=True) or {}
         json_report = data.get("jsonReport") or data.get("json_report")
         if not json_report:
             return jsonify({"error": "Missing jsonReport"}), 400
+        if isinstance(json_report, dict):
+            json_report = json.dumps(json_report)
         
         generated_time = int(datetime.now().timestamp() * 1000)
-        
-        conn = sqlite3.connect(_MOONSTOCKS_DB)
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO analyses (ticker_and_exchange_code, json_report, generated_time)
-            VALUES (?, ?, ?)
-            """,
-            (ticker_and_exchange_code.upper(), json_report, generated_time)
+        ms_store.upsert_analysis(
+            PROJECT_ROOT, ticker_and_exchange_code, json_report, generated_time
         )
-        conn.commit()
-        conn.close()
         return jsonify({"status": "created", "tickerAndExchangeCode": ticker_and_exchange_code})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -4232,13 +4222,9 @@ def create_analysis(ticker_and_exchange_code):
 def trigger_analysis_api(ticker_and_exchange_code):
     """Trigger Moonstocks AI analysis (for moonstocks-app compatibility)."""
     try:
-        analyzer_url = os.environ.get(
-            "MOONSTOCKS_ANALYZER_URL",
-            "http://moonstocks-ai-analyzer-lb-prod-15318164.eu-north-1.elb.amazonaws.com"
-        ).rstrip("/")
         resp = _req.post(
-            f"{analyzer_url}/{ticker_and_exchange_code}",
-            headers={"Accept": "application/json"},
+            f"{_moonstocks_analyzer_url()}/{ticker_and_exchange_code}",
+            headers=_moonstocks_analyzer_headers(),
             timeout=30,
         )
         body = resp.json() if resp.content else {}

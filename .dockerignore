@@ -1,0 +1,14 @@
+.git
+.cursor
+outputs/scaled_analysis
+outputs/fundamentals_cache
+outputs/*.jsonl
+moonstocks-api
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.moonstocks.example
+terminals
+*.md
+!docs/

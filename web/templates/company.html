@@ -2097,7 +2097,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // ── Moonstocks AI ──────────────────────────────────────────────────────────
 (function () {
   const MS_TICKER = {{ (company.ms_ticker if company.ms_ticker is defined else company.symbol ~ '.US') | tojson }};
-  const MS_ORIGIN = 'http://moonstocks-lb-prod-15318164.eu-north-1.elb.amazonaws.com';
+  const MS_ORIGIN = {{ (company.ms_app_url if company.ms_app_url is defined else 'http://moonstocks-lb-prod-15318164.eu-north-1.elb.amazonaws.com') | tojson }};
   const REC_LABELS = { buy: 'BUY', watchlist: 'WATCHLIST', no_buy: 'NO BUY' };
   const SCORE_KEYS = [
     ['quality_score', 'Quality'], ['growth_score', 'Growth'],

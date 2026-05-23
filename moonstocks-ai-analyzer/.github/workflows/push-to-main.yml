@@ -1,0 +1,20 @@
+name: Push to ECR
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: moonstocksai/workflows/.github/workflows/deploy-to-aws.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      ecr-repository: ${{ vars.ECR_REPOSITORY }}
+      container-name: ${{ vars.CONTAINER_NAME }}
+      ecs-service: ${{ vars.ECS_SERVICE }}
+      ecs-cluster: ${{ vars.ECS_CLUSTER }}
+    secrets:
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}

@@ -1,0 +1,57 @@
+{
+  "containerDefinitions": [
+    {
+      "name": "equity-os",
+      "image": "550822830987.dkr.ecr.eu-north-1.amazonaws.com/equity-os-prod:PLACEHOLDER",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000,
+          "protocol": "tcp",
+          "name": "equity-os-port-3000",
+          "appProtocol": "http"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "MOONSTOCKS_ANALYZER_URL",
+          "value": "http://moonstocks-ai-analyzer-prod:8000"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "EODHD_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:eu-north-1:550822830987:secret:REPLACE_ME:EODHD_API_KEY::"
+        },
+        {
+          "name": "MOONSTOCKS_DATABASE_URL",
+          "valueFrom": "arn:aws:secretsmanager:eu-north-1:550822830987:secret:moonstocks/rds/database_url"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/equity-os-prod",
+          "awslogs-region": "eu-north-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health')\" || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 120
+      }
+    }
+  ],
+  "family": "equity-os-prod",
+  "executionRoleArn": "arn:aws:iam::550822830987:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::550822830987:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048"
+}

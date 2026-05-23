@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: RDS PostgreSQL for Moonstocks analyses (equity-os)
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  EcsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to equity-os ECS tasks
+  DBUsername:
+    Type: String
+    Default: moonstocks
+  DBName:
+    Type: String
+    Default: moonstocks
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+
+Resources:
+  MoonstocksDbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Moonstocks RDS subnets
+      SubnetIds: !Ref PrivateSubnetIds
+
+  MoonstocksDbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS Postgres for Moonstocks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref EcsSecurityGroupId
+
+  MoonstocksDbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: moonstocks/rds/credentials
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username":"${DBUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+
+  MoonstocksDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: moonstocks-equity-os
+      Engine: postgres
+      EngineVersion: "16.4"
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: 20
+      StorageType: gp3
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${MoonstocksDbSecret}:SecretString:password}}"
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !Ref MoonstocksDbSecurityGroup
+      DBSubnetGroupName: !Ref MoonstocksDbSubnetGroup
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+
+  MoonstocksDatabaseUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: moonstocks/rds/database_url
+      SecretString: !Join
+        - ""
+        - - "postgresql://"
+          - !Ref DBUsername
+          - ":"
+          - !Sub "{{resolve:secretsmanager:${MoonstocksDbSecret}:SecretString:password}}"
+          - "@"
+          - !GetAtt MoonstocksDatabase.Endpoint.Address
+          - ":5432/"
+          - !Ref DBName
+
+Outputs:
+  DatabaseEndpoint:
+    Value: !GetAtt MoonstocksDatabase.Endpoint.Address
+  DatabaseUrlSecretArn:
+    Value: !Ref MoonstocksDatabaseUrlSecret
+  CredentialsSecretArn:
+    Value: !Ref MoonstocksDbSecret
