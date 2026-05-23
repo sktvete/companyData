@@ -40,9 +40,19 @@ docker compose -f docker-compose.moonstocks.yml up --build
 .\.venv\Scripts\python.exe scripts\e2e_moonstocks_local.py --start-server
 ```
 
-## AWS next steps
+## Docker Desktop
 
-1. Build/push `equity-os` — `Dockerfile`, `deploy/aws/equity-os-task-definition.json`
-2. ECS service `equity-os-prod` (replaces `moonstocks-api-prod`)
-3. Analyzer: `ANALYSIS_API_BASE_URL=http://equity-os-prod:3000` + `OPENAI_API_KEY` in secrets
-4. Cut over moonstocks-app API base URL
+Installed via `scripts/install-docker-desktop.ps1`. **Start Docker Desktop** from the Start menu, wait for “Engine running”, then:
+
+```bash
+docker compose -f docker-compose.moonstocks.yml up --build
+```
+
+## AWS next steps (needs AWS CLI on a machine with credentials)
+
+See `deploy/aws/README.md`. Summary:
+
+1. `aws cloudformation deploy` — `deploy/aws/rds-moonstocks.yaml`
+2. `scripts/deploy_moonstocks_ecr.ps1` — build/push images
+3. Register ECS task defs; create/update `equity-os-prod` service
+4. Cut over moonstocks-app API URL; scale down C# `moonstocks-api`
