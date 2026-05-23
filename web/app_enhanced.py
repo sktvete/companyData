@@ -81,9 +81,6 @@ def _moonstocks_ingest_authorized() -> bool:
     return request.headers.get("X-API-Key") == expected
 
 
-ms_store.init_store(PROJECT_ROOT)
-
-
 @app.context_processor
 def _inject_glossary():
     return {"G": GLOSSARY}

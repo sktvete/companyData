@@ -25,6 +25,7 @@ class MoonstocksApiTests(unittest.TestCase):
         os.environ["MOONSTOCKS_DB_PATH"] = str(self._db)
         import moonstocks_store as ms_store
 
+        ms_store.reset_store()
         ms_store.init_store(ae.PROJECT_ROOT)
         ae.companies = [
             {
@@ -43,6 +44,9 @@ class MoonstocksApiTests(unittest.TestCase):
         self._tmpdir.cleanup()
         os.environ.pop("MOONSTOCKS_DB_PATH", None)
         os.environ.pop("MOONSTOCKS_DATABASE_URL", None)
+        import moonstocks_store as ms_store
+
+        ms_store.reset_store()
 
     def test_create_and_get_moonstocks_analysis(self) -> None:
         report = {

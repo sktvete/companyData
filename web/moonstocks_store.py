@@ -33,6 +33,9 @@ def _database_url() -> str:
 
 
 def uses_postgres() -> bool:
+    # Explicit SQLite path wins (local/e2e) even if .env has Docker Postgres URL.
+    if (os.environ.get("MOONSTOCKS_DB_PATH") or "").strip():
+        return False
     url = _database_url()
     return url.startswith("postgresql://") or url.startswith("postgres://")
 
@@ -42,6 +45,18 @@ def _sqlite_path(project_root: Path) -> Path:
     if raw:
         return Path(raw)
     return project_root / "outputs" / "moonstocks_analyses.db"
+
+
+_store_ready = False
+
+
+def ensure_store(project_root: Path) -> None:
+    """Create schema once (lazy — avoids import-time Postgres when .env targets Docker)."""
+    global _store_ready
+    if _store_ready:
+        return
+    init_store(project_root)
+    _store_ready = True
 
 
 def init_store(project_root: Path) -> None:
@@ -71,12 +86,20 @@ def init_store(project_root: Path) -> None:
     """)
     conn.commit()
     conn.close()
+    global _store_ready
+    _store_ready = True
+
+
+def reset_store() -> None:
+    """Test helper: allow re-init after env change."""
+    global _store_ready
+    _store_ready = False
 
 
 @contextmanager
 def _pg_conn():
     assert psycopg is not None
-    with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
+    with psycopg.connect(_database_url(), connect_timeout=5, row_factory=dict_row) as conn:
         yield conn
 
 
@@ -91,6 +114,7 @@ def _sqlite_conn(project_root: Path):
 
 
 def get_analysis(project_root: Path, ticker: str) -> AnalysisRow | None:
+    ensure_store(project_root)
     key = ticker.upper()
     if uses_postgres():
         with _pg_conn() as conn:
@@ -116,6 +140,7 @@ def get_analysis(project_root: Path, ticker: str) -> AnalysisRow | None:
 
 
 def list_analyses(project_root: Path) -> list[AnalysisRow]:
+    ensure_store(project_root)
     if uses_postgres():
         with _pg_conn() as conn:
             rows = conn.execute(
@@ -139,6 +164,7 @@ def list_analyses(project_root: Path) -> list[AnalysisRow]:
 
 
 def upsert_analysis(project_root: Path, ticker: str, json_report: str, generated_time: int) -> None:
+    ensure_store(project_root)
     key = ticker.upper()
     if uses_postgres():
         with _pg_conn() as conn:

@@ -250,6 +250,8 @@ def main() -> int:
         env = os.environ.copy()
         env["MOONSTOCKS_ANALYZER_URL"] = mock_url
         env["MOONSTOCKS_DB_PATH"] = db_path
+        env.pop("MOONSTOCKS_DATABASE_URL", None)
+        env.pop("DATABASE_URL", None)
         # Avoid inheriting prod analyzer URL from shell/.env
         env.pop("MOONSTOCKS_API_URL", None)
         print("Starting equity-os on :3000 (may take ~60s for load_data)...")
