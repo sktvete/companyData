@@ -1,13 +1,14 @@
 import os
-from pathlib import Path
+from pathlib import Path as FsPath
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Path
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi import Path as PathParam
 
 from analyzer import run_analysis
 from analyzer_provider import resolve_llm_provider
 
-_ROOT = Path(__file__).resolve().parent
+_ROOT = FsPath(__file__).resolve().parent
 load_dotenv(_ROOT / ".env")
 load_dotenv(_ROOT.parent / ".env")
 
@@ -22,7 +23,7 @@ async def health():
 @app.post("/{ticker_exchange}", status_code=202)
 async def create_analysis(
     background_tasks: BackgroundTasks,
-    ticker_exchange: str = Path(..., pattern=r"^[A-Za-z0-9-]+\.[A-Za-z]+$"),
+    ticker_exchange: str = PathParam(..., pattern=r"^[A-Za-z0-9-]+\.[A-Za-z]+$"),
     x_api_key: str | None = Header(default=None),
 ):
     expected = os.environ.get("ANALYZER_API_KEY", "")
