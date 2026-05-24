@@ -4594,6 +4594,104 @@ def moonstocks_trigger(ticker):
         return jsonify({"error": str(e)}), 502
 
 
+@app.route('/api/moonstocks/<path:ticker>/analyze-stream', methods=['POST'])
+def moonstocks_analyze_stream(ticker):
+    """
+    Run a local OpenAI analysis using the *user's* API key and stream the output
+    back as Server-Sent Events.
+
+    POST body (JSON):
+      { "openai_api_key": "sk-...", "model": "gpt-4o-mini" }   (model optional)
+
+    SSE events:
+      event: status  — short human-readable progress note
+      event: token   — raw AI output text chunk
+      event: done    — analysis complete; data contains the final JSON report
+      event: error   — something went wrong
+    """
+    import queue as _queue
+    import threading as _threading
+
+    body = request.get_json(silent=True) or {}
+    openai_key = (body.get("openai_api_key") or "").strip()
+    model      = (body.get("model") or "gpt-4o-mini").strip()
+
+    if not openai_key or not openai_key.startswith("sk-"):
+        return jsonify({"error": "A valid OpenAI API key (sk-...) is required."}), 400
+
+    try:
+        import local_analyzer as _la
+    except ImportError as exc:
+        return jsonify({"error": f"local_analyzer not available: {exc}"}), 500
+
+    q: _queue.Queue = _queue.Queue()
+
+    def _worker():
+        try:
+            for event in _la.analyze_stream(ticker, openai_key, model):
+                q.put(event)
+                if event["type"] in ("done", "error"):
+                    return
+        except Exception as exc:
+            q.put({"type": "error", "text": str(exc)})
+
+    _threading.Thread(target=_worker, daemon=True).start()
+
+    def _generate():
+        triggered_at = int(datetime.now().timestamp() * 1000)
+        ms_store.upsert_trigger(PROJECT_ROOT, ticker, triggered_at)
+        yield f"event: status\ndata: {json.dumps({'text': f'Analysis triggered for {ticker}'})}\n\n"
+
+        while True:
+            try:
+                evt = q.get(timeout=55)
+            except _queue.Empty:
+                yield ": keepalive\n\n"
+                continue
+
+            etype = evt.get("type", "status")
+
+            if etype == "token":
+                yield f"event: token\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+
+            elif etype == "status":
+                yield f"event: status\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+
+            elif etype == "done":
+                report = evt.get("report", {})
+                raw    = evt.get("raw",    "")
+                try:
+                    generated_time = int(datetime.now().timestamp() * 1000)
+                    ms_store.upsert_analysis(
+                        PROJECT_ROOT, ticker,
+                        json.dumps(report), generated_time,
+                    )
+                    ms_store.upsert_trigger(PROJECT_ROOT, ticker, None)
+                    result = ms_store.get_analysis(PROJECT_ROOT, ticker)
+                    result_json = ms_store.row_to_moonstocks_json(result) if result else None
+                except Exception as exc:
+                    app.logger.error("Failed to save analysis for %s: %s", ticker, exc)
+                    result_json = None
+
+                payload = {
+                    "tickerAndExchangeCode": ticker,
+                    "report":                report,
+                    "saved":                 result_json is not None,
+                }
+                yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+                return
+
+            elif etype == "error":
+                yield f"event: error\ndata: {json.dumps({'text': evt.get('text', 'Unknown error')})}\n\n"
+                return
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.route('/api/analysis', methods=['GET'])
 def get_all_analyses():
     """Get all Moonstocks AI analyses (for moonstocks-app compatibility)."""

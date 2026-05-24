@@ -74,6 +74,11 @@
   .section-h{color:var(--dim);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.65rem;font-family:'JetBrains Mono',monospace}
   .run-btn{background:transparent;color:var(--accent);border:1px solid rgba(59,130,246,.4);padding:.35rem .85rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;border-radius:2px}
   .run-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+  #msKeyInput:focus{border-color:var(--accent);outline:none}
+  #msKeyModal select:focus{border-color:var(--accent);outline:none}
+  #msStreamOutput::-webkit-scrollbar{width:4px}
+  #msStreamOutput::-webkit-scrollbar-track{background:transparent}
+  #msStreamOutput::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}
   .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.58rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
   .rbtn:hover{color:var(--fg);background:var(--muted)}
   .rbtn.active{color:var(--accent);background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
@@ -222,8 +227,71 @@
       <div style="color:var(--dim);font-size:.75rem;margin-bottom:.75rem">
         No AI analysis available for <b style="color:var(--fg)">{{ company.ms_ticker if company.ms_ticker is defined else company.symbol ~ '.US' }}</b> yet.
       </div>
-      <button id="msTriggerBtn" class="run-btn">Trigger Analysis</button>
+      <button id="msTriggerBtn" class="run-btn">Run AI Analysis</button>
       <span id="msTriggerStatus" style="font-size:.7rem;color:var(--dim);margin-left:.75rem;display:none"></span>
+    </div>
+
+    <!-- Live stream terminal (visible while analysis is running) -->
+    <div id="msStreamPanel" style="display:none;margin-top:.85rem">
+      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
+        <span class="blink" id="msStreamDot" style="color:var(--accent);font-size:.8rem">●</span>
+        <span id="msStreamLabel" style="font-size:.72rem;color:var(--dim);letter-spacing:.04em">AI is thinking…</span>
+        <span id="msStreamModel" style="font-size:.62rem;color:var(--dim);margin-left:auto"></span>
+      </div>
+      <div id="msStreamOutput" style="
+        font-family:'JetBrains Mono',ui-monospace,monospace;
+        font-size:.68rem;line-height:1.65;
+        background:#0d1117;border:1px solid rgba(255,255,255,.08);border-radius:6px;
+        padding:.75rem .85rem;max-height:260px;overflow-y:auto;
+        color:#c9d1d9;white-space:pre-wrap;word-break:break-word;
+        scrollbar-width:thin;
+      "></div>
+    </div>
+
+    <!-- OpenAI key modal -->
+    <div id="msKeyModal" style="
+      display:none;position:fixed;inset:0;z-index:9000;
+      background:rgba(0,0,0,.7);backdrop-filter:blur(4px);
+      align-items:center;justify-content:center;
+    ">
+      <div style="
+        background:#161b22;border:1px solid rgba(255,255,255,.12);border-radius:10px;
+        padding:1.6rem 1.8rem;width:min(420px,92vw);box-shadow:0 16px 40px rgba(0,0,0,.6);
+      ">
+        <div style="font-size:1rem;font-weight:700;margin-bottom:.25rem">Run AI Analysis</div>
+        <div style="font-size:.72rem;color:var(--dim);margin-bottom:1.1rem;line-height:1.6">
+          Analysis runs using <b style="color:var(--fg)">your OpenAI API key</b> — tokens are charged to your account, not ours. The key is sent only to this server, used once for this request, and never stored.
+        </div>
+        <label style="font-size:.7rem;color:var(--dim);display:block;margin-bottom:.3rem">OpenAI API Key</label>
+        <input id="msKeyInput" type="password" placeholder="sk-…" autocomplete="off" style="
+          width:100%;box-sizing:border-box;padding:.55rem .7rem;
+          background:#0d1117;border:1px solid rgba(255,255,255,.15);border-radius:6px;
+          color:var(--fg);font-size:.78rem;font-family:monospace;outline:none;
+          transition:border-color .15s;
+        " />
+        <div style="margin-top:.85rem">
+          <label style="font-size:.7rem;color:var(--dim);display:block;margin-bottom:.3rem">Model</label>
+          <select id="msModelSelect" style="
+            padding:.45rem .6rem;background:#0d1117;border:1px solid rgba(255,255,255,.15);
+            border-radius:6px;color:var(--fg);font-size:.75rem;outline:none;cursor:pointer;
+          ">
+            <option value="gpt-4o-mini" selected>gpt-4o-mini (faster, cheaper — recommended)</option>
+            <option value="gpt-4o">gpt-4o (higher quality, more tokens)</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.85rem">
+          <input type="checkbox" id="msKeySave" checked style="width:13px;height:13px;cursor:pointer">
+          <label for="msKeySave" style="font-size:.68rem;color:var(--dim);cursor:pointer">Remember key for this browser session</label>
+        </div>
+        <div style="display:flex;gap:.65rem;margin-top:1.1rem">
+          <button id="msKeyCancel" style="
+            flex:1;padding:.55rem;background:transparent;border:1px solid rgba(255,255,255,.15);
+            border-radius:6px;color:var(--dim);font-size:.78rem;cursor:pointer;
+          ">Cancel</button>
+          <button id="msKeyConfirm" class="run-btn" style="flex:2">Run Analysis</button>
+        </div>
+        <div id="msKeyError" style="font-size:.68rem;color:var(--neg);margin-top:.6rem;display:none"></div>
+      </div>
     </div>
 
     <div id="msError" style="display:none;font-size:.75rem;color:var(--neg)">Could not load Moonstocks analysis.</div>
@@ -2230,32 +2298,225 @@ document.addEventListener('DOMContentLoaded', () => {
     msShow('msSection');
   }
 
-  // Start or resume the pending-analysis countdown from a server timestamp.
-  // totalSecs=180 is the expected analysis window; elapsed is deducted on resume.
-  function msStartCountdown(triggeredAtMs) {
-    const status = document.getElementById('msTriggerStatus');
-    const triggerBtn = document.getElementById('msTriggerBtn');
-    const totalSecs = 180;
-    const elapsed = Math.floor((Date.now() - triggeredAtMs) / 1000);
-    let secs = Math.max(0, totalSecs - elapsed);
-    if (triggerBtn) triggerBtn.style.display = 'none';
-    status.style.display = 'block';
-    const tick = () => {
-      if (secs > 0) {
-        const m = Math.floor(secs / 60);
-        const s = String(secs % 60).padStart(2, '0');
-        status.style.color = 'var(--pos)';
-        status.textContent = `Analysis queued — arriving in ~${m}:${s}`;
-        secs--;
-        setTimeout(tick, 1000);
-      } else {
-        status.style.color = 'var(--dim)';
-        status.textContent = 'Analysis should be ready — refresh the page to check.';
-      }
-    };
-    tick();
+  // ── API-key helpers (sessionStorage) ───────────────────────────────────
+  const MS_KEY_STORE = 'ms_openai_key';
+  const MS_MODEL_STORE = 'ms_openai_model';
+
+  function msGetStoredKey()   { return sessionStorage.getItem(MS_KEY_STORE)   || ''; }
+  function msGetStoredModel() { return sessionStorage.getItem(MS_MODEL_STORE) || 'gpt-4o-mini'; }
+
+  function msStoreKey(key, model, save) {
+    if (save) {
+      sessionStorage.setItem(MS_KEY_STORE, key);
+      sessionStorage.setItem(MS_MODEL_STORE, model);
+    } else {
+      sessionStorage.removeItem(MS_KEY_STORE);
+      sessionStorage.removeItem(MS_MODEL_STORE);
+    }
   }
 
+  // ── Key modal ────────────────────────────────────────────────────────────
+  function msShowKeyModal() {
+    return new Promise((resolve) => {
+      const modal  = document.getElementById('msKeyModal');
+      const input  = document.getElementById('msKeyInput');
+      const select = document.getElementById('msModelSelect');
+      const save   = document.getElementById('msKeySave');
+      const err    = document.getElementById('msKeyError');
+      const cancel = document.getElementById('msKeyCancel');
+      const confirm = document.getElementById('msKeyConfirm');
+
+      // Pre-fill stored key/model
+      const storedKey = msGetStoredKey();
+      if (storedKey) input.value = storedKey;
+      select.value = msGetStoredModel();
+      err.style.display = 'none';
+      modal.style.display = 'flex';
+      input.focus();
+
+      const cleanup = () => { modal.style.display = 'none'; cancel.onclick = null; confirm.onclick = null; };
+
+      cancel.onclick  = () => { cleanup(); resolve(null); };
+      confirm.onclick = () => {
+        const key   = (input.value || '').trim();
+        const model = select.value;
+        if (!key.startsWith('sk-')) {
+          err.textContent = 'Enter a valid OpenAI key starting with sk-';
+          err.style.display = '';
+          return;
+        }
+        msStoreKey(key, model, save.checked);
+        cleanup();
+        resolve({ key, model });
+      };
+
+      // Enter key submits
+      input.onkeydown = (e) => { if (e.key === 'Enter') confirm.onclick(); };
+    });
+  }
+
+  // ── Stream terminal helpers ──────────────────────────────────────────────
+  function msStreamAppend(text) {
+    const el = document.getElementById('msStreamOutput');
+    if (!el) return;
+    el.textContent += text;
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function msStreamSetLabel(text, color) {
+    const el = document.getElementById('msStreamLabel');
+    if (el) { el.textContent = text; if (color) el.style.color = color; }
+  }
+
+  function msStreamSetModel(text) {
+    const el = document.getElementById('msStreamModel');
+    if (el) el.textContent = text;
+  }
+
+  // ── SSE fetch reader ─────────────────────────────────────────────────────
+  async function msRunStream(key, model) {
+    const triggerBtn = document.getElementById('msTriggerBtn');
+    const status     = document.getElementById('msTriggerStatus');
+
+    if (triggerBtn) triggerBtn.style.display = 'none';
+    if (status)     { status.style.display = 'none'; }
+
+    msHide('msNotFound');
+    msShow('msStreamPanel');
+    msStreamSetModel(model);
+    msStreamSetLabel('Fetching data…');
+    document.getElementById('msStreamOutput').textContent = '';
+
+    let resp;
+    try {
+      resp = await fetch(
+        '/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/analyze-stream',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ openai_api_key: key, model }),
+        },
+      );
+    } catch (e) {
+      msStreamSetLabel('Connection failed — ' + e.message, 'var(--neg)');
+      const dot = document.getElementById('msStreamDot');
+      if (dot) dot.classList.remove('blink');
+      return;
+    }
+
+    if (!resp.ok) {
+      const t = await resp.text().catch(() => '');
+      msStreamSetLabel('Error ' + resp.status + (t ? ': ' + t : ''), 'var(--neg)');
+      return;
+    }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let   buf     = '';
+
+    const parseEvents = (raw) => {
+      const events = [];
+      const parts  = raw.split('\n\n');
+      const rest   = parts.pop();
+      for (const part of parts) {
+        let type = 'message', data = '';
+        for (const line of part.split('\n')) {
+          if (line.startsWith('event: ')) type = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data = line.slice(6).trim();
+        }
+        if (data) events.push({ type, data });
+      }
+      return { events, rest };
+    };
+
+    while (true) {
+      let chunk;
+      try {
+        chunk = await reader.read();
+      } catch { break; }
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      const { events, rest } = parseEvents(buf);
+      buf = rest;
+
+      for (const { type, data } of events) {
+        let payload;
+        try { payload = JSON.parse(data); } catch { payload = { text: data }; }
+
+        if (type === 'status') {
+          msStreamSetLabel(payload.text, 'var(--dim)');
+
+        } else if (type === 'token') {
+          msStreamSetLabel('AI is writing…', 'var(--pos)');
+          msStreamAppend(payload.text || '');
+
+        } else if (type === 'done') {
+          const dot = document.getElementById('msStreamDot');
+          if (dot) dot.classList.remove('blink');
+          msStreamSetLabel('Analysis complete — loading result…', 'var(--pos)');
+
+          // Small delay so user sees the "complete" message, then show result
+          setTimeout(async () => {
+            msHide('msStreamPanel');
+            const r = await fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER));
+            if (r.ok) {
+              const d = await r.json().catch(() => null);
+              if (d && !d.pending) { msHide('msNotFound'); msHide('msLoading'); msRender(d); return; }
+            }
+            // Fallback: render from the streamed payload directly
+            if (payload.report) {
+              msHide('msNotFound'); msHide('msLoading');
+              msRender({ tickerAndExchangeCode: MS_TICKER, report: payload.report });
+            } else {
+              msShow('msNotFound');
+              if (triggerBtn) triggerBtn.style.display = '';
+            }
+          }, 1200);
+          return;
+
+        } else if (type === 'error') {
+          const dot = document.getElementById('msStreamDot');
+          if (dot) dot.classList.remove('blink');
+          msStreamSetLabel('Error: ' + payload.text, 'var(--neg)');
+          msStreamAppend('\n\n— Analysis failed —');
+          // Re-show trigger button after a moment
+          setTimeout(() => {
+            msShow('msNotFound');
+            if (triggerBtn) { triggerBtn.style.display = ''; triggerBtn.disabled = false; }
+          }, 4000);
+          return;
+        }
+      }
+    }
+  }
+
+  // ── Countdown (used when external analyzer was triggered by someone else) ─
+  function msStartCountdown(triggeredAtMs) {
+    const status    = document.getElementById('msTriggerStatus');
+    const triggerBtn = document.getElementById('msTriggerBtn');
+    const totalSecs = 180;
+    const elapsed   = Math.floor((Date.now() - triggeredAtMs) / 1000);
+    let secs        = Math.max(0, totalSecs - elapsed);
+    if (triggerBtn) triggerBtn.style.display = 'none';
+    if (status) {
+      status.style.display = '';
+      const tick = () => {
+        if (secs > 0) {
+          const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, '0');
+          status.style.color   = 'var(--pos)';
+          status.textContent   = `Analysis queued — arriving in ~${m}:${s}`;
+          secs--;
+          setTimeout(tick, 1000);
+        } else {
+          status.style.color  = 'var(--dim)';
+          status.textContent  = 'Analysis should be ready — refresh to check.';
+        }
+      };
+      tick();
+    }
+  }
+
+  // ── Main init ────────────────────────────────────────────────────────────
   function msInit() {
     const sec = document.getElementById('msSection');
     if (!sec) return;
@@ -2263,56 +2524,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
     fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER))
       .then(r => {
-        if (r.status === 404) {
-          msHide('msLoading');
-          msShow('msNotFound');
-          return null;
-        }
+        if (r.status === 404) { msHide('msLoading'); msShow('msNotFound'); return null; }
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       })
       .then(data => {
         if (!data) return;
-        // Resume countdown if analysis is pending (triggered but not yet returned)
         if (data.pending && data.triggeredAt) {
-          msHide('msLoading');
-          msShow('msNotFound');
+          msHide('msLoading'); msShow('msNotFound');
           msStartCountdown(data.triggeredAt);
           return;
         }
         msRender(data);
-        // Show last-triggered time even when analysis is already present
-        if (data.triggeredAt && data.report && data.triggeredAt > (data.generatedTime || 0)) {
-          const status = document.getElementById('msTriggerStatus');
-          const triggerBtn = document.getElementById('msTriggerBtn');
-          if (status) msStartCountdown(data.triggeredAt);
-          if (triggerBtn) triggerBtn.style.display = 'none';
-        }
       })
       .catch(() => { msHide('msLoading'); msShow('msError'); });
 
     const triggerBtn = document.getElementById('msTriggerBtn');
     if (triggerBtn) {
-      triggerBtn.addEventListener('click', () => {
-        triggerBtn.disabled = true;
-        const status = document.getElementById('msTriggerStatus');
-        status.style.display = 'block';
-        status.style.color = 'var(--dim)';
-        status.textContent = 'Requesting analysis…';
-        fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/trigger', { method: 'POST' })
-          .then(r => r.json().then(body => ({ ok: r.ok, body })))
-          .then(({ ok, body }) => {
-            if (ok) {
-              msStartCountdown(body.triggeredAt || Date.now());
-            } else {
-              throw new Error((body && (body.error || body.message)) || 'HTTP error');
-            }
-          })
-          .catch(err => {
-            triggerBtn.disabled = false;
-            status.style.color = 'var(--neg)';
-            status.textContent = `Trigger failed — ${err.message || 'unknown error'}.`;
-          });
+      triggerBtn.addEventListener('click', async () => {
+        // Check for a stored key first to avoid always showing the modal
+        let key   = msGetStoredKey();
+        let model = msGetStoredModel();
+
+        if (!key.startsWith('sk-')) {
+          const result = await msShowKeyModal();
+          if (!result) return;  // user cancelled
+          key   = result.key;
+          model = result.model;
+        }
+
+        msRunStream(key, model);
       });
     }
   }
