@@ -71,6 +71,12 @@ def init_store(project_root: Path) -> None:
                     generated_time BIGINT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS pending_triggers (
+                    ticker_and_exchange_code TEXT PRIMARY KEY,
+                    triggered_at BIGINT NOT NULL
+                )
+            """)
             conn.commit()
         return
 
@@ -82,6 +88,12 @@ def init_store(project_root: Path) -> None:
             ticker_and_exchange_code TEXT PRIMARY KEY,
             json_report TEXT NOT NULL,
             generated_time INTEGER NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_triggers (
+            ticker_and_exchange_code TEXT PRIMARY KEY,
+            triggered_at INTEGER NOT NULL
         )
     """)
     conn.commit()
@@ -190,6 +202,47 @@ def upsert_analysis(project_root: Path, ticker: str, json_report: str, generated
             (key, json_report, generated_time),
         )
         conn.commit()
+
+
+def upsert_trigger(project_root: Path, ticker: str, triggered_at: int) -> None:
+    """Record when an analysis was last triggered (persists across refreshes)."""
+    ensure_store(project_root)
+    key = ticker.upper()
+    if uses_postgres():
+        with _pg_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO pending_triggers (ticker_and_exchange_code, triggered_at)
+                VALUES (%s, %s)
+                ON CONFLICT (ticker_and_exchange_code) DO UPDATE SET triggered_at = EXCLUDED.triggered_at
+                """,
+                (key, triggered_at),
+            )
+            conn.commit()
+        return
+    with _sqlite_conn(project_root) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_triggers (ticker_and_exchange_code, triggered_at) VALUES (?, ?)",
+            (key, triggered_at),
+        )
+        conn.commit()
+
+
+def get_trigger(project_root: Path, ticker: str) -> int | None:
+    """Return the last triggered_at ms timestamp for a ticker, or None."""
+    ensure_store(project_root)
+    key = ticker.upper()
+    if uses_postgres():
+        with _pg_conn() as conn:
+            row = conn.execute(
+                "SELECT triggered_at FROM pending_triggers WHERE ticker_and_exchange_code = %s", (key,)
+            ).fetchone()
+    else:
+        with _sqlite_conn(project_root) as conn:
+            row = conn.execute(
+                "SELECT triggered_at FROM pending_triggers WHERE ticker_and_exchange_code = ?", (key,)
+            ).fetchone()
+    return int(row["triggered_at"]) if row else None
 
 
 def row_to_moonstocks_json(row: AnalysisRow) -> dict[str, Any]:

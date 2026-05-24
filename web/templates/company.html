@@ -2251,6 +2251,32 @@ document.addEventListener('DOMContentLoaded', () => {
     msShow('msSection');
   }
 
+  // Start or resume the pending-analysis countdown from a server timestamp.
+  // totalSecs=180 is the expected analysis window; elapsed is deducted on resume.
+  function msStartCountdown(triggeredAtMs) {
+    const status = document.getElementById('msTriggerStatus');
+    const triggerBtn = document.getElementById('msTriggerBtn');
+    const totalSecs = 180;
+    const elapsed = Math.floor((Date.now() - triggeredAtMs) / 1000);
+    let secs = Math.max(0, totalSecs - elapsed);
+    if (triggerBtn) triggerBtn.style.display = 'none';
+    status.style.display = 'block';
+    const tick = () => {
+      if (secs > 0) {
+        const m = Math.floor(secs / 60);
+        const s = String(secs % 60).padStart(2, '0');
+        status.style.color = 'var(--pos)';
+        status.textContent = `Analysis queued — arriving in ~${m}:${s}`;
+        secs--;
+        setTimeout(tick, 1000);
+      } else {
+        status.style.color = 'var(--dim)';
+        status.textContent = 'Analysis should be ready — refresh the page to check.';
+      }
+    };
+    tick();
+  }
+
   function msInit() {
     const sec = document.getElementById('msSection');
     if (!sec) return;
@@ -2266,7 +2292,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       })
-      .then(data => { if (data) msRender(data); })
+      .then(data => {
+        if (!data) return;
+        // Resume countdown if analysis is pending (triggered but not yet returned)
+        if (data.pending && data.triggeredAt) {
+          msHide('msLoading');
+          msShow('msNotFound');
+          msStartCountdown(data.triggeredAt);
+          return;
+        }
+        msRender(data);
+        // Show last-triggered time even when analysis is already present
+        if (data.triggeredAt && data.report && data.triggeredAt > (data.generatedTime || 0)) {
+          const status = document.getElementById('msTriggerStatus');
+          const triggerBtn = document.getElementById('msTriggerBtn');
+          if (status) msStartCountdown(data.triggeredAt);
+          if (triggerBtn) triggerBtn.style.display = 'none';
+        }
+      })
       .catch(() => { msHide('msLoading'); msShow('msError'); });
 
     const triggerBtn = document.getElementById('msTriggerBtn');
@@ -2277,33 +2320,19 @@ document.addEventListener('DOMContentLoaded', () => {
         status.style.display = 'block';
         status.style.color = 'var(--dim)';
         status.textContent = 'Requesting analysis…';
-        const sentAt = new Date();
-        const sentStr = sentAt.toLocaleDateString('en-GB', {day:'2-digit',month:'2-digit',year:'numeric'})
-          + ' at ' + sentAt.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
         fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/trigger', { method: 'POST' })
-          .then(r => {
-            if (r.ok) {
-              triggerBtn.style.display = 'none';
-              let secs = 180;
-              const tick = () => {
-                const m = Math.floor(secs / 60);
-                const s = String(secs % 60).padStart(2, '0');
-                status.style.color = 'var(--pos)';
-                status.textContent = `Analysis queued — arriving in ~${m}:${s}`;
-                if (secs > 0) { secs--; setTimeout(tick, 1000); }
-                else { status.style.color = 'var(--dim)'; status.textContent = 'Analysis should be ready — refresh the page to check.'; }
-              };
-              tick();
+          .then(r => r.json().then(body => ({ ok: r.ok, body })))
+          .then(({ ok, body }) => {
+            if (ok) {
+              msStartCountdown(body.triggeredAt || Date.now());
             } else {
-              return r.json().catch(() => null).then(body => {
-                throw new Error((body && (body.error || body.message)) || 'HTTP ' + r.status);
-              });
+              throw new Error((body && (body.error || body.message)) || 'HTTP error');
             }
           })
           .catch(err => {
             triggerBtn.disabled = false;
             status.style.color = 'var(--neg)';
-            status.textContent = `Analysis sent ${sentStr} failed — ${err.message || 'unknown error'}.`;
+            status.textContent = `Trigger failed — ${err.message || 'unknown error'}.`;
           });
       });
     }

@@ -4325,9 +4325,15 @@ def moonstocks_analysis(ticker):
     """Get Moonstocks AI analysis for a ticker from local database."""
     try:
         row = ms_store.get_analysis(PROJECT_ROOT, ticker)
+        triggered_at = ms_store.get_trigger(PROJECT_ROOT, ticker)
         if not row:
+            if triggered_at:
+                return jsonify({"pending": True, "triggeredAt": triggered_at}), 200
             return jsonify(None), 404
-        return jsonify(ms_store.row_to_moonstocks_json(row))
+        data = ms_store.row_to_moonstocks_json(row)
+        if triggered_at:
+            data["triggeredAt"] = triggered_at
+        return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4342,6 +4348,10 @@ def moonstocks_trigger(ticker):
             timeout=30,
         )
         body = resp.json() if resp.content else {}
+        if resp.status_code < 300:
+            triggered_at = int(datetime.now().timestamp() * 1000)
+            ms_store.upsert_trigger(PROJECT_ROOT, ticker, triggered_at)
+            body["triggeredAt"] = triggered_at
         return jsonify(body), resp.status_code
     except Exception as e:
         return jsonify({"error": str(e)}), 502
