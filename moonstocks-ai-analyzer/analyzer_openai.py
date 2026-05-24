@@ -54,7 +54,7 @@ def _parse_json_report(text: str) -> dict:
     return json.loads(stripped)
 
 
-async def _post_report(ticker_exchange: str, report: dict, log_fh) -> None:
+def _post_report(ticker_exchange: str, report: dict, log_fh) -> None:
     base_url = os.environ["ANALYSIS_API_BASE_URL"].rstrip("/")
     url = f"{base_url}/api/analysis/{ticker_exchange}"
     payload = {"jsonReport": json.dumps(report)}
@@ -62,13 +62,13 @@ async def _post_report(ticker_exchange: str, report: dict, log_fh) -> None:
     api_key = (os.environ.get("ANALYZER_API_KEY") or "").strip()
     if api_key:
         headers["X-API-Key"] = api_key
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, json=payload, headers=headers)
+    with httpx.Client(timeout=60) as client:
+        resp = client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
     write_log(log_fh, {"type": "post_result", "url": url, "status_code": resp.status_code, "provider": "openai"})
 
 
-async def run_analysis_openai(ticker_exchange: str) -> None:
+def run_analysis_openai(ticker_exchange: str) -> None:
     ticker, exchange = ticker_exchange.split(".", 1)
     api_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     if not api_key:
@@ -95,7 +95,7 @@ async def run_analysis_openai(ticker_exchange: str) -> None:
             user_content = (
                 prompt
                 + "\n\nEODHD_DATA:\n"
-                + json.dumps(bundle, default=str)[:900_000]
+                + json.dumps(bundle, default=str)
             )
 
             client = OpenAI(api_key=api_key)
@@ -126,7 +126,7 @@ async def run_analysis_openai(ticker_exchange: str) -> None:
             logger.exception("OpenAI run failed for %s", ticker_exchange)
             return
 
-        await _post_report(ticker_exchange, report, log_fh)
+        _post_report(ticker_exchange, report, log_fh)
     except Exception as exc:
         write_log(log_fh, {"type": "error", "stage": "post", "error": repr(exc)})
         logger.exception("Failed to POST OpenAI analysis for %s", ticker_exchange)

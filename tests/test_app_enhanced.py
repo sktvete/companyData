@@ -1137,6 +1137,48 @@ class PriceHistorySliceTests(unittest.TestCase):
             ae._slice_and_downsample(prices, "1y"),
         )
 
+    def test_build_quarterly_estimates_forward_quarters(self) -> None:
+        hist = [
+            {"period_end": "2025-12-31", "fiscal_year": 2025, "year": "Q4 '25"},
+            {"period_end": "2026-03-31", "fiscal_year": 2026, "year": "Q1 '26"},
+        ]
+        trend = {
+            "2026-06-30": {
+                "period": "0q",
+                "earningsEstimateAvg": "3.0",
+                "revenueEstimateAvg": "1000000000",
+            },
+            "2026-09-30": {
+                "period": "+1q",
+                "earningsEstimateAvg": "4.0",
+                "revenueEstimateAvg": "1100000000",
+            },
+            "2026-12-31": {
+                "period": "0y",
+                "earningsEstimateAvg": "16.0",
+                "revenueEstimateAvg": "4400000000",
+            },
+        }
+        annual = [
+            {
+                "year": "FY2026E",
+                "fiscal_year": 2026,
+                "eps": 16.0,
+                "revenue_usd": 4.4e9,
+            }
+        ]
+        out = ae._build_quarterly_estimates(
+            trend, hist, 1e9, None, 4.4e9, annual, max_quarters=4
+        )
+        labels = [e["year"] for e in out]
+        self.assertIn("Q2 '26E", labels)
+        self.assertIn("Q3 '26E", labels)
+        self.assertGreaterEqual(len(out), 3)
+        self.assertLessEqual(len(out), 4)
+        self.assertEqual(out[0]["estimate_granularity"], "quarter")
+        derived = [e for e in out if e.get("derived_from_annual")]
+        self.assertGreaterEqual(len(derived), 1)
+
     def test_drop_estimates_when_annual_reported(self) -> None:
         hist = [{"year": "2026", "revenue_usd": 100e9}]
         ests = [

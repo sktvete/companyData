@@ -1,0 +1,33 @@
+# Build equity-os image and push to ECR on main (requires repo variables + OIDC role).
+name: Deploy equity-os to ECR
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "web/**"
+      - "src/**"
+      - "Dockerfile"
+      - "docker-compose.moonstocks.yml"
+      - "deploy/aws/**"
+      - ".github/workflows/deploy-equity-os.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    if: vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
+    uses: moonstocksai/workflows/.github/workflows/deploy-to-aws.yml@main
+    with:
+      aws-region: ${{ vars.AWS_REGION }}
+      ecr-repository: ${{ vars.ECR_REPOSITORY }}
+      container-name: ${{ vars.CONTAINER_NAME }}
+      ecs-service: ${{ vars.ECS_SERVICE }}
+      ecs-cluster: ${{ vars.ECS_CLUSTER }}
+      dockerfile-path: Dockerfile
+      docker-context: .
+    secrets:
+      aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}

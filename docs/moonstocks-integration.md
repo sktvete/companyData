@@ -47,8 +47,8 @@ Check active provider: `GET http://localhost:8000/health` → `"llm_provider": "
 
 | Variable | Purpose |
 |----------|---------|
-| `MOONSTOCKS_DATABASE_URL` | **Postgres** (recommended prod/Docker), e.g. `postgresql://user:pass@host:5432/moonstocks` |
-| `MOONSTOCKS_DB_PATH` | **SQLite** fallback when no Postgres URL (default `outputs/moonstocks_analyses.db`) |
+| `MOONSTOCKS_DATABASE_URL` | **Postgres** (required for `run_server.py`, Docker, prod) |
+| `MOONSTOCKS_DB_PATH` | **Tests only** — in-memory/temp SQLite in unit tests and `e2e_moonstocks_local.py` |
 | `MOONSTOCKS_ANALYZER_URL` | Analyzer base URL (no trailing slash), e.g. `http://127.0.0.1:8000` |
 | `ANALYZER_API_KEY` | Optional; sent to analyzer on trigger, required on ingest if set |
 | `MOONSTOCKS_INGEST_API_KEY` | Optional override for ingest-only secret |
@@ -70,15 +70,21 @@ Check active provider: `GET http://localhost:8000/health` → `"llm_provider": "
 
 The analyzer loads `moonstocks-ai-analyzer/.env` and the parent `companyData/.env`, so a single root `.env` with `OPENAI_API_KEY` is enough for local dev.
 
-## Local dev (no Docker)
+## Local dev (native host + Postgres container)
+
+**Postgres** (prod-like, exposed on host):
+
+```bash
+docker compose -f docker-compose.moonstocks.yml up -d postgres
+# .env from .env.native.example → MOONSTOCKS_DATABASE_URL=@127.0.0.1:5432/...
+```
 
 **Terminal 1 — equity-os**
 
 ```bash
-# From companyData root (uses .env for EODHD + optional keys)
 pip install -r web/requirements.txt
-set MOONSTOCKS_ANALYZER_URL=http://127.0.0.1:8000
-python run_server.py
+# .env: MOONSTOCKS_DATABASE_URL + MOONSTOCKS_ANALYZER_URL=http://127.0.0.1:8000
+python run_server.py   # exits with a clear error if Postgres is down or URL uses host "postgres"
 ```
 
 **Terminal 2 — analyzer (OpenAI)**
@@ -130,7 +136,7 @@ python scripts/e2e_moonstocks_local.py --start-server
 ## AWS rollout checklist
 
 1. **Deploy equity-os** to ECS — `Dockerfile`, `deploy/aws/equity-os-task-definition.json`.
-2. **Persist DB**: EFS at `/data`, `MOONSTOCKS_DB_PATH=/data/moonstocks_analyses.db`.
+2. **RDS Postgres**: `MOONSTOCKS_DATABASE_URL` from Secrets Manager (`deploy/aws/rds-moonstocks.yaml`).
 3. **Analyzer task def**: `ANALYSIS_API_BASE_URL=http://equity-os-prod:3000`; add `OPENAI_API_KEY` (or `ANTHROPIC_API_KEY`) and `ANALYZER_LLM_PROVIDER` to secrets/env.
 4. **Point moonstocks-app** API URL to equity-os LB (`MOONSTOCKS_API_URL` on equity-os for “View on Moonstocks” links).
 5. **Scale down** `moonstocks-api` ECS service.
@@ -138,9 +144,9 @@ python scripts/e2e_moonstocks_local.py --start-server
 
 ## Storage
 
-- **Production / multi-task ECS:** RDS Postgres via `MOONSTOCKS_DATABASE_URL` (see `deploy/aws/rds-moonstocks.yaml`).
-- **Local quick dev:** SQLite via `MOONSTOCKS_DB_PATH` only.
-- **Local Docker:** Postgres service in `docker-compose.moonstocks.yml`.
+- **Production / ECS / local dev:** Postgres via `MOONSTOCKS_DATABASE_URL` only.
+- **Unit/E2E tests:** temporary SQLite via `MOONSTOCKS_DB_PATH` (not used by `run_server.py`).
+- **Local host:** `docker compose … up -d postgres` + `@127.0.0.1:5432` in `.env` (see `.env.native.example`).
 
 ## Status
 

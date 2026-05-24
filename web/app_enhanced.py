@@ -1857,6 +1857,168 @@ def _quarter_chart_label(period_end: str) -> str:
         return str(period_end)[:7]
 
 
+def _is_quarter_estimate_period(period: str) -> bool:
+    """EODHD Trend period codes: 0q, +1q (not 0y / +1y)."""
+    p = (period or "").strip().lower()
+    return bool(p) and p.endswith("q")
+
+
+def _add_calendar_months(period_end: str, months: int) -> str:
+    from calendar import monthrange
+    from datetime import date
+
+    d = date.fromisoformat(str(period_end)[:10])
+    y, m = d.year, d.month + months
+    while m > 12:
+        m -= 12
+        y += 1
+    while m < 1:
+        m += 12
+        y -= 1
+    day = min(d.day, monthrange(y, m)[1])
+    return date(y, m, day).isoformat()
+
+
+def _forward_quarter_end_dates(last_period_end: str, count: int) -> list[str]:
+    """Next *count* quarter period-end dates after last filed quarter."""
+    if not last_period_end or count <= 0:
+        return []
+    out: list[str] = []
+    pe = str(last_period_end)[:10]
+    for _ in range(count):
+        pe = _add_calendar_months(pe, 3)
+        out.append(pe)
+    return out
+
+
+def _estimate_entry_from_trend(
+    date_key: str,
+    t: dict,
+    shares_out: float,
+    price_data: list | None,
+    ref_rev: float | None,
+    *,
+    granularity: str = "annual",
+) -> dict | None:
+    eps_est = _safe_float(t.get("earningsEstimateAvg"))
+    rev_est = _sanitize_revenue_estimate(
+        _safe_float(t.get("revenueEstimateAvg")) or None, ref_rev or None
+    )
+    if not eps_est and not rev_est:
+        return None
+    try:
+        fy_year = int(str(date_key)[:4])
+    except (ValueError, TypeError):
+        fy_year = None
+    pe = str(date_key)[:10]
+    sh_est = _safe_float(t.get("shares")) or shares_out
+    ni_est = (eps_est * sh_est) if (eps_est and sh_est) else None
+    if granularity == "quarter":
+        year_label = f"{_quarter_chart_label(pe)}E"
+    else:
+        year_label = f"FY{fy_year}E" if fy_year else pe
+    entry: dict = {
+        "year": year_label,
+        "fiscal_year": fy_year,
+        "period_end": pe,
+        "estimate_granularity": granularity,
+        "eps": round(eps_est, 4) if eps_est else None,
+        "revenue_usd": rev_est,
+        "revenue_b": round(rev_est / 1e9, 2) if rev_est else None,
+        "net_income_usd": ni_est,
+        "net_income_b": round(ni_est / 1e9, 2) if ni_est else None,
+    }
+    if eps_est and eps_est > 0 and price_data:
+        entry["pe_ratio"] = round(price_data[-1]["close"] / eps_est, 1)
+    return entry
+
+
+def _quarter_estimate_from_annual(pe: str, annual: dict) -> dict | None:
+    """One quarter slot prorated from FY consensus (when EODHD has no +2q/+3q/+4q)."""
+    eps = _safe_float(annual.get("eps"))
+    rev = _safe_float(annual.get("revenue_usd"))
+    if not eps and not rev:
+        return None
+    try:
+        fy_year = int(annual.get("fiscal_year") or int(pe[:4]))
+    except (ValueError, TypeError):
+        fy_year = int(pe[:4])
+    q_eps = eps / 4 if eps else None
+    q_rev = rev / 4 if rev else None
+    ni = _safe_float(annual.get("net_income_usd"))
+    q_ni = ni / 4 if ni else None
+    entry: dict = {
+        "year": f"{_quarter_chart_label(pe)}E",
+        "fiscal_year": fy_year,
+        "period_end": pe,
+        "estimate_granularity": "quarter",
+        "derived_from_annual": True,
+        "eps": round(q_eps, 4) if q_eps else None,
+        "revenue_usd": q_rev,
+        "revenue_b": round(q_rev / 1e9, 2) if q_rev else None,
+        "net_income_usd": q_ni,
+        "net_income_b": round(q_ni / 1e9, 2) if q_ni else None,
+    }
+    if q_eps and q_eps > 0 and annual.get("pe_ratio"):
+        entry["pe_ratio"] = round(float(annual["pe_ratio"]), 1)
+    return entry
+
+
+def _build_quarterly_estimates(
+    trend: dict,
+    quarterly_history: list[dict],
+    shares_out: float,
+    price_data: list | None,
+    ref_rev: float | None,
+    annual_estimates: list[dict],
+    *,
+    max_quarters: int = 4,
+) -> list[dict]:
+    """Up to four forward quarter consensus bars (EODHD Trend 0q/+1q, then FY prorate)."""
+    last_pe = ""
+    if quarterly_history:
+        last_pe = str(quarterly_history[-1].get("period_end") or "")[:10]
+    reported = {
+        str(r.get("period_end", ""))[:10] for r in quarterly_history if r.get("period_end")
+    }
+    by_pe: dict[str, dict] = {}
+
+    for date_key in sorted(trend.keys()):
+        t = trend[date_key]
+        if not isinstance(t, dict) or not _is_quarter_estimate_period(str(t.get("period") or "")):
+            continue
+        pe = str(date_key)[:10]
+        if pe in reported or (last_pe and pe <= last_pe):
+            continue
+        entry = _estimate_entry_from_trend(
+            date_key, t, shares_out, price_data, ref_rev, granularity="quarter"
+        )
+        if entry:
+            by_pe[pe] = entry
+
+    annual_by_fy = {
+        int(e.get("fiscal_year") or 0): e for e in annual_estimates if e.get("fiscal_year")
+    }
+    for pe in _forward_quarter_end_dates(last_pe, max_quarters):
+        if pe in by_pe or pe in reported:
+            continue
+        t = trend.get(pe)
+        if isinstance(t, dict) and _is_quarter_estimate_period(str(t.get("period") or "")):
+            entry = _estimate_entry_from_trend(
+                pe, t, shares_out, price_data, ref_rev, granularity="quarter"
+            )
+            if entry:
+                by_pe[pe] = entry
+                continue
+        fy_est = annual_by_fy.get(int(pe[:4]))
+        if fy_est:
+            derived = _quarter_estimate_from_annual(pe, fy_est)
+            if derived:
+                by_pe[pe] = derived
+
+    return [by_pe[k] for k in sorted(by_pe.keys())][:max_quarters]
+
+
 def _price_on_or_before(price_by_date: dict, period_end: str, lookback_days: int = 10) -> float:
     if not price_by_date or not period_end:
         return 0.0
@@ -3360,27 +3522,20 @@ def api_company_history(symbol):
         if fy_year < now_year or fy_year in seen_est_years:
             continue
         seen_est_years.add(fy_year)
-        eps_est = _safe_float(t.get("earningsEstimateAvg"))
-        rev_est = _sanitize_revenue_estimate(
-            _safe_float(t.get("revenueEstimateAvg")) or None, ref_rev or None
+        est_entry = _estimate_entry_from_trend(
+            date_key, t, shares_out, price_data, ref_rev, granularity="annual"
         )
-        if eps_est or rev_est:
-            sh_est = _safe_float(shares_stats.get("SharesOutstanding")) or shares_out
-            ni_est = (eps_est * sh_est) if (eps_est and sh_est) else None
-            est_entry = {
-                "year": f"FY{fy_year}E",
-                "fiscal_year": fy_year,
-                "eps": round(eps_est, 4) if eps_est else None,
-                "revenue_usd": rev_est,
-                "revenue_b": round(rev_est / 1e9, 2) if rev_est else None,
-                "net_income_usd": ni_est,
-                "net_income_b": round(ni_est / 1e9, 2) if ni_est else None,
-            }
-            if eps_est and eps_est > 0 and price_data:
-                est_entry["pe_ratio"] = round(price_data[-1]["close"] / eps_est, 1)
+        if est_entry:
             estimates.append(est_entry)
     estimates.sort(key=lambda e: e["year"])
     estimates = _drop_estimates_for_reported_years(annual_history, estimates)
+    quarterly_estimates = (
+        _build_quarterly_estimates(
+            trend, history, shares_out, price_data, ref_rev, estimates
+        )
+        if history and q_inc
+        else []
+    )
 
     co = get_company(symbol) or {}
     analyst = _fmt_analyst(_analyst_ratings_for_company({**co, "symbol": symbol}) or {})
@@ -3414,9 +3569,12 @@ def api_company_history(symbol):
         _scale_chart_money_row(ttm2, fx_factor, shares_out=shares_out)
         for est in estimates:
             _scale_chart_revenue_estimate(est, fx_factor)
+        for est in quarterly_estimates:
+            _scale_chart_revenue_estimate(est, fx_factor)
         chart_fx_note = fx_note
 
     _prune_implausible_revenue_estimates(estimates, ttm, annual_history)
+    _prune_implausible_revenue_estimates(quarterly_estimates, ttm, history)
 
     display_metrics = _eodhd_display_metrics(annual_history, ttm, h)
 
@@ -3427,7 +3585,8 @@ def api_company_history(symbol):
         "quarterly_reports": quarterly_reports,
         "ttm":             ttm,
         "ttm2":            ttm2,
-        "estimates":       estimates,
+        "estimates":            estimates,
+        "quarterly_estimates":  quarterly_estimates,
         "display_metrics": display_metrics,
         "analyst_ratings": analyst,
         "price_chart_1y":  price_chart_1y,

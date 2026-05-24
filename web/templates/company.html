@@ -508,10 +508,31 @@ function pickMoneyScale(maxAbsUsd) {
   return { div: 1, suffix: '' };
 }
 
+function finLegendOnClick(_e, legendItem, legend) {
+  const chart = legend.chart;
+  const idx = legendItem.datasetIndex;
+  const group = chart.data.datasets[idx]?.legendGroup;
+  if (!group) return;
+  const show = !chart.isDatasetVisible(idx);
+  chart.data.datasets.forEach((ds, i) => {
+    if (ds.legendGroup === group) chart.setDatasetVisibility(i, show);
+  });
+  chart.update();
+}
+
 const CHARTJS_DEFAULTS = {
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { labels: { color: '#94a3b8', font: { size: 10, family: "'JetBrains Mono', monospace" } }, onClick: () => {} } },
+  plugins: {
+    legend: {
+      labels: {
+        color: '#94a3b8',
+        font: { size: 10, family: "'JetBrains Mono', monospace" },
+        filter: (item, chartData) => chartData.datasets[item.datasetIndex]?.showInLegend !== false,
+      },
+      onClick: finLegendOnClick,
+    },
+  },
   scales: {
     x: { ticks: { color: '#64748b', font: { size: 9 }, maxRotation: 30, minRotation: 0 }, grid: { color: 'rgba(30,45,61,.6)' } },
     y: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(30,45,61,.6)' } }
@@ -555,29 +576,39 @@ let _annualHist = [];
 let _ttmData = null;
 let _ttm2Data = null;
 let _estData = [];
+let _quarterlyEstData = [];
 let _cadence = 'quarterly';
 let _viewMode = 'quarterly';
 let _finCharts = {};
 let _finQuarters = 40;
 
 function barDataset(label, data, color, opts) {
-  return { label, data, skipNull: true, backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3, ...(opts || {}) };
+  return {
+    label, data, skipNull: true,
+    backgroundColor: color + 'bb', borderColor: color, borderWidth: 1, borderRadius: 3,
+    showInLegend: true,
+    ...(opts || {}),
+  };
 }
 function lineDataset(label, data, color, opts) {
   return { label, data, borderColor: color, backgroundColor: color + '22', pointRadius: 3, tension: 0.3, fill: true, ...(opts || {}) };
 }
-function estBarDataset(label, data, color) {
+function estBarDataset(label, data, color, legendGroup) {
   return {
     label, data, skipNull: true,
     backgroundColor: color + '35', borderColor: color + '99',
     borderWidth: 1.5, borderRadius: 3, borderDash: [4, 3],
+    legendGroup,
+    showInLegend: false,
   };
 }
-function ttmBarDataset(label, data, color) {
+function ttmBarDataset(label, data, color, legendGroup) {
   return {
     label, data, skipNull: true,
     backgroundColor: color + '85', borderColor: color,
     borderWidth: 2, borderRadius: 3,
+    legendGroup,
+    showInLegend: false,
   };
 }
 
@@ -635,7 +666,23 @@ function reportedCompareEst(histRow, fy) {
   };
 }
 
-/** Place TTM (+ est or filed baseline) on one x-slot; replace hist-only row when present. */
+/** Forward analyst estimate only (no TTM bar — avoids duplicate estimate columns). */
+function placeForwardEst(pts, est, fy) {
+  const row = {
+    label: est?.year || `FY${fy}`,
+    hist: null,
+    ttm: null,
+    ttm2: null,
+    est,
+    compare: false,
+    compareKind: null,
+  };
+  const dup = findHistIdxForFy(pts, fy);
+  if (dup >= 0) pts[dup] = row;
+  else pts.push(row);
+}
+
+/** Place TTM (+ filed baseline) on one x-slot when no analyst estimate exists for that year. */
 function placeTtmCompare(pts, ttm, est, kind, fy) {
   const lbl = est?.year || `FY${fy}`;
   const row = {
@@ -670,7 +717,7 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   const merge1 = filed1 ? -1 : pickTtmCompareEstimate(ttm, estimates);
   if (ttm && !filed1 && merge1 >= 0) {
     const est = estimates[merge1];
-    placeTtmCompare(pts, ttm, est, '1y', parseEstFy(est) ?? ttmFy);
+    placeForwardEst(pts, est, parseEstFy(est) ?? ttmFy);
     usedEst.add(merge1);
   } else if (ttm && !filed1) {
     pts.push({
@@ -686,24 +733,10 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   if (ttm2Fy != null && !filed2) {
     merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
   }
-  function placeTtm2Compare(est, fy) {
-    const row = {
-      label: String(fy),
-      hist: null,
-      ttm: null,
-      ttm2,
-      est,
-      compare: true,
-      compareKind: '2y',
-    };
-    const dup = findHistIdxForFy(pts, fy);
-    if (dup >= 0) pts[dup] = row;
-    else pts.push({ ...row, label: est?.year || `FY${fy}` });
-  }
 
   if (ttm2 && !filed2 && merge2 >= 0) {
     const est = estimates[merge2];
-    placeTtm2Compare(est, parseEstFy(est) ?? ttm2Fy);
+    placeForwardEst(pts, est, parseEstFy(est) ?? ttm2Fy);
     usedEst.add(merge2);
   } else if (ttm2 && !filed2) {
     pts.push({
@@ -713,15 +746,25 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
     });
   }
 
-  estimates.forEach((e, i) => {
-    if (usedEst.has(i)) return;
-    const fy = parseEstFy(e);
-    if (fy != null && histRowForFy(hist, fy)) return;
-    pts.push({
-      label: e.year, hist: null, ttm: null, ttm2: null, est: e,
-      compare: false, compareKind: null,
+  const useQuarterlyFwd = _viewMode === 'quarterly' && _cadence === 'quarterly' && _quarterlyEstData.length > 0;
+  if (useQuarterlyFwd) {
+    _quarterlyEstData.forEach(e => {
+      pts.push({
+        label: e.year, hist: null, ttm: null, ttm2: null, est: e,
+        compare: false, compareKind: null,
+      });
     });
-  });
+  } else {
+    estimates.forEach((e, i) => {
+      if (usedEst.has(i)) return;
+      const fy = parseEstFy(e);
+      if (fy != null && histRowForFy(hist, fy)) return;
+      pts.push({
+        label: e.year, hist: null, ttm: null, ttm2: null, est: e,
+        compare: false, compareKind: null,
+      });
+    });
+  }
   return pts;
 }
 
@@ -852,6 +895,8 @@ function updatePriceHeaderFromSeries(prices, range) {
   });
 }
 
+const FIN_LOADER_IDS = ['revLoading', 'epsLoading', 'fcfLoading', 'marginLoading', 'peLoading'];
+
 function renderFinancialCharts(quarters) {
   _finQuarters = quarters;
   document.querySelectorAll('#finRangeBar .rbtn[data-qtr]').forEach(b => {
@@ -859,8 +904,10 @@ function renderFinancialCharts(quarters) {
     b.classList.toggle('active', parseInt(b.dataset.qtr, 10) === quarters);
   });
 
-  Object.values(_finCharts).forEach(c => c.destroy());
+  Object.values(_finCharts).forEach(c => { if (c) c.destroy(); });
   _finCharts = {};
+
+  try {
 
   const useAnnual = _viewMode === 'yearly';
   let hist = useAnnual ? _annualHist.slice() : _fullHist.slice();
@@ -870,16 +917,21 @@ function renderFinancialCharts(quarters) {
   const pts = buildFinChartPoints(hist, _ttmData, _ttm2Data, _estData);
   const labels = finChartLabels(pts);
 
-  // Annual estimates shown alongside quarterly bars need to be divided by 4 for non-compare slots.
-  const qScale = (v, p) => (v != null && !p.compare && !useAnnual && _cadence === 'quarterly') ? v / 4 : v;
+  // Annual FY estimates on a quarterly axis are ÷4; quarterly consensus is already per-quarter.
+  const qScale = (v, p) => {
+    if (v == null || p.compare || useAnnual || _cadence !== 'quarterly') return v;
+    if (p.est?.estimate_granularity === 'quarter') return v;
+    return v / 4;
+  };
 
+  const hasAnalystEst = (p) => p.est && p.est.compareSource !== 'reported';
   const revHist = pts.map(p => rowUsd(p.hist, 'revenue_usd', 'revenue_b'));
-  const revTtm  = pts.map(p => rowUsd(p.ttm, 'revenue_usd', 'revenue_b'));
-  const revTtm2 = pts.map(p => rowUsd(p.ttm2, 'revenue_usd', 'revenue_b'));
+  const revTtm  = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm, 'revenue_usd', 'revenue_b')));
+  const revTtm2 = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm2, 'revenue_usd', 'revenue_b')));
   const revEst  = pts.map((p, i) => qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p));
   const niHist  = pts.map(p => rowUsd(p.hist, 'net_income_usd', 'net_income_b'));
-  const niTtm   = pts.map(p => rowUsd(p.ttm, 'net_income_usd', 'net_income_b'));
-  const niTtm2  = pts.map(p => rowUsd(p.ttm2, 'net_income_usd', 'net_income_b'));
+  const niTtm   = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm, 'net_income_usd', 'net_income_b')));
+  const niTtm2  = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm2, 'net_income_usd', 'net_income_b')));
   const niEst   = pts.map((p, i) => qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p));
 
   const allRevNi = [...revHist, ...revTtm, ...revTtm2, ...revEst, ...niHist, ...niTtm, ...niTtm2, ...niEst].filter(v => v != null);
@@ -890,17 +942,16 @@ function renderFinancialCharts(quarters) {
   const hRev = document.getElementById('revNIHeading');
   if (hRev) hRev.textContent = 'Revenue & net income' + (scRN.suffix ? ' ($' + scRN.suffix + ')' : '');
   hideLoader('revLoading');
-  // Dataset order: annual Rev|NI, then compare column blues (TTM, Est) then greens (TTM, Est).
   const revDS = [
-    barDataset('Revenue', s(revHist), '#3b82f6'),
-    barDataset('Net Income', s(niHist), '#22c55e'),
+    barDataset('Revenue', s(revHist), '#3b82f6', { legendGroup: 'revenue' }),
+    barDataset('Net Income', s(niHist), '#22c55e', { legendGroup: 'netIncome' }),
   ];
-  if (revTtm.some(v => v != null)) revDS.push(ttmBarDataset('Rev TTM', s(revTtm), '#3b82f6'));
-  if (revTtm2.some(v => v != null)) revDS.push(ttmBarDataset('Rev 2Y avg', s(revTtm2), '#2563eb'));
-  if (revEst.some(v => v != null)) revDS.push(estBarDataset('Rev Est.', s(revEst), '#60a5fa'));
-  if (niTtm.some(v => v != null)) revDS.push(ttmBarDataset('NI TTM', s(niTtm), '#22c55e'));
-  if (niTtm2.some(v => v != null)) revDS.push(ttmBarDataset('NI 2Y avg', s(niTtm2), '#16a34a'));
-  if (niEst.some(v => v != null)) revDS.push(estBarDataset('NI Est.', s(niEst), '#4ade80'));
+  if (revTtm.some(v => v != null)) revDS.push(ttmBarDataset('Rev TTM', s(revTtm), '#3b82f6', 'revenue'));
+  if (revTtm2.some(v => v != null)) revDS.push(ttmBarDataset('Rev 2Y avg', s(revTtm2), '#2563eb', 'revenue'));
+  if (revEst.some(v => v != null)) revDS.push(estBarDataset('Rev Est.', s(revEst), '#60a5fa', 'revenue'));
+  if (niTtm.some(v => v != null)) revDS.push(ttmBarDataset('NI TTM', s(niTtm), '#22c55e', 'netIncome'));
+  if (niTtm2.some(v => v != null)) revDS.push(ttmBarDataset('NI 2Y avg', s(niTtm2), '#16a34a', 'netIncome'));
+  if (niEst.some(v => v != null)) revDS.push(estBarDataset('NI Est.', s(niEst), '#4ade80', 'netIncome'));
 
   _finCharts.rev = mkChartRet('chartRevenue', 'bar', labels, revDS, {
     ...BAR_GROUP_OPTS,
@@ -928,10 +979,10 @@ function renderFinancialCharts(quarters) {
   const epsHist = pts.map(p => (p.hist && p.hist.eps != null ? p.hist.eps : null));
   const oepsHist = pts.map(p => (p.hist && p.hist.oeps != null ? p.hist.oeps : null));
   const epsDS = [
-    barDataset('EPS', epsHist, '#a855f7'),
-    barDataset('OEPS', oepsHist, '#f59e0b'),
+    barDataset('EPS', epsHist, '#a855f7', { legendGroup: 'eps' }),
+    barDataset('OEPS', oepsHist, '#f59e0b', { legendGroup: 'oeps' }),
   ];
-  if (epsEst.some(v => v != null)) epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc'));
+  if (epsEst.some(v => v != null)) epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc', 'eps'));
   _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 
   const ocfHist = pts.map(p => rowUsd(p.hist, 'ocf_usd', 'ocf_b'));
@@ -952,16 +1003,16 @@ function renderFinancialCharts(quarters) {
   if (hFcf) hFcf.textContent = 'CFO, CapEx & FCF' + (scFO.suffix ? ' ($' + scFO.suffix + ')' : '');
   hideLoader('fcfLoading');
   const fcfDS = [
-    barDataset('CFO', sf(ocfHist), '#22c55e'),
-    barDataset('FCF', sf(fcfHist), '#06b6d4'),
-    barDataset('CapEx', sf(capHist), '#f87171'),
+    barDataset('CFO', sf(ocfHist), '#22c55e', { legendGroup: 'cfo' }),
+    barDataset('FCF', sf(fcfHist), '#06b6d4', { legendGroup: 'fcf' }),
+    barDataset('CapEx', sf(capHist), '#f87171', { legendGroup: 'capex' }),
   ];
-  if (ocfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO TTM', sf(ocfTtm), '#22c55e'));
-  if (ocfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO 2Y avg', sf(ocfTtm2), '#16a34a'));
-  if (fcfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF TTM', sf(fcfTtm), '#06b6d4'));
-  if (fcfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF 2Y avg', sf(fcfTtm2), '#0891b2'));
-  if (capTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx TTM', sf(capTtm), '#f87171'));
-  if (capTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx 2Y avg', sf(capTtm2), '#ef4444'));
+  if (ocfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO TTM', sf(ocfTtm), '#22c55e', 'cfo'));
+  if (ocfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO 2Y avg', sf(ocfTtm2), '#16a34a', 'cfo'));
+  if (fcfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF TTM', sf(fcfTtm), '#06b6d4', 'fcf'));
+  if (fcfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF 2Y avg', sf(fcfTtm2), '#0891b2', 'fcf'));
+  if (capTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx TTM', sf(capTtm), '#f87171', 'capex'));
+  if (capTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx 2Y avg', sf(capTtm2), '#ef4444', 'capex'));
   _finCharts.fcf = mkChartRet('chartFCF', 'bar', labels, fcfDS, BAR_GROUP_OPTS);
 
   const gm = pts.map(p => {
@@ -978,12 +1029,12 @@ function renderFinancialCharts(quarters) {
   });
   hideLoader('marginLoading');
   _finCharts.margin = mkChartRet('chartMargin', 'bar', labels, [
-    barDataset('Gross Margin %', gm, '#34d399'),
-    barDataset('Net Margin %', nm, '#f472b6'),
+    barDataset('Gross Margin %', gm, '#34d399', { legendGroup: 'grossMargin' }),
+    barDataset('Net Margin %', nm, '#f472b6', { legendGroup: 'netMargin' }),
   ], BAR_GROUP_OPTS);
 
-  const peTtm = pts.map(p => (p.ttm ? p.ttm.pe_ratio : null));
-  const peTtm2 = pts.map(p => (p.ttm2 ? p.ttm2.pe_ratio : null));
+  const peTtm = pts.map(p => (hasAnalystEst(p) ? null : (p.ttm ? p.ttm.pe_ratio : null)));
+  const peTtm2 = pts.map(p => (hasAnalystEst(p) ? null : (p.ttm2 ? p.ttm2.pe_ratio : null)));
   const peHist = pts.map(p => (p.hist ? p.hist.pe_ratio : null));
   const peEst = pts.map(p => (p.est ? p.est.pe_ratio : null));
   const peVals = pts.map((p, i) => peTtm2[i] ?? peTtm[i] ?? peHist[i] ?? peEst[i] ?? null);
@@ -996,9 +1047,9 @@ function renderFinancialCharts(quarters) {
       if (p.compareKind === '2y') return peTtm2[i] ?? peHist[i] ?? null;
       return peTtm[i] ?? peHist[i] ?? null;
     });
-    const peDS = [barDataset('P/E', peHist, '#f59e0b')];
-    if (peTtm.some(v => v != null)) peDS.push(ttmBarDataset('P/E TTM', peTtm, '#fbbf24'));
-    if (peEst.some(v => v != null)) peDS.push(estBarDataset('Fwd P/E', peEst, '#fcd34d'));
+    const peDS = [barDataset('P/E', peHist, '#f59e0b', { legendGroup: 'pe' })];
+    if (peTtm.some(v => v != null)) peDS.push(ttmBarDataset('P/E TTM', peTtm, '#fbbf24', 'pe'));
+    if (peEst.some(v => v != null)) peDS.push(estBarDataset('Fwd P/E', peEst, '#fcd34d', 'pe'));
     _finCharts.pe = mkChartRet('chartPE', 'bar', labels, peDS, {
       ...BAR_GROUP_OPTS,
       plugins: { ...CHARTJS_DEFAULTS.plugins },
@@ -1006,6 +1057,17 @@ function renderFinancialCharts(quarters) {
   } else if (peCtx) {
     const el = document.getElementById('peLoading');
     if (el) { el.style.display = 'block'; el.style.color = 'var(--dim)'; el.textContent = 'No P/E data (EPS <= 0 or no price data)'; }
+  }
+  } catch (err) {
+    console.error('renderFinancialCharts', err);
+    FIN_LOADER_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.style.display = 'block';
+        el.style.color = 'var(--neg)';
+        el.textContent = 'Chart error — hard refresh (Ctrl+F5)';
+      }
+    });
   }
 }
 
@@ -1082,6 +1144,7 @@ async function loadHistory() {
     _cadence = d.history_cadence || 'quarterly';
     _viewMode = 'quarterly';
     _estData = d.estimates || [];
+    _quarterlyEstData = d.quarterly_estimates || [];
     const revH = document.getElementById('revNIHeading');
     if (revH) {
       const base = 'Revenue & net income';

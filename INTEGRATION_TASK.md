@@ -42,11 +42,32 @@ docker compose -f docker-compose.moonstocks.yml up --build
 
 ## Docker Desktop
 
-Installed via `scripts/install-docker-desktop.ps1`. **Start Docker Desktop** from the Start menu, wait for “Engine running”, then:
+Docker is installed but needs **WSL2** (not just BIOS virtualization).
+
+**If you see “Virtualization support not detected”:** firmware is usually fine; WSL/VM Platform is missing.
+
+1. Open **PowerShell as Administrator**
+2. Run: `Set-ExecutionPolicy Bypass -Scope Process -Force; .\scripts\enable-docker-wsl.ps1`
+3. **Reboot**
+4. Start **Docker Desktop**, wait for “Engine running”
+5. `docker compose -f docker-compose.moonstocks.yml up --build`
+
+**Without Docker** (same stack, native Windows):
 
 ```bash
-docker compose -f docker-compose.moonstocks.yml up --build
+# Terminal 1 — equity-os (SQLite, no Postgres required)
+python run_server.py
+
+# Terminal 2 — analyzer
+cd moonstocks-ai-analyzer
+pip install -r requirements.txt
+set ANALYSIS_API_BASE_URL=http://127.0.0.1:3000
+set ANALYZER_LLM_PROVIDER=openai
+uvicorn main:app --port 8000
 ```
+
+Optional Postgres locally: install [PostgreSQL](https://www.postgresql.org/download/windows/) and set  
+`MOONSTOCKS_DATABASE_URL=postgresql://user:pass@localhost:5432/moonstocks`
 
 ## AWS next steps (needs AWS CLI on a machine with credentials)
 

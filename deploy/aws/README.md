@@ -22,6 +22,14 @@ Note the output `DatabaseUrlSecretArn` — equity-os reads `MOONSTOCKS_DATABASE_
 
 ## 2. Build & push images
 
+From Windows (after `aws configure` or SSO):
+
+```powershell
+.\scripts\deploy_moonstocks_ecr.ps1
+```
+
+Or manually:
+
 ```bash
 # equity-os
 aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 550822830987.dkr.ecr.eu-north-1.amazonaws.com
@@ -57,6 +65,14 @@ Create/update ECS services on the same cluster as moonstocks (service connect: `
 4. Set equity-os `MOONSTOCKS_API_URL` to the public Moonstocks app URL.
 5. Smoke: `POST /api/moonstocks/DECK.US/trigger`, wait ~3 min, `GET /api/moonstocks/DECK.US`.
 6. Scale **moonstocks-api** (C#) to 0.
+
+## GitHub Actions (optional)
+
+Set repository **variables** (same pattern as `moonstocks-ai-analyzer`):
+
+- `AWS_REGION`, `ECR_REPOSITORY` (e.g. `equity-os-prod`), `CONTAINER_NAME`, `ECS_SERVICE`, `ECS_CLUSTER`
+
+Set **secret** `AWS_ROLE_ARN` (OIDC). Pushes to `main`/`master` that touch `web/`, `Dockerfile`, etc. run `.github/workflows/deploy-equity-os.yml`.
 
 ## Secrets checklist
 

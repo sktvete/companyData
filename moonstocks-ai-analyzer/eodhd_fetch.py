@@ -1,6 +1,7 @@
 """Fetch EODHD data via REST for the OpenAI analysis path (no MCP)."""
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, timedelta
 from typing import Any
@@ -98,9 +99,48 @@ def fetch_eodhd_bundle(symbol_exchange: str) -> dict[str, Any]:
         except httpx.HTTPError:
             trends = None
 
-    return {
-        "fundamentals": trim_fundamentals_payload(fundamentals),
-        "historical_prices_daily": prices[-260:] if isinstance(prices, list) else prices,
-        "live_price": live,
-        "earnings_trends": trends,
-    }
+    return compact_eodhd_bundle(
+        {
+            "fundamentals": trim_fundamentals_payload(fundamentals),
+            "historical_prices_daily": prices[-260:] if isinstance(prices, list) else prices,
+            "live_price": live,
+            "earnings_trends": trends,
+        }
+    )
+
+
+def compact_eodhd_bundle(bundle: dict[str, Any], *, max_json_chars: int = 32_000) -> dict[str, Any]:
+    """Shrink bundle so gpt-4o stays under typical 30k TPM input limits."""
+    b = dict(bundle)
+    prices = b.get("historical_prices_daily")
+    if isinstance(prices, list) and len(prices) > 60:
+        b["historical_prices_daily"] = prices[-60:]
+
+    fin = b.get("fundamentals")
+    if isinstance(fin, dict):
+        earn = fin.get("Earnings")
+        if isinstance(earn, dict) and isinstance(earn.get("Trend"), dict):
+            trend = earn["Trend"]
+            keys = sorted(trend.keys(), reverse=True)[:16]
+            earn["Trend"] = {k: trend[k] for k in keys}
+        for drop in ("Holders", "InsiderTransactions", "ESGScores", "outstandingShares"):
+            fin.pop(drop, None)
+
+    while len(json.dumps(b, default=str)) > max_json_chars:
+        prices = b.get("historical_prices_daily")
+        if isinstance(prices, list) and len(prices) > 30:
+            b["historical_prices_daily"] = prices[-30:]
+            continue
+        fin = b.get("fundamentals")
+        if isinstance(fin, dict):
+            for stmt in ("Income_Statement", "Balance_Sheet", "Cash_Flow"):
+                block = fin.get(stmt)
+                if isinstance(block, dict):
+                    for period in ("quarterly", "yearly"):
+                        sec = block.get(period)
+                        if isinstance(sec, dict) and len(sec) > 2:
+                            keys = sorted(sec.keys(), reverse=True)[:2]
+                            block[period] = {k: sec[k] for k in keys}
+            continue
+        break
+    return b

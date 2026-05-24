@@ -1,6 +1,7 @@
 """Dispatch Moonstocks analysis to Claude or OpenAI."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from analyzer_claude import run_analysis_claude
@@ -14,6 +15,7 @@ async def run_analysis(ticker_exchange: str) -> None:
     provider = resolve_llm_provider()
     logger.info("Running analysis for %s via %s", ticker_exchange, provider)
     if provider == "openai":
-        await run_analysis_openai(ticker_exchange)
+        # Sync OpenAI client blocks the event loop — run off-thread so /health and 202 stay fast.
+        await asyncio.to_thread(run_analysis_openai, ticker_exchange)
     else:
         await run_analysis_claude(ticker_exchange)
