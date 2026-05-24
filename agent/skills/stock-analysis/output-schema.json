@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StockAnalysisOutput",
+  "type": "object",
+  "required": [
+    "ticker",
+    "exchange",
+    "company_name",
+    "currency",
+    "analysis_date",
+    "time_horizon",
+    "recommendation",
+    "confidence",
+    "overall_score",
+    "scores",
+    "key_metrics",
+    "decision_summary",
+    "red_flags",
+    "data_quality",
+    "sources"
+  ],
+  "properties": {
+    "ticker": { "type": "string" },
+    "exchange": { "type": "string" },
+    "company_name": { "type": ["string", "null"] },
+    "currency": { "type": ["string", "null"] },
+    "analysis_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "time_horizon": {
+      "type": "string",
+      "const": "long_term_1y_plus"
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": ["buy", "watchlist", "no_buy"]
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "overall_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "scores": {
+      "type": "object",
+      "required": [
+        "quality_score",
+        "growth_score",
+        "valuation_score",
+        "balance_sheet_score",
+        "earnings_quality_score",
+        "catalyst_score",
+        "sentiment_score",
+        "technical_score",
+        "risk_red_flag_score"
+      ],
+      "properties": {
+        "quality_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "growth_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "valuation_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "balance_sheet_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "earnings_quality_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "catalyst_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "sentiment_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "technical_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "risk_red_flag_score": { "type": "integer", "minimum": -40, "maximum": 0 }
+      }
+    },
+    "key_metrics": {
+      "type": "object",
+      "properties": {
+        "market_cap": { "type": ["number", "null"] },
+        "revenue_growth_yoy": { "type": ["number", "null"] },
+        "revenue_cagr_3y": { "type": ["number", "null"] },
+        "eps_growth_yoy": { "type": ["number", "null"] },
+        "fcf_growth_yoy": { "type": ["number", "null"] },
+        "fcf_per_share_growth": { "type": ["number", "null"] },
+        "gross_margin": { "type": ["number", "null"] },
+        "operating_margin": { "type": ["number", "null"] },
+        "net_margin": { "type": ["number", "null"] },
+        "roic": { "type": ["number", "null"] },
+        "debt_to_equity": { "type": ["number", "null"] },
+        "net_debt_to_ebitda": { "type": ["number", "null"] },
+        "interest_coverage": { "type": ["number", "null"] },
+        "pe_ratio": { "type": ["number", "null"] },
+        "forward_pe": { "type": ["number", "null"] },
+        "peg_ratio": { "type": ["number", "null"] },
+        "ev_to_ebitda": { "type": ["number", "null"] },
+        "fcf_yield": { "type": ["number", "null"] },
+        "price_to_sales": { "type": ["number", "null"] },
+        "rsi": { "type": ["number", "null"] },
+        "price_vs_50dma": { "type": ["number", "null"] },
+        "price_vs_200dma": { "type": ["number", "null"] }
+      }
+    },
+    "decision_summary": {
+      "type": "object",
+      "required": [
+        "bull_case",
+        "bear_case",
+        "main_reason_for_recommendation",
+        "what_would_change_the_decision"
+      ],
+      "properties": {
+        "bull_case": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "bear_case": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "main_reason_for_recommendation": { "type": "string" },
+        "what_would_change_the_decision": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "red_flags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "severity", "description"],
+        "properties": {
+          "type": { "type": "string" },
+          "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high"]
+          },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "data_quality": {
+      "type": "object",
+      "required": [
+        "eodhd_available",
+        "external_sources_used",
+        "missing_fields",
+        "stale_fields",
+        "data_confidence"
+      ],
+      "properties": {
+        "eodhd_available": { "type": "boolean" },
+        "external_sources_used": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "missing_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "stale_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "data_confidence": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "url_or_endpoint", "used_for"],
+        "properties": {
+          "name": { "type": "string" },
+          "url_or_endpoint": { "type": "string" },
+          "used_for": { "type": "string" }
+        }
+      }
+    }
+  }
+}

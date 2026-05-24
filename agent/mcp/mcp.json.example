@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "eodhd": {
+      "url": "https://mcpv2.eodhd.dev/v1/mcp?apikey=YOUR_EODHD_API_KEY"
+    }
+  }
+}

@@ -1,12 +1,14 @@
 # Agent setup — Moonstocks × Equity OS (compressed)
 
+**Skills & MCP (versioned in repo):** see [`agent/README.md`](../agent/README.md) and run `.\scripts\install-agent-assets.ps1`.
+
 ## What this repo is
 
 - **equity-os** (`companyData`): Flask app :3000 — screener, company pages, **Moonstocks API** (replaces C# `moonstocks-api`).
 - **moonstocks-ai-analyzer/** (in-repo): FastAPI :8000 — LLM analysis → `POST` equity-os `/api/analysis/{TICKER.EX}`.
 - **moonstocks-app** (external): point API URL at equity-os when deployed.
 
-Storage: **Postgres** (`MOONSTOCKS_DATABASE_URL`) in Docker/prod; **SQLite** (`MOONSTOCKS_DB_PATH`) for local quick dev.
+Storage: **Postgres** (`MOONSTOCKS_DATABASE_URL`) for app runtime; **SQLite** (`MOONSTOCKS_DB_PATH`) for unit/E2E tests only.
 
 ---
 
