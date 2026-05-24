@@ -193,7 +193,7 @@ def parse_json_report(text: str) -> dict:
 def analyze_stream_codex(
     ticker_exchange: str,
     project_root,
-    model: str = "auto",
+    model: str = "gpt-5.3-codex",
 ) -> Generator[dict, None, None]:
     """
     Same as analyze_stream but runs through the ChatGPT OAuth session

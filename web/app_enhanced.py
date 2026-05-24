@@ -1784,9 +1784,20 @@ def _scale_chart_money_row(
     rev = row.get("revenue_usd")
     ni = row.get("net_income_usd")
     convert_rev = _looks_like_local_ccy_amount(rev)
-    convert_ni = _looks_like_local_ccy_amount(ni) and not (
-        ni and rev and ni < 250e9 and rev > 500e9
-    )
+    # Detect the three mixed-currency situations that EODHD produces for ADRs
+    # (e.g. TSMC, Samsung) where income-statement lines can be in local currency
+    # while some other lines are already in USD:
+    #
+    #   A) Both rev & NI in local ccy (large + plausible ratio > 3 %)
+    #      → convert NI if rev needs conversion and NI/rev > 3 %
+    #   B) Rev already USD but NI still in local ccy → NI/rev > 300 %
+    #      → convert NI unconditionally when ratio > 3.0x
+    #   C) NI already in USD even though rev is local ccy → NI/rev tiny (< 3 %)
+    #      → do NOT convert NI
+    _ni_ratio = (ni / rev) if (ni and rev and rev > 0) else 0.0
+    _ni_ratio_bad = _ni_ratio > 3.0          # case B: NI in local, rev in USD
+    _ni_same_ccy  = convert_rev and _ni_ratio > 0.03  # case A: both local
+    convert_ni = _looks_like_local_ccy_amount(ni) or _ni_ratio_bad or _ni_same_ccy
     field_groups = []
     if convert_rev:
         field_groups.extend(("revenue_usd", "revenue_b", "op_income_usd", "op_income_b",
@@ -2293,6 +2304,7 @@ def _fundamentals_period_row(
         inc.get("weightedAverageShsOutDil")
         or inc.get("weightedAverageShsOut")
     ) or shares_default or 1.0
+
     eps = _safe_float(inc.get("dilutedEPS"))
     if eps <= 0 and sh > 0 and ni != 0:
         eps = ni / sh
@@ -4448,7 +4460,7 @@ def api_company_chat(symbol):
         history = []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
 
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.3-codex").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
@@ -4513,7 +4525,7 @@ def api_company_chat_stream(symbol):
 
     history = body.get("history") if isinstance(body.get("history"), list) else []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.3-codex").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
@@ -4814,7 +4826,7 @@ def moonstocks_analyze_stream(ticker):
     def _worker():
         try:
             if use_codex:
-                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model="auto")
+                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model="gpt-5.3-codex")
             else:
                 gen = _la.analyze_stream(ticker, openai_key, model, reasoning_effort=reasoning_effort)
             for event in gen:
