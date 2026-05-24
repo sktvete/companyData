@@ -2125,6 +2125,7 @@ def _build_annual_history(
     price_by_date: dict | None,
     *,
     max_years: int = 15,
+    eps_history: dict | None = None,
 ) -> list[dict]:
     history: list[dict] = []
     for yr in sorted(annual.keys())[-max_years:]:
@@ -2147,6 +2148,13 @@ def _build_annual_history(
             shares_default=sh,
             price_by_date=price_by_date,
         )
+        # Override EPS with authoritative reported value from Earnings.History (Annual section)
+        if eps_history:
+            ep = eps_history.get(yr[:10])
+            if ep:
+                ea = _safe_float(ep.get("epsActual"))
+                if ea:
+                    row["eps"] = round(ea, 4)
         row["roe_pct"] = round(_safe_float(row["net_income_usd"]) / eq * 100, 1) if eq else 0
         if price_by_date and row.get("pe_ratio") is None:
             eps_val = row.get("eps", 0)
@@ -2165,6 +2173,7 @@ def _build_quarterly_history(
     price_by_date: dict | None,
     *,
     max_quarters: int = 80,
+    eps_history: dict | None = None,
 ) -> list[dict]:
     keys = sorted(q_inc.keys())[-max_quarters:]
     history: list[dict] = []
@@ -2175,18 +2184,27 @@ def _build_quarterly_history(
             fiscal_year = int(str(period_end)[:4])
         except (TypeError, ValueError):
             fiscal_year = None
-        history.append(
-            _fundamentals_period_row(
-                inc,
-                cf,
-                period_end=period_end,
-                label=_quarter_chart_label(period_end),
-                fiscal_year=fiscal_year,
-                shares_default=shares_out,
-                price_by_date=price_by_date,
-                eps_periods=4,
-            )
+        row = _fundamentals_period_row(
+            inc,
+            cf,
+            period_end=period_end,
+            label=_quarter_chart_label(period_end),
+            fiscal_year=fiscal_year,
+            shares_default=shares_out,
+            price_by_date=price_by_date,
+            eps_periods=4,
         )
+        # Override EPS with authoritative reported value from Earnings.History.
+        # EODHD's quarterly Income_Statement netIncome can contain GAAP
+        # one-time tax adjustments that distort the per-share figure; epsActual
+        # from the History section is straight from the earnings release.
+        if eps_history:
+            ep = eps_history.get(str(period_end)[:10])
+            if ep:
+                ea = _safe_float(ep.get("epsActual"))
+                if ea:
+                    row["eps"] = round(ea, 4)
+        history.append(row)
     return history
 
 
@@ -3504,14 +3522,22 @@ def api_company_history(symbol):
     price_chart_1y = _chart_prices_for_range(price_data, "1y")
     price_by_date = {p["date"]: p["close"] for p in price_data} if price_data else {}
 
+    earnings = d.get("Earnings", {})
+    # quarterly EPS as actually reported (straight from earnings release, not computed NI/shares)
+    q_eps_history  = earnings.get("History", {})
+    # annual EPS as actually reported (from Annual section)
+    ann_eps_history = earnings.get("Annual", {})
+
     annual_history = _build_annual_history(
         annual, bs_ann, cf_ann, shares_out, price_by_date, max_years=15,
+        eps_history=ann_eps_history,
     )
 
     q_inc = d.get("Financials", {}).get("Income_Statement", {}).get("quarterly", {})
     q_cf = d.get("Financials", {}).get("Cash_Flow", {}).get("quarterly", {})
     history = _build_quarterly_history(
         q_inc, q_cf, shares_out, price_by_date, max_quarters=80,
+        eps_history=q_eps_history,
     )
     if not history and annual_history:
         history = annual_history
