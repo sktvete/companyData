@@ -2384,6 +2384,10 @@ def _build_annual_history(
                 ea = _safe_float(ep.get("epsActual"))
                 if ea:
                     row["eps"] = round(ea, 4)
+                    # Recompute P/E from the authoritative EPS + stored year-end price.
+                    ye_p = row.get("ye_price")
+                    if ye_p and ea > 0:
+                        row["pe_ratio"] = round(ye_p / ea, 1)
         row["roe_pct"] = round(_safe_float(row["net_income_usd"]) / eq * 100, 1) if eq else 0
         if price_by_date and row.get("pe_ratio") is None:
             eps_val = row.get("eps", 0)
@@ -2433,6 +2437,10 @@ def _build_quarterly_history(
                 ea = _safe_float(ep.get("epsActual"))
                 if ea:
                     row["eps"] = round(ea, 4)
+                    # Recompute P/E from the authoritative EPS + already-stored price.
+                    ye_p = row.get("ye_price")
+                    if ye_p and ea > 0:
+                        row["pe_ratio"] = round(ye_p / (ea * 4), 1)
         history.append(row)
     return history
 
