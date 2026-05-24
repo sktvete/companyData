@@ -293,13 +293,20 @@
           <label style="font-size:.7rem;color:var(--dim);display:block;margin-bottom:.3rem">Model</label>
           <select id="msModelSelect" style="
             padding:.45rem .6rem;background:#0d1117;border:1px solid rgba(255,255,255,.15);
-            border-radius:6px;color:var(--fg);font-size:.75rem;outline:none;cursor:pointer;
+            border-radius:6px;color:var(--fg);font-size:.75rem;outline:none;cursor:pointer;width:100%;
           ">
-            <option value="gpt-4o-mini" selected>gpt-4o-mini (faster, cheaper — recommended)</option>
-            <option value="gpt-4o">gpt-4o (higher quality, more tokens)</option>
+            <option value="gpt-4.1-mini" selected>gpt-4.1-mini — fast, cheap, great for most analyses</option>
+            <option value="gpt-4.1">gpt-4.1 — deeper quality, higher cost</option>
           </select>
         </div>
-        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.85rem">
+        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.7rem;padding:.55rem .65rem;background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.2);border-radius:6px">
+          <input type="checkbox" id="msHighEffort" style="width:13px;height:13px;cursor:pointer">
+          <div>
+            <label for="msHighEffort" style="font-size:.7rem;color:var(--fg);cursor:pointer;font-weight:600">High Effort reasoning</label>
+            <div style="font-size:.62rem;color:var(--dim);line-height:1.4">Uses <code style="font-size:.6rem">reasoning_effort=high</code> — model thinks harder before answering. Better quality, higher cost &amp; latency.</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.5rem;margin-top:.75rem">
           <input type="checkbox" id="msKeySave" checked style="width:13px;height:13px;cursor:pointer">
           <label for="msKeySave" style="font-size:.68rem;color:var(--dim);cursor:pointer">Remember key for this browser session</label>
         </div>
@@ -557,6 +564,18 @@
     <button type="button" id="gchatLoginBtn">Sign in with ChatGPT</button>
     <div class="gchat-hint" style="margin-top:.4rem">Uses your ChatGPT Plus/Pro subscription. Login is saved on this server.</div>
     <div id="gchatSigned" class="gchat-signed" style="display:none">Connected · <button type="button" id="gchatLogoutBtn" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:.58rem;text-decoration:underline">Sign out</button></div>
+    <!-- API-key fallback -->
+    <div id="gchatApiKeyRow" style="margin-top:.55rem;display:flex;gap:.4rem;align-items:center">
+      <input id="gchatApiKeyInput" type="password" placeholder="Or enter OpenAI API key (sk-…)" autocomplete="off" style="
+        flex:1;padding:.4rem .5rem;background:#0d1117;border:1px solid rgba(255,255,255,.12);
+        border-radius:4px;color:var(--fg);font-size:.65rem;font-family:monospace;outline:none;
+      "/>
+      <button id="gchatApiKeyBtn" type="button" style="
+        padding:.4rem .6rem;background:#1e3a5f;border:1px solid rgba(59,130,246,.4);
+        border-radius:4px;color:#93c5fd;font-size:.65rem;font-weight:600;cursor:pointer;white-space:nowrap;
+      ">Use Key</button>
+    </div>
+    <div id="gchatApiKeyStatus" class="gchat-hint" style="margin-top:.25rem;display:none"></div>
   </div>
   <div class="gchat-body" id="gchatBody"></div>
   <div class="gchat-foot">
@@ -1894,34 +1913,50 @@ function restartLiveQuotePolling() {
 
 // —— ChatGPT OAuth + stock chat (NDJSON stream) ——
 let gchatAuthenticated = false;
+let gchatApiKey = sessionStorage.getItem('ms_openai_key') || '';  // reuse the same stored key
 let gchatAuthPoll = null;
 
-async function gchatRefreshAuth() {
-  const authBox = document.getElementById('gchatAuth');
-  const signed = document.getElementById('gchatSigned');
-  const loginBtn = document.getElementById('gchatLoginBtn');
-  const inp = document.getElementById('gchatInput');
+function gchatEnableChat() {
+  const inp  = document.getElementById('gchatInput');
   const send = document.getElementById('gchatSend');
+  if (inp)  { inp.disabled = false; inp.removeAttribute('disabled'); inp.placeholder = 'Ask about this stock…'; }
+  if (send) { send.disabled = false; send.removeAttribute('disabled'); }
+}
+
+async function gchatRefreshAuth() {
+  const authBox  = document.getElementById('gchatAuth');
+  const signed   = document.getElementById('gchatSigned');
+  const loginBtn = document.getElementById('gchatLoginBtn');
+  const apiKeyRow= document.getElementById('gchatApiKeyRow');
+  const inp      = document.getElementById('gchatInput');
+  const send     = document.getElementById('gchatSend');
   try {
     const r = await fetch('/api/auth/status');
     const d = await r.json();
     gchatAuthenticated = !!d.authenticated;
     if (authBox) authBox.classList.add('show');
     if (gchatAuthenticated) {
-      if (signed) signed.classList.add('show');
+      if (signed)   signed.classList.add('show');
       if (loginBtn) loginBtn.style.display = 'none';
+      if (apiKeyRow) apiKeyRow.style.display = 'none';
       const hint0 = authBox && authBox.querySelector('.gchat-hint');
       if (hint0) hint0.style.display = 'none';
-      if (inp) { inp.disabled = false; inp.removeAttribute('disabled'); inp.placeholder = 'Ask about this stock…'; }
-      if (send) { send.disabled = false; send.removeAttribute('disabled'); }
+      gchatEnableChat();
       if (gchatAuthPoll) { clearInterval(gchatAuthPoll); gchatAuthPoll = null; }
     } else {
-      if (signed) signed.classList.remove('show');
+      if (signed)   signed.classList.remove('show');
       if (loginBtn) { loginBtn.style.display = ''; loginBtn.disabled = !!d.loginInProgress; }
       const hint0 = authBox && authBox.querySelector('.gchat-hint');
       if (hint0) hint0.style.display = '';
-      if (inp) { inp.disabled = true; inp.placeholder = 'Sign in with ChatGPT to chat…'; }
-      if (send) send.disabled = true;
+      // If we already have a stored API key, enable chat immediately
+      if (gchatApiKey && gchatApiKey.startsWith('sk-')) {
+        gchatEnableChat();
+        const stat = document.getElementById('gchatApiKeyStatus');
+        if (stat) { stat.style.display = ''; stat.textContent = 'Using API key · type to chat'; }
+      } else {
+        if (inp)  { inp.disabled = true; inp.placeholder = 'Sign in with ChatGPT or enter API key to chat…'; }
+        if (send) send.disabled = true;
+      }
     }
   } catch (_) {
     gchatAuthenticated = false;
@@ -1996,8 +2031,9 @@ async function gchatSend() {
   const btn = document.getElementById('gchatSend');
   const err = document.getElementById('gchatErr');
   if (!inp || !btn || !body) return;
-  if (!gchatAuthenticated) {
-    if (err) err.textContent = 'Sign in with ChatGPT first.';
+  const hasApiKey = gchatApiKey && gchatApiKey.startsWith('sk-');
+  if (!gchatAuthenticated && !hasApiKey) {
+    if (err) err.textContent = 'Sign in with ChatGPT or enter an API key first.';
     return;
   }
   const msg = inp.value.trim();
@@ -2031,10 +2067,12 @@ async function gchatSend() {
     body.scrollTop = body.scrollHeight;
   }
   try {
+    const chatPayload = { message: msg, history: gchatHistory };
+    if (!gchatAuthenticated && gchatApiKey) chatPayload.openai_api_key = gchatApiKey;
     const r = await fetch(`/api/company/${encodeURIComponent(SYM)}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: msg, history: gchatHistory }),
+      body: JSON.stringify(chatPayload),
     });
     if (!r.ok) {
       const t = await r.text();
@@ -2237,10 +2275,28 @@ document.addEventListener('DOMContentLoaded', () => {
   if (inp) inp.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); gchatSend(); }
   });
-  const loginBtn = document.getElementById('gchatLoginBtn');
-  const logoutBtn = document.getElementById('gchatLogoutBtn');
-  if (loginBtn) loginBtn.addEventListener('click', gchatLogin);
+  const loginBtn    = document.getElementById('gchatLoginBtn');
+  const logoutBtn   = document.getElementById('gchatLogoutBtn');
+  const apiKeyBtn   = document.getElementById('gchatApiKeyBtn');
+  const apiKeyInput = document.getElementById('gchatApiKeyInput');
+  if (loginBtn)  loginBtn.addEventListener('click', gchatLogin);
   if (logoutBtn) logoutBtn.addEventListener('click', gchatLogout);
+  if (apiKeyBtn && apiKeyInput) {
+    // Pre-fill from session if available
+    if (gchatApiKey) apiKeyInput.value = gchatApiKey;
+    apiKeyBtn.addEventListener('click', () => {
+      const key = (apiKeyInput.value || '').trim();
+      const stat = document.getElementById('gchatApiKeyStatus');
+      if (!key.startsWith('sk-')) {
+        if (stat) { stat.style.display = ''; stat.textContent = 'Key must start with sk-'; stat.style.color = 'var(--neg)'; }
+        return;
+      }
+      gchatApiKey = key;
+      sessionStorage.setItem('ms_openai_key', key);
+      if (stat) { stat.style.display = ''; stat.textContent = 'API key saved · you can now chat'; stat.style.color = 'var(--pos)'; }
+      gchatEnableChat();
+    });
+  }
   gchatRefreshAuth();
 });
 
@@ -2339,19 +2395,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── API-key helpers (sessionStorage) ───────────────────────────────────
-  const MS_KEY_STORE = 'ms_openai_key';
-  const MS_MODEL_STORE = 'ms_openai_model';
+  const MS_KEY_STORE    = 'ms_openai_key';
+  const MS_MODEL_STORE  = 'ms_openai_model';
+  const MS_EFFORT_STORE = 'ms_openai_effort';
 
-  function msGetStoredKey()   { return sessionStorage.getItem(MS_KEY_STORE)   || ''; }
-  function msGetStoredModel() { return sessionStorage.getItem(MS_MODEL_STORE) || 'gpt-4o-mini'; }
+  function msGetStoredKey()    { return sessionStorage.getItem(MS_KEY_STORE)    || ''; }
+  function msGetStoredModel()  { return sessionStorage.getItem(MS_MODEL_STORE)  || 'gpt-4.1-mini'; }
+  function msGetStoredEffort() { return sessionStorage.getItem(MS_EFFORT_STORE) === '1'; }
 
-  function msStoreKey(key, model, save) {
+  function msStoreKey(key, model, highEffort, save) {
     if (save) {
-      sessionStorage.setItem(MS_KEY_STORE, key);
-      sessionStorage.setItem(MS_MODEL_STORE, model);
+      sessionStorage.setItem(MS_KEY_STORE,    key);
+      sessionStorage.setItem(MS_MODEL_STORE,  model);
+      sessionStorage.setItem(MS_EFFORT_STORE, highEffort ? '1' : '0');
     } else {
       sessionStorage.removeItem(MS_KEY_STORE);
       sessionStorage.removeItem(MS_MODEL_STORE);
+      sessionStorage.removeItem(MS_EFFORT_STORE);
     }
   }
 
@@ -2362,15 +2422,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const input      = document.getElementById('msKeyInput');
       const select     = document.getElementById('msModelSelect');
       const save       = document.getElementById('msKeySave');
+      const effortChk  = document.getElementById('msHighEffort');
       const err        = document.getElementById('msKeyError');
       const cancel     = document.getElementById('msKeyCancel');
       const confirm    = document.getElementById('msKeyConfirm');
       const codexBtn   = document.getElementById('msCodexLoginBtn');
       const codexStat  = document.getElementById('msCodexStatus');
 
-      // Pre-fill stored key/model
+      // Pre-fill stored key/model/effort
       if (msGetStoredKey()) input.value = msGetStoredKey();
       select.value = msGetStoredModel();
+      effortChk.checked = msGetStoredEffort();
       err.style.display   = 'none';
       codexStat.style.display = 'none';
       codexBtn.disabled   = false;
@@ -2425,16 +2487,17 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       confirm.onclick = () => {
-        const key   = (input.value || '').trim();
-        const model = select.value;
+        const key        = (input.value || '').trim();
+        const model      = select.value;
+        const highEffort = effortChk.checked;
         if (!key.startsWith('sk-')) {
           err.textContent = 'Enter a valid OpenAI key starting with sk-';
           err.style.display = '';
           return;
         }
-        msStoreKey(key, model, save.checked);
+        msStoreKey(key, model, highEffort, save.checked);
         cleanup();
-        resolve({ key, model });
+        resolve({ key, model, highEffort });
       };
 
       input.onkeydown = (e) => { if (e.key === 'Enter') confirm.onclick(); };
@@ -2460,7 +2523,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── SSE fetch reader ─────────────────────────────────────────────────────
-  async function msRunStream(key, model) {
+  async function msRunStream(key, model, highEffort) {
     const triggerBtn = document.getElementById('msTriggerBtn');
     const status     = document.getElementById('msTriggerStatus');
 
@@ -2469,9 +2532,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
     msHide('msNotFound');
     msShow('msStreamPanel');
-    msStreamSetModel(key ? model : 'ChatGPT');
+    const modelLabel = key ? (model + (highEffort ? ' · high effort' : '')) : 'ChatGPT';
+    msStreamSetModel(modelLabel);
     msStreamSetLabel('Fetching data…');
     document.getElementById('msStreamOutput').textContent = '';
+
+    const reqBody = key
+      ? { openai_api_key: key, model, reasoning_effort: highEffort ? 'high' : undefined }
+      : { model };
+    // strip undefined keys
+    Object.keys(reqBody).forEach(k => reqBody[k] === undefined && delete reqBody[k]);
 
     let resp;
     try {
@@ -2480,7 +2550,7 @@ document.addEventListener('DOMContentLoaded', () => {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(key ? { openai_api_key: key, model } : { model }),
+          body: JSON.stringify(reqBody),
         },
       );
     } catch (e) {
@@ -2649,15 +2719,17 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (_) {}
 
         // Fallback: use stored API key or show modal (which also has ChatGPT login)
-        let key   = msGetStoredKey();
-        let model = msGetStoredModel();
+        let key        = msGetStoredKey();
+        let model      = msGetStoredModel();
+        let highEffort = msGetStoredEffort();
         if (!key.startsWith('sk-')) {
           const result = await msShowKeyModal();
           if (!result) return;
-          key   = result.key;   // null = use ChatGPT session
-          model = result.model;
+          key        = result.key;        // null = use ChatGPT session
+          model      = result.model;
+          highEffort = result.highEffort;
         }
-        msRunStream(key, model);
+        msRunStream(key, model, highEffort);
       });
     }
   }

@@ -4339,6 +4339,84 @@ def _chat_tool_executor(sym: str):
     return run
 
 
+def _stream_chat_via_api_key(messages, api_key, model, tools, tool_executor, max_tool_rounds=6):
+    """
+    Mirror of codex_chat.stream_codex_chat but using the raw OpenAI SDK with
+    a user-supplied API key.  Yields the same event dicts:
+      {"token": "..."} | {"done": True, "model": model} | {"error": "..."}
+    """
+    from openai import OpenAI as _OAI
+
+    client = _OAI(api_key=api_key)
+    current_messages = list(messages)
+
+    for _round in range(max_tool_rounds + 1):
+        try:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=current_messages,
+                tools=tools or [],
+                stream=True,
+            )
+        except Exception as exc:
+            yield {"error": str(exc), "done": True}
+            return
+
+        tool_calls_acc: dict = {}
+        full_content = ""
+        finish_reason = None
+
+        for chunk in stream:
+            choice = chunk.choices[0] if chunk.choices else None
+            if not choice:
+                continue
+            finish_reason = choice.finish_reason or finish_reason
+            delta = choice.delta
+            if delta.content:
+                full_content += delta.content
+                yield {"token": delta.content}
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {"id": tc.id or "", "name": tc.function.name or "", "args": ""}
+                    if tc.id:
+                        tool_calls_acc[idx]["id"] = tc.id
+                    if tc.function.name:
+                        tool_calls_acc[idx]["name"] = tc.function.name
+                    if tc.function.arguments:
+                        tool_calls_acc[idx]["args"] += tc.function.arguments
+
+        if finish_reason == "tool_calls" and tool_calls_acc and tool_executor:
+            import json as _json
+            assistant_tool_calls = [
+                {"id": v["id"], "type": "function", "function": {"name": v["name"], "arguments": v["args"]}}
+                for v in sorted(tool_calls_acc.values(), key=lambda x: list(tool_calls_acc.keys()).index(list(tool_calls_acc.values()).index(x)))
+            ]
+            current_messages.append({"role": "assistant", "tool_calls": assistant_tool_calls})
+            for tc_item in assistant_tool_calls:
+                fn_name = tc_item["function"]["name"]
+                try:
+                    fn_args = _json.loads(tc_item["function"]["arguments"] or "{}")
+                except Exception:
+                    fn_args = {}
+                try:
+                    result = tool_executor(fn_name, fn_args)
+                except Exception as exc:
+                    result = {"error": str(exc)}
+                current_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_item["id"],
+                    "content": _json.dumps(result) if not isinstance(result, str) else result,
+                })
+            continue
+
+        yield {"done": True, "model": model}
+        return
+
+    yield {"error": "max tool rounds exceeded", "done": True}
+
+
 @app.route("/api/company/<symbol>/chat", methods=["POST"])
 def api_company_chat(symbol):
     """Stock-aware chat via ChatGPT subscription (Codex OAuth)."""
@@ -4348,12 +4426,16 @@ def api_company_chat(symbol):
     if not c:
         return jsonify({"error": "Company not found"}), 404
 
-    if not codex_chat.auth_status(PROJECT_ROOT).get("authenticated"):
+    body = request.get_json(silent=True) or {}
+    api_key_from_body = (body.get("openai_api_key") or "").strip()
+    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+
+    if not use_codex and not (api_key_from_body and api_key_from_body.startswith("sk-")):
         return jsonify({
-            "error": "Sign in with ChatGPT (Ask AI panel) to use chat.",
+            "error": "Sign in with ChatGPT or provide an OpenAI API key to use chat.",
+            "auth_required": True,
         }), 503
 
-    body = request.get_json(silent=True) or {}
     user_msg = (body.get("message") or "").strip()
     if not user_msg:
         return jsonify({"error": "message is required"}), 400
@@ -4366,26 +4448,32 @@ def api_company_chat(symbol):
         history = []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
 
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
-
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
     try:
         parts: list[str] = []
-        for ev in codex_chat.stream_codex_chat(
-            PROJECT_ROOT,
-            model=model,
-            messages=messages,
-            tools=_CHAT_TOOLS,
-            tool_executor=_chat_tool_executor(sym),
-            max_tool_rounds=max_tool_rounds,
-        ):
+        source = (
+            codex_chat.stream_codex_chat(
+                PROJECT_ROOT, model=model, messages=messages,
+                tools=_CHAT_TOOLS, tool_executor=_chat_tool_executor(sym),
+                max_tool_rounds=max_tool_rounds,
+            )
+            if use_codex
+            else _stream_chat_via_api_key(
+                messages=messages, api_key=api_key_from_body, model=model,
+                tools=_CHAT_TOOLS, tool_executor=_chat_tool_executor(sym),
+                max_tool_rounds=max_tool_rounds,
+            )
+        )
+        for ev in source:
             if ev.get("token"):
                 parts.append(ev["token"])
             if ev.get("error"):
                 return jsonify({"error": ev["error"]}), 502
-        return jsonify({"reply": "".join(parts), "model": model, "provider": "chatgpt"})
+        provider = "chatgpt" if use_codex else "openai-key"
+        return jsonify({"reply": "".join(parts), "model": model, "provider": provider})
     except Exception as e:
         return jsonify({"error": f"Chat error: {e!s}"}), 502
 
@@ -4400,17 +4488,21 @@ def api_company_chat_stream(symbol):
     if not c:
         return Response(_chat_ndjson_line({"error": "Company not found", "done": True}), status=404, mimetype="application/x-ndjson")
 
-    if not codex_chat.auth_status(PROJECT_ROOT).get("authenticated"):
+    body = request.get_json(silent=True) or {}
+    api_key_from_body = (body.get("openai_api_key") or "").strip()
+    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+
+    if not use_codex and not (api_key_from_body and api_key_from_body.startswith("sk-")):
         return Response(
             _chat_ndjson_line({
-                "error": "Sign in with ChatGPT (Ask AI panel) to use chat.",
+                "error": "Sign in with ChatGPT or provide an OpenAI API key to use chat.",
+                "auth_required": True,
                 "done": True,
             }),
             status=503,
             mimetype="application/x-ndjson",
         )
 
-    body = request.get_json(silent=True) or {}
     user_msg = (body.get("message") or "").strip()
     if not user_msg:
         return Response(_chat_ndjson_line({"error": "message is required", "done": True}), status=400, mimetype="application/x-ndjson")
@@ -4421,21 +4513,32 @@ def api_company_chat_stream(symbol):
 
     history = body.get("history") if isinstance(body.get("history"), list) else []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.4").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
     @stream_with_context
     def gen():
         try:
-            for ev in codex_chat.stream_codex_chat(
-                PROJECT_ROOT,
-                model=model,
-                messages=messages,
-                tools=_CHAT_TOOLS,
-                tool_executor=_chat_tool_executor(sym),
-                max_tool_rounds=max_tool_rounds,
-            ):
+            if use_codex:
+                source = codex_chat.stream_codex_chat(
+                    PROJECT_ROOT,
+                    model=model,
+                    messages=messages,
+                    tools=_CHAT_TOOLS,
+                    tool_executor=_chat_tool_executor(sym),
+                    max_tool_rounds=max_tool_rounds,
+                )
+            else:
+                source = _stream_chat_via_api_key(
+                    messages=messages,
+                    api_key=api_key_from_body,
+                    model=model,
+                    tools=_CHAT_TOOLS,
+                    tool_executor=_chat_tool_executor(sym),
+                    max_tool_rounds=max_tool_rounds,
+                )
+            for ev in source:
                 yield _chat_ndjson_line(ev)
                 if ev.get("done") or ev.get("error"):
                     return
@@ -4689,8 +4792,9 @@ def moonstocks_analyze_stream(ticker):
     import threading as _threading
 
     body = request.get_json(silent=True) or {}
-    openai_key = (body.get("openai_api_key") or "").strip()
-    model      = (body.get("model") or "gpt-4o-mini").strip()
+    openai_key       = (body.get("openai_api_key") or "").strip()
+    model            = (body.get("model") or "gpt-4.1-mini").strip()
+    reasoning_effort = (body.get("reasoning_effort") or "").strip() or None
 
     try:
         import local_analyzer as _la
@@ -4712,7 +4816,7 @@ def moonstocks_analyze_stream(ticker):
             if use_codex:
                 gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model="auto")
             else:
-                gen = _la.analyze_stream(ticker, openai_key, model)
+                gen = _la.analyze_stream(ticker, openai_key, model, reasoning_effort=reasoning_effort)
             for event in gen:
                 q.put(event)
                 if event["type"] in ("done", "error"):

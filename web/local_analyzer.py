@@ -253,7 +253,8 @@ def analyze_stream_codex(
 def analyze_stream(
     ticker_exchange: str,
     openai_api_key: str,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-4.1-mini",
+    reasoning_effort: str | None = None,
 ) -> Generator[dict, None, None]:
     """
     Generator that yields dicts:
@@ -271,22 +272,28 @@ def analyze_stream(
         yield {"type": "error", "text": f"EODHD fetch failed: {exc}"}
         return
 
-    yield {"type": "status", "text": "Data ready.  Starting AI analysis…\n\n"}
+    effort_label = f" (reasoning: {reasoning_effort})" if reasoning_effort else ""
+    yield {"type": "status", "text": f"Data ready.  Starting AI analysis{effort_label}…\n\n"}
 
     system_prompt = build_system_prompt()
     user_prompt   = build_user_prompt(ticker_exchange, bundle)
 
+    call_kwargs: dict = dict(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
+        ],
+        stream=True,
+    )
+    if reasoning_effort:
+        call_kwargs["reasoning_effort"] = reasoning_effort
+    else:
+        call_kwargs["temperature"] = 0.2
+
     try:
-        client  = OpenAI(api_key=openai_api_key)
-        stream  = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            temperature=0.2,
-            stream=True,
-        )
+        client = OpenAI(api_key=openai_api_key)
+        stream = client.chat.completions.create(**call_kwargs)
     except Exception as exc:
         yield {"type": "error", "text": f"OpenAI call failed: {exc}"}
         return
