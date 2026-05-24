@@ -260,7 +260,8 @@
       ">
         <div style="font-size:1rem;font-weight:700;margin-bottom:.25rem">Run AI Analysis</div>
         <div style="font-size:.72rem;color:var(--dim);margin-bottom:1.1rem;line-height:1.6">
-          Analysis runs using <b style="color:var(--fg)">your OpenAI API key</b> — tokens are charged to your account, not ours. The key is sent only to this server, used once for this request, and never stored.
+          If you have <b style="color:var(--fg)">signed in with ChatGPT</b> (via the Ask AI panel), close this and click Run — it will use your subscription automatically.<br><br>
+          Or enter an <b style="color:var(--fg)">OpenAI API key</b> — tokens are charged to your account, not ours, and the key is never stored after the request.
         </div>
         <label style="font-size:.7rem;color:var(--dim);display:block;margin-bottom:.3rem">OpenAI API Key</label>
         <input id="msKeyInput" type="password" placeholder="sk-…" autocomplete="off" style="
@@ -2403,7 +2404,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     msHide('msNotFound');
     msShow('msStreamPanel');
-    msStreamSetModel(model);
+    msStreamSetModel(key ? model : 'ChatGPT');
     msStreamSetLabel('Fetching data…');
     document.getElementById('msStreamOutput').textContent = '';
 
@@ -2414,7 +2415,7 @@ document.addEventListener('DOMContentLoaded', () => {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ openai_api_key: key, model }),
+          body: JSON.stringify(key ? { openai_api_key: key, model } : { model }),
         },
       );
     } catch (e) {
@@ -2572,17 +2573,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const triggerBtn = document.getElementById('msTriggerBtn');
     if (triggerBtn) {
       triggerBtn.addEventListener('click', async () => {
-        // Check for a stored key first to avoid always showing the modal
+        // Prefer ChatGPT OAuth session (no key needed) — same sign-in as the chatbot
+        try {
+          const authR = await fetch('/api/auth/status');
+          const authD = await authR.json();
+          if (authD.authenticated) {
+            msRunStream(null, 'auto');
+            return;
+          }
+        } catch (_) {}
+
+        // Fallback: use stored or prompt for OpenAI API key
         let key   = msGetStoredKey();
         let model = msGetStoredModel();
-
         if (!key.startsWith('sk-')) {
           const result = await msShowKeyModal();
-          if (!result) return;  // user cancelled
+          if (!result) return;
           key   = result.key;
           model = result.model;
         }
-
         msRunStream(key, model);
       });
     }

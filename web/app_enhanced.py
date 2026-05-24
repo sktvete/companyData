@@ -4692,19 +4692,28 @@ def moonstocks_analyze_stream(ticker):
     openai_key = (body.get("openai_api_key") or "").strip()
     model      = (body.get("model") or "gpt-4o-mini").strip()
 
-    if not openai_key or not openai_key.startswith("sk-"):
-        return jsonify({"error": "A valid OpenAI API key (sk-...) is required."}), 400
-
     try:
         import local_analyzer as _la
     except ImportError as exc:
         return jsonify({"error": f"local_analyzer not available: {exc}"}), 500
 
+    # Prefer ChatGPT OAuth session (user's subscription) over a raw API key
+    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+
+    if not use_codex and (not openai_key or not openai_key.startswith("sk-")):
+        return jsonify({
+            "error": "Sign in with ChatGPT (Ask AI panel) or provide an OpenAI API key (sk-...)."
+        }), 400
+
     q: _queue.Queue = _queue.Queue()
 
     def _worker():
         try:
-            for event in _la.analyze_stream(ticker, openai_key, model):
+            if use_codex:
+                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model="auto")
+            else:
+                gen = _la.analyze_stream(ticker, openai_key, model)
+            for event in gen:
                 q.put(event)
                 if event["type"] in ("done", "error"):
                     return

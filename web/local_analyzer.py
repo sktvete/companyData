@@ -190,6 +190,66 @@ def parse_json_report(text: str) -> dict:
     return json.loads(s)
 
 
+def analyze_stream_codex(
+    ticker_exchange: str,
+    project_root,
+    model: str = "auto",
+) -> Generator[dict, None, None]:
+    """
+    Same as analyze_stream but runs through the ChatGPT OAuth session
+    (codex/responses API) so the user's ChatGPT subscription pays for it.
+    No API key required.
+    """
+    import codex_chat
+
+    yield {"type": "status", "text": f"Fetching EODHD data for {ticker_exchange}…"}
+    try:
+        bundle = fetch_eodhd_bundle(ticker_exchange)
+    except Exception as exc:
+        yield {"type": "error", "text": f"EODHD fetch failed: {exc}"}
+        return
+
+    yield {"type": "status", "text": "Data ready.  Starting AI analysis via ChatGPT…\n\n"}
+
+    system_prompt = build_system_prompt()
+    user_prompt   = build_user_prompt(ticker_exchange, bundle)
+
+    messages = [
+        {"role": "system",    "content": system_prompt},
+        {"role": "user",      "content": user_prompt},
+    ]
+
+    full_text = ""
+    try:
+        for evt in codex_chat.stream_codex_chat(
+            project_root,
+            model=model,
+            messages=messages,
+            tools=[],
+            tool_executor=lambda name, args: "",
+        ):
+            if evt.get("token"):
+                full_text += evt["token"]
+                yield {"type": "token", "text": evt["token"]}
+            elif evt.get("error"):
+                yield {"type": "error", "text": evt["error"]}
+                return
+            elif evt.get("done"):
+                break
+    except Exception as exc:
+        yield {"type": "error", "text": f"ChatGPT stream failed: {exc}"}
+        return
+
+    yield {"type": "status", "text": "\n\nParsing and saving report…"}
+    try:
+        report = parse_json_report(full_text)
+        report.setdefault("ticker",   ticker_exchange.split(".")[0])
+        report.setdefault("exchange", (ticker_exchange.split(".", 1) + ["US"])[1])
+        yield {"type": "done", "report": report, "raw": full_text}
+    except Exception as exc:
+        yield {"type": "error", "text": f"JSON parse failed: {exc}\n\nRaw output:\n{full_text[:800]}"}
+
+
 def analyze_stream(
     ticker_exchange: str,
     openai_api_key: str,
