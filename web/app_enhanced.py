@@ -2075,6 +2075,56 @@ def _three_year_quarterly_projections(
     return projections
 
 
+def _fill_cashflow_estimates(
+    estimates: list[dict],
+    annual_history: list[dict],
+    quarterly_history: list[dict] | None = None,
+) -> list[dict]:
+    """
+    EODHD analyst Trend only supplies revenue + EPS.  This function fills in
+    OCF, CapEx, and FCF on every estimate that is missing them by multiplying
+    the analyst revenue estimate by the trailing ratio from actual history.
+
+    Quarterly estimates flagged derived_from_annual=True are also back-filled
+    from their parent annual OCF values if possible.
+    """
+    def _trailing_ratio(history: list[dict], num_key: str, denom_key: str, n: int = 3) -> float | None:
+        rows = [r for r in history if _safe_float(r.get(num_key)) and _safe_float(r.get(denom_key))]
+        if not rows:
+            return None
+        rows = rows[-n:]
+        ratios = [_safe_float(r[num_key]) / _safe_float(r[denom_key]) for r in rows]
+        return sum(ratios) / len(ratios)
+
+    # Use annual history for annual estimates, quarterly for quarterly estimates
+    ann_ocf_ratio   = _trailing_ratio(annual_history, "ocf_usd",   "revenue_usd")
+    ann_capex_ratio = _trailing_ratio(annual_history, "capex_usd",  "revenue_usd")
+    q_hist = quarterly_history or []
+    q_ocf_ratio   = _trailing_ratio(q_hist, "ocf_usd",   "revenue_usd") or ann_ocf_ratio
+    q_capex_ratio = _trailing_ratio(q_hist, "capex_usd",  "revenue_usd") or ann_capex_ratio
+
+    for e in estimates:
+        if e.get("ocf_usd") or e.get("fcf_usd"):
+            continue  # already filled (e.g., 3y_trend entries)
+        rev = _safe_float(e.get("revenue_usd"))
+        if not rev:
+            continue
+        granularity = e.get("estimate_granularity", "annual")
+        ocf_r   = q_ocf_ratio   if granularity == "quarter" else ann_ocf_ratio
+        capex_r = q_capex_ratio if granularity == "quarter" else ann_capex_ratio
+        proj_ocf   = round(rev * ocf_r)   if ocf_r   else None
+        proj_capex = round(rev * capex_r) if capex_r else None
+        proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else proj_ocf
+        if proj_ocf:
+            e["ocf_usd"]   = proj_ocf
+        if proj_capex:
+            e["capex_usd"] = proj_capex
+        if proj_fcf:
+            e["fcf_usd"]   = proj_fcf
+
+    return estimates
+
+
 def _estimate_entry_from_trend(
     date_key: str,
     t: dict,
@@ -3778,6 +3828,11 @@ def api_company_history(symbol):
                 quarterly_estimates + q_3y,
                 key=lambda e: e.get("period_end", ""),
             )
+
+    # Fill OCF / CapEx / FCF on analyst estimates that only have revenue + EPS,
+    # using the trailing OCF/revenue ratio from actual filed history.
+    _fill_cashflow_estimates(estimates,          annual_history, history or [])
+    _fill_cashflow_estimates(quarterly_estimates, annual_history, history or [])
 
     co = get_company(symbol) or {}
     analyst = _fmt_analyst(_analyst_ratings_for_company({**co, "symbol": symbol}) or {})
