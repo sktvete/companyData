@@ -404,6 +404,11 @@
                 <span class="reports-toggle-track"></span>
                 <span class="reports-toggle-label">Reports</span>
               </label>
+              <label class="reports-toggle" title="Switch price chart y-axis between linear and logarithmic scale (saved globally)">
+                <input type="checkbox" id="toggleLogScale" class="reports-toggle-input"/>
+                <span class="reports-toggle-track"></span>
+                <span class="reports-toggle-label">Log</span>
+              </label>
             </div>
           </div>
           <div id="priceHeader" style="display:flex;flex-direction:column;align-items:flex-start;gap:.2rem;min-width:0">
@@ -1282,6 +1287,22 @@ let priceChart = null;
 let volChart = null;
 let _currentRange = '1y';
 let _priceChartRange = '1y';
+
+const PRICE_LOG_SCALE_KEY = 'price_log_scale';
+function priceLogScaleEnabled() { return localStorage.getItem(PRICE_LOG_SCALE_KEY) === '1'; }
+function priceLogScaleSet(on) {
+  localStorage.setItem(PRICE_LOG_SCALE_KEY, on ? '1' : '0');
+  const chk = document.getElementById('toggleLogScale');
+  if (chk) chk.checked = on;
+}
+function applyLogScaleToChart(on) {
+  if (!priceChart) return;
+  priceChart.options.scales.y.type = on ? 'logarithmic' : 'linear';
+  // Reset min/max so Chart.js recalculates clean log ticks
+  delete priceChart.options.scales.y.min;
+  delete priceChart.options.scales.y.max;
+  priceChart.update('none');
+}
 let _priceSeries = null;
 let _priceHoverIdx = null;
 let _priceHoverMouseY = null;
@@ -1504,6 +1525,7 @@ function renderPriceCharts(prices, range) {
           grid: { display: false, offset: false }
         },
         y: {
+          type: priceLogScaleEnabled() ? 'logarithmic' : 'linear',
           position: 'right',
           ticks: {
             color: '#64748b', font: { size: 9, family: "'JetBrains Mono', monospace" },
@@ -2199,6 +2221,15 @@ document.addEventListener('DOMContentLoaded', () => {
       if (reportsLbl) reportsLbl.classList.toggle('active', _showQuarterlyReports);
       if (priceChart) priceChart.update('none');
       if (volChart) volChart.update('none');
+    });
+  }
+  // Log scale toggle — persisted globally in localStorage
+  const logScaleChk = document.getElementById('toggleLogScale');
+  if (logScaleChk) {
+    logScaleChk.checked = priceLogScaleEnabled();
+    logScaleChk.addEventListener('change', () => {
+      priceLogScaleSet(logScaleChk.checked);
+      applyLogScaleToChart(logScaleChk.checked);
     });
   }
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
