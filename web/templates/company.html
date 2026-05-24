@@ -259,10 +259,29 @@
         padding:1.6rem 1.8rem;width:min(420px,92vw);box-shadow:0 16px 40px rgba(0,0,0,.6);
       ">
         <div style="font-size:1rem;font-weight:700;margin-bottom:.25rem">Run AI Analysis</div>
-        <div style="font-size:.72rem;color:var(--dim);margin-bottom:1.1rem;line-height:1.6">
-          If you have <b style="color:var(--fg)">signed in with ChatGPT</b> (via the Ask AI panel), close this and click Run — it will use your subscription automatically.<br><br>
-          Or enter an <b style="color:var(--fg)">OpenAI API key</b> — tokens are charged to your account, not ours, and the key is never stored after the request.
+        <div style="font-size:.72rem;color:var(--dim);margin-bottom:1rem;line-height:1.6">
+          Analysis result is shared for all users. Sign in with ChatGPT (uses your subscription) or enter an API key.
         </div>
+
+        <!-- ChatGPT sign-in option -->
+        <button id="msCodexLoginBtn" style="
+          width:100%;padding:.6rem;margin-bottom:.75rem;
+          background:#10a37f;border:none;border-radius:6px;
+          color:#fff;font-size:.78rem;font-weight:600;cursor:pointer;
+          display:flex;align-items:center;justify-content:center;gap:.5rem;
+        ">
+          <svg width="16" height="16" viewBox="0 0 41 41" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path d="M37.532 16.87a9.963 9.963 0 00-.856-8.184 10.078 10.078 0 00-10.855-4.835 9.964 9.964 0 00-7.505-3.336 10.079 10.079 0 00-9.612 6.982 9.967 9.967 0 00-6.664 4.834 10.08 10.08 0 001.24 11.817 9.965 9.965 0 00.856 8.185 10.079 10.079 0 0010.855 4.835 9.965 9.965 0 007.504 3.336 10.08 10.08 0 009.617-6.981 9.967 9.967 0 006.663-4.834 10.079 10.079 0 00-1.243-11.817zM22.498 37.886a7.474 7.474 0 01-4.799-1.735c.061-.033.168-.091.237-.134l7.964-4.6a1.294 1.294 0 00.655-1.134V19.054l3.366 1.944a.12.12 0 01.066.092v9.299a7.505 7.505 0 01-7.49 7.496zM6.392 31.006a7.471 7.471 0 01-.894-5.023c.06.036.162.099.237.141l7.964 4.6a1.297 1.297 0 001.308 0l9.724-5.614v3.888a.12.12 0 01-.048.103l-8.051 4.649a7.504 7.504 0 01-10.24-2.744zM4.297 13.62A7.469 7.469 0 018.2 10.333c0 .068-.004.19-.004.274v9.201a1.294 1.294 0 00.654 1.132l9.723 5.614-3.366 1.944a.12.12 0 01-.114.012L7.044 23.86a7.504 7.504 0 01-2.747-10.24zm27.658 6.437l-9.724-5.615 3.367-1.943a.121.121 0 01.114-.012l8.048 4.648a7.498 7.498 0 01-1.158 13.528v-9.476a1.293 1.293 0 00-.647-1.13zm3.35-5.043c-.059-.037-.162-.099-.236-.141l-7.965-4.6a1.298 1.298 0 00-1.308 0l-9.723 5.614v-3.888a.12.12 0 01.048-.103l8.05-4.645a7.497 7.497 0 0111.135 7.763zm-21.063 6.929l-3.367-1.944a.12.12 0 01-.065-.092v-9.299a7.497 7.497 0 0112.293-5.756 6.94 6.94 0 00-.236.134l-7.965 4.6a1.294 1.294 0 00-.654 1.132l-.006 11.225zm1.829-3.943l4.33-2.501 4.332 2.5v4.999l-4.331 2.5-4.331-2.5V18z" fill="currentColor"/></svg>
+          Sign in with ChatGPT
+        </button>
+        <div id="msCodexStatus" style="font-size:.68rem;color:var(--dim);text-align:center;margin-bottom:.6rem;display:none"></div>
+
+        <!-- Divider -->
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem">
+          <div style="flex:1;height:1px;background:rgba(255,255,255,.1)"></div>
+          <span style="font-size:.65rem;color:var(--dim)">or use API key</span>
+          <div style="flex:1;height:1px;background:rgba(255,255,255,.1)"></div>
+        </div>
+
         <label style="font-size:.7rem;color:var(--dim);display:block;margin-bottom:.3rem">OpenAI API Key</label>
         <input id="msKeyInput" type="password" placeholder="sk-…" autocomplete="off" style="
           width:100%;box-sizing:border-box;padding:.55rem .7rem;
@@ -289,7 +308,7 @@
             flex:1;padding:.55rem;background:transparent;border:1px solid rgba(255,255,255,.15);
             border-radius:6px;color:var(--dim);font-size:.78rem;cursor:pointer;
           ">Cancel</button>
-          <button id="msKeyConfirm" class="run-btn" style="flex:2">Run Analysis</button>
+          <button id="msKeyConfirm" class="run-btn" style="flex:2">Run with API Key</button>
         </div>
         <div id="msKeyError" style="font-size:.68rem;color:var(--neg);margin-top:.6rem;display:none"></div>
       </div>
@@ -2339,25 +2358,72 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Key modal ────────────────────────────────────────────────────────────
   function msShowKeyModal() {
     return new Promise((resolve) => {
-      const modal  = document.getElementById('msKeyModal');
-      const input  = document.getElementById('msKeyInput');
-      const select = document.getElementById('msModelSelect');
-      const save   = document.getElementById('msKeySave');
-      const err    = document.getElementById('msKeyError');
-      const cancel = document.getElementById('msKeyCancel');
-      const confirm = document.getElementById('msKeyConfirm');
+      const modal      = document.getElementById('msKeyModal');
+      const input      = document.getElementById('msKeyInput');
+      const select     = document.getElementById('msModelSelect');
+      const save       = document.getElementById('msKeySave');
+      const err        = document.getElementById('msKeyError');
+      const cancel     = document.getElementById('msKeyCancel');
+      const confirm    = document.getElementById('msKeyConfirm');
+      const codexBtn   = document.getElementById('msCodexLoginBtn');
+      const codexStat  = document.getElementById('msCodexStatus');
 
       // Pre-fill stored key/model
-      const storedKey = msGetStoredKey();
-      if (storedKey) input.value = storedKey;
+      if (msGetStoredKey()) input.value = msGetStoredKey();
       select.value = msGetStoredModel();
-      err.style.display = 'none';
+      err.style.display   = 'none';
+      codexStat.style.display = 'none';
+      codexBtn.disabled   = false;
+      codexBtn.textContent = '';
+      // Re-insert SVG + text (button was cleared on previous open)
+      codexBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 41 41" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0"><path d="M37.532 16.87a9.963 9.963 0 00-.856-8.184 10.078 10.078 0 00-10.855-4.835 9.964 9.964 0 00-7.505-3.336 10.079 10.079 0 00-9.612 6.982 9.967 9.967 0 00-6.664 4.834 10.08 10.08 0 001.24 11.817 9.965 9.965 0 00.856 8.185 10.079 10.079 0 0010.855 4.835 9.965 9.965 0 007.504 3.336 10.08 10.08 0 009.617-6.981 9.967 9.967 0 006.663-4.834 10.079 10.079 0 00-1.243-11.817zM22.498 37.886a7.474 7.474 0 01-4.799-1.735c.061-.033.168-.091.237-.134l7.964-4.6a1.294 1.294 0 00.655-1.134V19.054l3.366 1.944a.12.12 0 01.066.092v9.299a7.505 7.505 0 01-7.49 7.496zM6.392 31.006a7.471 7.471 0 01-.894-5.023c.06.036.162.099.237.141l7.964 4.6a1.297 1.297 0 001.308 0l9.724-5.614v3.888a.12.12 0 01-.048.103l-8.051 4.649a7.504 7.504 0 01-10.24-2.744zM4.297 13.62A7.469 7.469 0 018.2 10.333c0 .068-.004.19-.004.274v9.201a1.294 1.294 0 00.654 1.132l9.723 5.614-3.366 1.944a.12.12 0 01-.114.012L7.044 23.86a7.504 7.504 0 01-2.747-10.24zm27.658 6.437l-9.724-5.615 3.367-1.943a.121.121 0 01.114-.012l8.048 4.648a7.498 7.498 0 01-1.158 13.528v-9.476a1.293 1.293 0 00-.647-1.13zm3.35-5.043c-.059-.037-.162-.099-.236-.141l-7.965-4.6a1.298 1.298 0 00-1.308 0l-9.723 5.614v-3.888a.12.12 0 01.048-.103l8.05-4.645a7.497 7.497 0 0111.135 7.763zm-21.063 6.929l-3.367-1.944a.12.12 0 01-.065-.092v-9.299a7.497 7.497 0 0112.293-5.756 6.94 6.94 0 00-.236.134l-7.965 4.6a1.294 1.294 0 00-.654 1.132l-.006 11.225zm1.829-3.943l4.33-2.501 4.332 2.5v4.999l-4.331 2.5-4.331-2.5V18z" fill="currentColor"/></svg> Sign in with ChatGPT`;
       modal.style.display = 'flex';
-      input.focus();
 
-      const cleanup = () => { modal.style.display = 'none'; cancel.onclick = null; confirm.onclick = null; };
+      const cleanup = () => {
+        modal.style.display = 'none';
+        cancel.onclick = null; confirm.onclick = null; codexBtn.onclick = null;
+        if (window._msCodexPoll) { clearInterval(window._msCodexPoll); window._msCodexPoll = null; }
+      };
 
-      cancel.onclick  = () => { cleanup(); resolve(null); };
+      cancel.onclick = () => { cleanup(); resolve(null); };
+
+      // ChatGPT OAuth login inside the modal
+      codexBtn.onclick = async () => {
+        codexBtn.disabled = true;
+        codexStat.style.display = '';
+        codexStat.style.color   = 'var(--dim)';
+        codexStat.textContent   = 'Opening ChatGPT sign-in…';
+        try {
+          const r = await fetch('/api/auth/login', { method: 'POST' });
+          const d = await r.json();
+          if (d.authenticated) {
+            codexStat.style.color = 'var(--pos)';
+            codexStat.textContent = 'Signed in! Starting analysis…';
+            cleanup();
+            resolve({ key: null, model: 'auto' });
+            return;
+          }
+          if (d.authUrl) {
+            window.open(d.authUrl, 'chatgpt_oauth', 'width=520,height=720');
+            codexStat.textContent = 'Complete sign-in in the popup…';
+            window._msCodexPoll = setInterval(async () => {
+              const sr = await fetch('/api/auth/status');
+              const sd = await sr.json();
+              if (sd.authenticated) {
+                clearInterval(window._msCodexPoll); window._msCodexPoll = null;
+                codexStat.style.color = 'var(--pos)';
+                codexStat.textContent = 'Signed in! Starting analysis…';
+                setTimeout(() => { cleanup(); resolve({ key: null, model: 'auto' }); }, 800);
+              }
+            }, 1200);
+          }
+        } catch (e) {
+          codexStat.style.color = 'var(--neg)';
+          codexStat.textContent = 'Login failed: ' + e.message;
+          codexBtn.disabled = false;
+        }
+      };
+
       confirm.onclick = () => {
         const key   = (input.value || '').trim();
         const model = select.value;
@@ -2371,7 +2437,6 @@ document.addEventListener('DOMContentLoaded', () => {
         resolve({ key, model });
       };
 
-      // Enter key submits
       input.onkeydown = (e) => { if (e.key === 'Enter') confirm.onclick(); };
     });
   }
@@ -2583,13 +2648,13 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         } catch (_) {}
 
-        // Fallback: use stored or prompt for OpenAI API key
+        // Fallback: use stored API key or show modal (which also has ChatGPT login)
         let key   = msGetStoredKey();
         let model = msGetStoredModel();
         if (!key.startsWith('sk-')) {
           const result = await msShowKeyModal();
           if (!result) return;
-          key   = result.key;
+          key   = result.key;   // null = use ChatGPT session
           model = result.model;
         }
         msRunStream(key, model);
