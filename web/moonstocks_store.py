@@ -228,6 +228,24 @@ def upsert_trigger(project_root: Path, ticker: str, triggered_at: int) -> None:
         conn.commit()
 
 
+def delete_trigger(project_root: Path, ticker: str) -> None:
+    """Remove a pending trigger entry (e.g. after analysis completes or expires)."""
+    ensure_store(project_root)
+    key = ticker.upper()
+    if uses_postgres():
+        with _pg_conn() as conn:
+            conn.execute(
+                "DELETE FROM pending_triggers WHERE ticker_and_exchange_code = %s", (key,)
+            )
+            conn.commit()
+        return
+    with _sqlite_conn(project_root) as conn:
+        conn.execute(
+            "DELETE FROM pending_triggers WHERE ticker_and_exchange_code = ?", (key,)
+        )
+        conn.commit()
+
+
 def get_trigger(project_root: Path, ticker: str) -> int | None:
     """Return the last triggered_at ms timestamp for a ticker, or None."""
     ensure_store(project_root)

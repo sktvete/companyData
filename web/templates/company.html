@@ -1080,19 +1080,27 @@ function renderFinancialCharts(quarters) {
   // Margins
   const gm = pts.map(p => p.ttm?.gross_margin_pct ?? p.hist?.gross_margin_pct ?? null);
   const nm = pts.map(p => p.ttm?.net_margin_pct   ?? p.hist?.net_margin_pct   ?? null);
-  // Net margin estimate: derived from ni_est / rev_est when both are present
+
+  // Trailing average of last 3 historical gross/net margins used as forward estimate proxy
+  const recentGm = gm.filter(v => v != null).slice(-3);
+  const recentNm = nm.filter(v => v != null).slice(-3);
+  const avgGm = recentGm.length ? recentGm.reduce((a, b) => a + b, 0) / recentGm.length : null;
+
+  const gmEst = pts.map(p => (p.est && p.est.revenue_usd && avgGm != null) ? avgGm : null);
   const nmEst = pts.map(p => {
     const rv = qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p);
     const ni = qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p);
     if (rv && ni && rv !== 0) return (ni / rv) * 100;
     return null;
   });
+
   hideLoader('marginLoading');
   const marginDS = [
     barDataset('Gross Margin %', gm, '#34d399', { legendGroup: 'grossMargin' }),
     barDataset('Net Margin %',   nm, '#f472b6', { legendGroup: 'netMargin' }),
   ];
-  if (nmEst.some(v => v != null)) marginDS.push(estBarDataset('Net Margin Est.', nmEst, '#f9a8d4', 'netMargin'));
+  if (gmEst.some(v => v != null)) marginDS.push(estBarDataset('Gross Margin Est.', gmEst, '#6ee7b7', 'grossMargin'));
+  if (nmEst.some(v => v != null)) marginDS.push(estBarDataset('Net Margin Est.',   nmEst, '#f9a8d4', 'netMargin'));
   _finCharts.margin = mkChartRet('chartMargin', 'bar', labels, marginDS, BAR_GROUP_OPTS);
 
   // P/E
@@ -2504,29 +2512,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ── Countdown (used when external analyzer was triggered by someone else) ─
   function msStartCountdown(triggeredAtMs) {
-    const status    = document.getElementById('msTriggerStatus');
+    const status     = document.getElementById('msTriggerStatus');
     const triggerBtn = document.getElementById('msTriggerBtn');
-    const totalSecs = 180;
-    const elapsed   = Math.floor((Date.now() - triggeredAtMs) / 1000);
-    let secs        = Math.max(0, totalSecs - elapsed);
+    const totalSecs  = 180;
+    const elapsed    = Math.floor((Date.now() - triggeredAtMs) / 1000);
+    let secs         = Math.max(0, totalSecs - elapsed);
     if (triggerBtn) triggerBtn.style.display = 'none';
-    if (status) {
-      status.style.display = '';
-      const tick = () => {
-        if (secs > 0) {
-          const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, '0');
-          status.style.color   = 'var(--pos)';
-          status.textContent   = `Analysis queued — arriving in ~${m}:${s}`;
-          secs--;
-          setTimeout(tick, 1000);
-        } else {
-          status.style.color  = 'var(--dim)';
-          status.textContent  = 'Analysis should be ready — refresh to check.';
-        }
-      };
-      tick();
-    }
+    if (!status) return;
+    status.style.display = '';
+
+    const tick = () => {
+      if (secs > 0) {
+        const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, '0');
+        status.style.color  = 'var(--pos)';
+        status.textContent  = `Analysis queued — arriving in ~${m}:${s}`;
+        secs--;
+        setTimeout(tick, 1000);
+      } else {
+        // Countdown expired — offer to clear and retry
+        status.innerHTML =
+          `<span style="color:var(--dim)">Analysis didn't arrive. </span>` +
+          `<button onclick="msClearAndRetry()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:inherit;padding:0;text-decoration:underline">Try again</button>`;
+      }
+    };
+    tick();
   }
+
+  window.msClearAndRetry = async function () {
+    await fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/trigger', { method: 'DELETE' });
+    const status = document.getElementById('msTriggerStatus');
+    if (status) status.style.display = 'none';
+    const triggerBtn = document.getElementById('msTriggerBtn');
+    if (triggerBtn) triggerBtn.style.display = '';
+  };
 
   // ── Main init ────────────────────────────────────────────────────────────
   function msInit() {

@@ -4612,12 +4612,23 @@ def health():
     })
 
 
+_TRIGGER_EXPIRE_MS = 4 * 60 * 60 * 1000  # auto-expire stale triggers after 4 hours
+
+
 @app.route('/api/moonstocks/<path:ticker>')
 def moonstocks_analysis(ticker):
     """Get Moonstocks AI analysis for a ticker from local database."""
     try:
         row = ms_store.get_analysis(PROJECT_ROOT, ticker)
         triggered_at = ms_store.get_trigger(PROJECT_ROOT, ticker)
+
+        # Auto-expire stale triggers so they don't linger forever
+        if triggered_at:
+            age_ms = int(datetime.now().timestamp() * 1000) - triggered_at
+            if age_ms > _TRIGGER_EXPIRE_MS:
+                ms_store.delete_trigger(PROJECT_ROOT, ticker)
+                triggered_at = None
+
         if not row:
             if triggered_at:
                 return jsonify({"pending": True, "triggeredAt": triggered_at}), 200
@@ -4626,6 +4637,16 @@ def moonstocks_analysis(ticker):
         if triggered_at:
             data["triggeredAt"] = triggered_at
         return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/moonstocks/<path:ticker>/trigger', methods=['DELETE'])
+def moonstocks_clear_trigger(ticker):
+    """Clear a stale pending trigger so the user can re-run analysis."""
+    try:
+        ms_store.delete_trigger(PROJECT_ROOT, ticker)
+        return jsonify({"cleared": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -4721,7 +4742,7 @@ def moonstocks_analyze_stream(ticker):
                         PROJECT_ROOT, ticker,
                         json.dumps(report), generated_time,
                     )
-                    ms_store.upsert_trigger(PROJECT_ROOT, ticker, None)
+                    ms_store.delete_trigger(PROJECT_ROOT, ticker)
                     result = ms_store.get_analysis(PROJECT_ROOT, ticker)
                     result_json = ms_store.row_to_moonstocks_json(result) if result else None
                 except Exception as exc:
