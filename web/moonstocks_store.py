@@ -33,7 +33,7 @@ def _database_url() -> str:
 
 
 def uses_postgres() -> bool:
-    # MOONSTOCKS_DB_PATH is for unit/E2E tests only — not run_server.py or production.
+    # MOONSTOCKS_DB_PATH enables SQLite — valid for local dev without Docker and for E2E tests.
     if (os.environ.get("MOONSTOCKS_DB_PATH") or "").strip():
         return False
     url = _database_url()

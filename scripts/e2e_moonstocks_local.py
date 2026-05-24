@@ -88,7 +88,9 @@ def _wait_equity_os_ready(seconds: float = 180) -> None:
                 items = payload if isinstance(payload, list) else payload.get("companies") or payload.get("items") or []
                 if items:
                     print(f"  OK equity-os universe loaded ({len(items)}+ companies)")
-                    return
+                else:
+                    print("  OK equity-os ready (no screener data — E2E tests Moonstocks API only)")
+                return
         except Exception:
             pass
         time.sleep(1)
@@ -234,6 +236,19 @@ def run_checks() -> None:
     assert "msSection" in html and "msTriggerBtn" in html, "Moonstocks section missing on company page"
 
 
+def _seed_outputs(tmp: Path) -> None:
+    """Copy the reference export JSONL into the E2E temp output dir."""
+    src = PROJECT_ROOT / "documents" / "export" / "scaled_analysis_20260522_094158.jsonl"
+    if not src.exists():
+        print(f"  [seed] No export JSONL found at {src} — company page test may 404")
+        return
+    dest = tmp / "scaled_analysis"
+    dest.mkdir(parents=True, exist_ok=True)
+    import shutil
+    shutil.copy2(src, dest / src.name)
+    print(f"  [seed] Seeded {src.name} -> {dest}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--start-server", action="store_true", help="Start run_server.py (recommended)")
@@ -244,12 +259,18 @@ def main() -> int:
     db_path = str(Path(tmp) / "e2e.db")
     mock_url = f"http://127.0.0.1:{args.mock_port}"
 
+    # Seed the temp output dir with the reference export JSONL so the server
+    # has at least one company in its universe (needed for company page test).
+    _seed_outputs(Path(tmp))
+
     server_proc = None
     if args.start_server:
         _kill_port(PORT)
         env = os.environ.copy()
         env["MOONSTOCKS_ANALYZER_URL"] = mock_url
         env["MOONSTOCKS_DB_PATH"] = db_path
+        env["_MOONSTOCKS_E2E"] = "1"
+        env["EQUITY_SORTER_OUTPUT_DIR"] = str(tmp)
         env.pop("MOONSTOCKS_DATABASE_URL", None)
         env.pop("DATABASE_URL", None)
         # Avoid inheriting prod analyzer URL from shell/.env

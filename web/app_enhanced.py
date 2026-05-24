@@ -292,11 +292,16 @@ def load_data() -> bool:
     global momentum_rank_by_symbol, _momentum_order_index, _companies_momentum_sorted
     global DATA_SOURCE, DATA_FILE, DATA_OVERLAY_FILE, sector_valuation_medians
 
-    output_dir = PROJECT_ROOT / "outputs"
+    _out_env = os.environ.get("EQUITY_SORTER_OUTPUT_DIR", "").strip()
+    output_dir = (PROJECT_ROOT / _out_env) if _out_env and not os.path.isabs(_out_env) else Path(_out_env) if _out_env else PROJECT_ROOT / "outputs"
 
     scaled_f = _largest_nonempty(output_dir / "scaled_analysis", "scaled_analysis_*.jsonl")
     rescored_f = _latest_nonempty(output_dir / "rescored_analysis", "rescored_*.jsonl")
     final_f = _latest_nonempty(output_dir / "final_working_analysis", "*analysis_*.jsonl")
+
+    # Fresh-clone fallback: use the reference export bundled in documents/export/
+    if not scaled_f and not final_f:
+        scaled_f = _largest_nonempty(PROJECT_ROOT / "documents" / "export", "scaled_analysis_*.jsonl")
 
     scaled_rows = read_jsonl(scaled_f) if scaled_f else []
     rescored_rows = read_jsonl(rescored_f) if rescored_f else []
