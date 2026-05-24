@@ -2193,16 +2193,25 @@ def _prune_implausible_revenue_estimates(
     estimates: list[dict],
     ttm: dict | None,
     history: list[dict],
+    *,
+    is_quarterly: bool = False,
 ) -> None:
-    """Drop forward revenue bars that are far below TTM (bad EODHD rows, e.g. cyclical energy)."""
+    """Drop forward revenue bars that are far below TTM (bad EODHD rows, e.g. cyclical energy).
+
+    Annual estimates are compared against full-year TTM (threshold 35%).
+    Quarterly estimates naturally represent ~25% of TTM, so use 8% threshold
+    to catch only clearly mis-scaled values (e.g. foreign-currency ADR glitches)
+    without discarding genuine near-quarter forecasts.
+    """
     ref = _safe_float((ttm or {}).get("revenue_usd"))
     if not ref and history:
         ref = _safe_float(history[0].get("revenue_usd"))
     if not ref:
         return
+    threshold = ref * (0.08 if is_quarterly else 0.35)
     for est in estimates:
         rev = _safe_float(est.get("revenue_usd"))
-        if rev > 0 and rev < ref * 0.35:
+        if rev > 0 and rev < threshold:
             est.pop("revenue_usd", None)
             est["revenue_b"] = None
 
@@ -3579,7 +3588,7 @@ def api_company_history(symbol):
         chart_fx_note = fx_note
 
     _prune_implausible_revenue_estimates(estimates, ttm, annual_history)
-    _prune_implausible_revenue_estimates(quarterly_estimates, ttm, history)
+    _prune_implausible_revenue_estimates(quarterly_estimates, ttm, history, is_quarterly=True)
 
     display_metrics = _eodhd_display_metrics(annual_history, ttm, h)
 
