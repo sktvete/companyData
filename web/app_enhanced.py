@@ -1908,6 +1908,173 @@ def _forward_quarter_end_dates(last_period_end: str, count: int) -> list[str]:
     return out
 
 
+def _three_year_cagr_projection(
+    annual_history: list[dict],
+    ttm: dict | None,
+    price_data: list | None,
+    shares_out: float,
+) -> dict | None:
+    """1-year forward estimate by 3-year CAGR. Fallback when no analyst consensus exists."""
+    usable = [r for r in annual_history if _safe_float(r.get("revenue_usd"))]
+    if len(usable) < 2:
+        return None
+    n = min(3, len(usable) - 1)
+    base = usable[-(n + 1)]
+    latest = usable[-1]
+    baseline = ttm or latest  # TTM is more current than latest filed FY
+
+    def _cagr(old: float | None, new: float | None, yrs: int) -> float | None:
+        if not old or not new or old <= 0 or yrs <= 0:
+            return None
+        try:
+            r = (new / old) ** (1.0 / yrs) - 1.0
+            return r if abs(r) < 2.0 else None
+        except (ZeroDivisionError, ValueError):
+            return None
+
+    def _proj(baseline_val, base_val, latest_val, fallback=None):
+        rate = _cagr(_safe_float(base_val), _safe_float(latest_val), n) or fallback
+        bv = _safe_float(baseline_val)
+        return bv * (1.0 + rate) if (bv and rate is not None) else None
+
+    rev_rate = _cagr(_safe_float(base.get("revenue_usd")), _safe_float(latest.get("revenue_usd")), n)
+    proj_rev   = _proj(baseline.get("revenue_usd"),   base.get("revenue_usd"),   latest.get("revenue_usd"))
+    proj_ni    = _proj(baseline.get("net_income_usd"), base.get("net_income_usd"), latest.get("net_income_usd"), rev_rate)
+    proj_ocf   = _proj(baseline.get("ocf_usd"),        base.get("ocf_usd"),        latest.get("ocf_usd"),        rev_rate)
+    proj_capex = _proj(baseline.get("capex_usd"),      base.get("capex_usd"),      latest.get("capex_usd"),      0.1)
+    proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else None
+    proj_eps   = _proj(baseline.get("eps"),            base.get("eps"),            latest.get("eps"),            rev_rate)
+
+    raw_fy = latest.get("fiscal_year") or (ttm or {}).get("fiscal_year")
+    try:
+        proj_fy = int(raw_fy) + 1 if raw_fy else None
+    except (TypeError, ValueError):
+        proj_fy = None
+
+    entry: dict = {
+        "year":                 "3YEst" if not proj_fy else f"FY{proj_fy}E",
+        "fiscal_year":          proj_fy,
+        "period_end":           f"{proj_fy}-12-31" if proj_fy else None,
+        "estimate_granularity": "annual",
+        "estimate_source":      "3y_trend",
+        "cagr_years":           n,
+        "eps":                  round(proj_eps, 4) if proj_eps else None,
+        "revenue_usd":          round(proj_rev)   if proj_rev   else None,
+        "revenue_b":            round(proj_rev / 1e9, 2) if proj_rev else None,
+        "net_income_usd":       round(proj_ni)    if proj_ni    else None,
+        "net_income_b":         round(proj_ni / 1e9, 2)  if proj_ni  else None,
+        "ocf_usd":              round(proj_ocf)   if proj_ocf   else None,
+        "capex_usd":            round(proj_capex) if proj_capex else None,
+        "fcf_usd":              round(proj_fcf)   if proj_fcf   else None,
+    }
+    if proj_eps and proj_eps > 0 and price_data:
+        entry["pe_ratio"] = round(price_data[-1]["close"] / proj_eps, 1)
+    return entry
+
+
+def _three_year_quarterly_projections(
+    q_history: list[dict],
+    covered_periods: set[str],
+    price_data: list | None,
+    n_quarters: int = 6,
+) -> list[dict]:
+    """
+    Project up to n_quarters forward using same-quarter YoY CAGR (handles seasonality).
+    Only returns quarters not already in covered_periods (analyst estimates).
+    """
+    if len(q_history) < 8:
+        return []
+    periods = sorted(r.get("period_end", "")[:10] for r in q_history if r.get("period_end"))
+    if len(periods) < 2:
+        return []
+
+    hist_by_pe: dict[str, dict] = {
+        r.get("period_end", "")[:10]: r for r in q_history if r.get("period_end")
+    }
+    last_pe = periods[-1]
+    forward_periods = _forward_quarter_end_dates(last_pe, n_quarters)
+
+    from datetime import date as _date
+
+    projections: list[dict] = []
+    for proj_pe in forward_periods:
+        try:
+            proj_d = _date.fromisoformat(proj_pe)
+        except ValueError:
+            continue
+
+        # Skip if this year-month is already covered by analyst estimates
+        if proj_pe[:7] in covered_periods:
+            continue
+
+        # Collect same quarter from 1Y, 2Y, 3Y ago by finding the closest historical quarter
+        same_q: list[dict] = []
+        for years_ago in [1, 2, 3]:
+            target_d = _date.fromordinal(proj_d.toordinal() - years_ago * 365)
+            closest = min(
+                (p for p in periods),
+                key=lambda p: abs((_date.fromisoformat(p) - target_d).days),
+                default=None,
+            )
+            if closest and abs((_date.fromisoformat(closest) - target_d).days) < 55:
+                same_q.append(hist_by_pe[closest])
+
+        if len(same_q) < 2:
+            continue  # not enough historical same-quarters
+
+        def _avg_yoy(key: str) -> float | None:
+            vals = [_safe_float(r.get(key)) for r in same_q]
+            vals = [v for v in vals if v and v != 0]
+            if len(vals) < 2:
+                return None
+            growths = [vals[i] / vals[i + 1] - 1 for i in range(len(vals) - 1) if vals[i + 1]]
+            growths = [g for g in growths if abs(g) < 3.0]
+            return sum(growths) / len(growths) if growths else None
+
+        base = same_q[0]  # 1Y ago same quarter — apply growth to this
+        rev_g  = _avg_yoy("revenue_usd")
+        ni_g   = _avg_yoy("net_income_usd") or rev_g
+        ocf_g  = _avg_yoy("ocf_usd")        or rev_g
+        capex_g = _avg_yoy("capex_usd")     or 0.1
+        eps_g  = _avg_yoy("eps")            or ni_g or rev_g
+
+        def _apply(key, g):
+            v = _safe_float(base.get(key))
+            return v * (1.0 + g) if (v and g is not None) else None
+
+        proj_rev   = _apply("revenue_usd",   rev_g)
+        proj_ni    = _apply("net_income_usd", ni_g)
+        proj_ocf   = _apply("ocf_usd",        ocf_g)
+        proj_capex = _apply("capex_usd",      capex_g)
+        proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else None
+        proj_eps   = _apply("eps",            eps_g)
+        try:
+            fy_year = int(proj_pe[:4])
+        except (ValueError, TypeError):
+            fy_year = None
+
+        entry: dict = {
+            "year":                 f"{_quarter_chart_label(proj_pe)}E",
+            "fiscal_year":          fy_year,
+            "period_end":           proj_pe,
+            "estimate_granularity": "quarter",
+            "estimate_source":      "3y_trend",
+            "eps":                  round(proj_eps, 4) if proj_eps else None,
+            "revenue_usd":          round(proj_rev)   if proj_rev   else None,
+            "revenue_b":            round(proj_rev / 1e9, 2) if proj_rev else None,
+            "net_income_usd":       round(proj_ni)    if proj_ni    else None,
+            "net_income_b":         round(proj_ni / 1e9, 2)  if proj_ni  else None,
+            "ocf_usd":              round(proj_ocf)   if proj_ocf   else None,
+            "capex_usd":            round(proj_capex) if proj_capex else None,
+            "fcf_usd":              round(proj_fcf)   if proj_fcf   else None,
+        }
+        if proj_eps and proj_eps > 0 and price_data:
+            entry["pe_ratio"] = round(price_data[-1]["close"] / proj_eps, 1)
+        projections.append(entry)
+
+    return projections
+
+
 def _estimate_entry_from_trend(
     date_key: str,
     t: dict,
@@ -3583,6 +3750,15 @@ def api_company_history(symbol):
             estimates.append(est_entry)
     estimates.sort(key=lambda e: e["year"])
     estimates = _drop_estimates_for_reported_years(annual_history, estimates)
+
+    # Fallback: if no analyst consensus covers the first projected fiscal year,
+    # add a 3-year CAGR projection so the chart always has at least one forward bar.
+    est_fy_covered = {int(e["fiscal_year"]) for e in estimates if e.get("fiscal_year")}
+    annual_3y = _three_year_cagr_projection(annual_history, ttm, price_data, shares_out)
+    if annual_3y and annual_3y.get("fiscal_year") not in est_fy_covered:
+        estimates.append(annual_3y)
+        estimates.sort(key=lambda e: (e.get("fiscal_year") or 9999, e["year"]))
+
     quarterly_estimates = (
         _build_quarterly_estimates(
             trend, history, shares_out, price_data, ref_rev, estimates
@@ -3590,6 +3766,18 @@ def api_company_history(symbol):
         if history and q_inc
         else []
     )
+
+    # Quarterly 3Y projection: fill gaps not covered by analyst quarterly estimates.
+    # Use YYYY-MM prefix for matching (different sources may use last-day-of-month
+    # conventions like "2026-07-30" vs "2026-07-31" for the same quarter).
+    if history and q_inc:
+        q_est_covered = {e.get("period_end", "")[:7] for e in quarterly_estimates}
+        q_3y = _three_year_quarterly_projections(history, q_est_covered, price_data)
+        if q_3y:
+            quarterly_estimates = sorted(
+                quarterly_estimates + q_3y,
+                key=lambda e: e.get("period_end", ""),
+            )
 
     co = get_company(symbol) or {}
     analyst = _fmt_analyst(_analyst_ratings_for_company({**co, "symbol": symbol}) or {})

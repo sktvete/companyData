@@ -699,7 +699,8 @@ function placeTtmCompare(pts, ttm, est, kind, fy) {
   else pts.push({ ...row, label: lbl });
 }
 
-/** Historical years + 1Y/2Y TTM each overlapped with estimate (or filed actual) on same x. */
+/** Historical years + forward estimate (analyst or 3Y trend) per x-slot.
+ *  TTM is only shown as last resort when no estimate exists at all. */
 function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   const pts = hist.map(h => ({
     label: String(h.year),
@@ -716,32 +717,15 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
   const filed1 = ttmFy != null ? histRowForFy(hist, ttmFy) : null;
   const merge1 = filed1 ? -1 : pickTtmCompareEstimate(ttm, estimates);
   if (ttm && !filed1 && merge1 >= 0) {
+    // Analyst or 3Y estimate found → show estimate only, drop TTM
     const est = estimates[merge1];
     placeForwardEst(pts, est, parseEstFy(est) ?? ttmFy);
     usedEst.add(merge1);
   } else if (ttm && !filed1) {
+    // No estimate at all → fallback to TTM bar
     pts.push({
       label: ttm.year || 'TTM',
       hist: null, ttm, ttm2: null, est: null,
-      compare: false, compareKind: null,
-    });
-  }
-
-  const ttm2Fy = ttm2 && ttm2.fiscal_year != null ? Number(ttm2.fiscal_year) : null;
-  const filed2 = ttm2Fy != null ? histRowForFy(hist, ttm2Fy) : null;
-  let merge2 = -1;
-  if (ttm2Fy != null && !filed2) {
-    merge2 = estimates.findIndex((e, i) => !usedEst.has(i) && parseEstFy(e) === ttm2Fy);
-  }
-
-  if (ttm2 && !filed2 && merge2 >= 0) {
-    const est = estimates[merge2];
-    placeForwardEst(pts, est, parseEstFy(est) ?? ttm2Fy);
-    usedEst.add(merge2);
-  } else if (ttm2 && !filed2) {
-    pts.push({
-      label: ttm2.year || '2Y avg',
-      hist: null, ttm: null, ttm2, est: null,
       compare: false, compareKind: null,
     });
   }
@@ -769,12 +753,7 @@ function buildFinChartPoints(hist, ttm, ttm2, estimates) {
 }
 
 function finChartLabels(pts) {
-  return pts.map(p => {
-    const vs = p.est?.compareSource === 'reported' ? 'filed' : 'est';
-    if (p.compareKind === '2y') return `${p.label} · 2Y vs ${vs}`;
-    if (p.compare) return `${p.label} · TTM vs ${vs}`;
-    return p.label;
-  });
+  return pts.map(p => p.label);
 }
 
 function pctDelta(actual, est) {
@@ -794,6 +773,15 @@ function bridgeForwardLine(actual, fwd) {
 /** Actual side of compare columns (API already annualizes multi-year TTM). */
 function compareActForEst(_p, usdVal) {
   return usdVal;
+}
+
+function estSourceNote(p) {
+  if (!p?.est) return '';
+  if (p.est.estimate_source === '3y_trend') {
+    const n = p.est.cagr_years || 3;
+    return `📈 ${n}Y CAGR projection — no analyst consensus available`;
+  }
+  return '';
 }
 
 function compareTooltipFooter(pts, idx, pairs) {
@@ -924,17 +912,18 @@ function renderFinancialCharts(quarters) {
     return v / 4;
   };
 
-  const hasAnalystEst = (p) => p.est && p.est.compareSource !== 'reported';
-  const revHist = pts.map(p => rowUsd(p.hist, 'revenue_usd', 'revenue_b'));
-  const revTtm  = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm, 'revenue_usd', 'revenue_b')));
-  const revTtm2 = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm2, 'revenue_usd', 'revenue_b')));
-  const revEst  = pts.map((p, i) => qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p));
-  const niHist  = pts.map(p => rowUsd(p.hist, 'net_income_usd', 'net_income_b'));
-  const niTtm   = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm, 'net_income_usd', 'net_income_b')));
-  const niTtm2  = pts.map(p => (hasAnalystEst(p) ? null : rowUsd(p.ttm2, 'net_income_usd', 'net_income_b')));
-  const niEst   = pts.map((p, i) => qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p));
+  const hasEst = (p) => p.est && p.est.compareSource !== 'reported';
+  const hasAnalystEst = hasEst;
 
-  const allRevNi = [...revHist, ...revTtm, ...revTtm2, ...revEst, ...niHist, ...niTtm, ...niTtm2, ...niEst].filter(v => v != null);
+  // Revenue & Net Income
+  const revHist = pts.map(p => rowUsd(p.hist, 'revenue_usd', 'revenue_b'));
+  const revTtm  = pts.map(p => (hasEst(p) ? null : rowUsd(p.ttm, 'revenue_usd', 'revenue_b')));
+  const revEst  = pts.map(p => qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p));
+  const niHist  = pts.map(p => rowUsd(p.hist, 'net_income_usd', 'net_income_b'));
+  const niTtm   = pts.map(p => (hasEst(p) ? null : rowUsd(p.ttm, 'net_income_usd', 'net_income_b')));
+  const niEst   = pts.map(p => qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p));
+
+  const allRevNi = [...revHist, ...revTtm, ...revEst, ...niHist, ...niTtm, ...niEst].filter(v => v != null);
   const maxRN = Math.max(1e-9, ...allRevNi.map(v => Math.abs(v)));
   const scRN = pickMoneyScale(maxRN);
   const s = (arr) => arr.map(v => (v == null ? null : v / scRN.div));
@@ -947,11 +936,9 @@ function renderFinancialCharts(quarters) {
     barDataset('Net Income', s(niHist), '#22c55e', { legendGroup: 'netIncome' }),
   ];
   if (revTtm.some(v => v != null)) revDS.push(ttmBarDataset('Rev TTM', s(revTtm), '#3b82f6', 'revenue'));
-  if (revTtm2.some(v => v != null)) revDS.push(ttmBarDataset('Rev 2Y avg', s(revTtm2), '#2563eb', 'revenue'));
   if (revEst.some(v => v != null)) revDS.push(estBarDataset('Rev Est.', s(revEst), '#60a5fa', 'revenue'));
-  if (niTtm.some(v => v != null)) revDS.push(ttmBarDataset('NI TTM', s(niTtm), '#22c55e', 'netIncome'));
-  if (niTtm2.some(v => v != null)) revDS.push(ttmBarDataset('NI 2Y avg', s(niTtm2), '#16a34a', 'netIncome'));
-  if (niEst.some(v => v != null)) revDS.push(estBarDataset('NI Est.', s(niEst), '#4ade80', 'netIncome'));
+  if (niTtm.some(v => v != null))  revDS.push(ttmBarDataset('NI TTM',  s(niTtm),  '#22c55e', 'netIncome'));
+  if (niEst.some(v => v != null))  revDS.push(estBarDataset('NI Est.',  s(niEst),  '#4ade80', 'netIncome'));
 
   _finCharts.rev = mkChartRet('chartRevenue', 'bar', labels, revDS, {
     ...BAR_GROUP_OPTS,
@@ -962,39 +949,43 @@ function renderFinancialCharts(quarters) {
           footer: (items) => {
             if (!items.length) return '';
             const i = items[0].dataIndex;
-            const actRev = revTtm2[i] != null ? revTtm2[i] : revTtm[i];
-            const actNi = niTtm2[i] != null ? niTtm2[i] : niTtm[i];
-            return compareTooltipFooter(pts, i, [
-              ['Revenue', actRev, revEst[i]],
-              ['Net income', actNi, niEst[i]],
+            const note = estSourceNote(pts[i]);
+            const base = compareTooltipFooter(pts, i, [
+              ['Revenue', revTtm[i], revEst[i]],
+              ['Net income', niTtm[i], niEst[i]],
             ]);
+            return [base, note].filter(Boolean).join('\n');
           },
         },
       },
     },
   });
 
-  const epsEst = pts.map(p => qScale(p.est && p.est.eps != null ? p.est.eps : null, p));
+  // EPS
+  const epsEst  = pts.map(p => qScale(p.est && p.est.eps != null ? p.est.eps : null, p));
   hideLoader('epsLoading');
-  const epsHist = pts.map(p => (p.hist && p.hist.eps != null ? p.hist.eps : null));
+  const epsHist  = pts.map(p => (p.hist && p.hist.eps  != null ? p.hist.eps  : null));
   const oepsHist = pts.map(p => (p.hist && p.hist.oeps != null ? p.hist.oeps : null));
   const epsDS = [
-    barDataset('EPS', epsHist, '#a855f7', { legendGroup: 'eps' }),
+    barDataset('EPS',  epsHist,  '#a855f7', { legendGroup: 'eps' }),
     barDataset('OEPS', oepsHist, '#f59e0b', { legendGroup: 'oeps' }),
   ];
   if (epsEst.some(v => v != null)) epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc', 'eps'));
   _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 
-  const ocfHist = pts.map(p => rowUsd(p.hist, 'ocf_usd', 'ocf_b'));
-  const ocfTtm  = pts.map(p => rowUsd(p.ttm, 'ocf_usd', 'ocf_b'));
-  const ocfTtm2 = pts.map(p => rowUsd(p.ttm2, 'ocf_usd', 'ocf_b'));
+  // CFO / CapEx / FCF  — estimates now include 3Y trend projections
+  const ocfHist = pts.map(p => rowUsd(p.hist, 'ocf_usd',   'ocf_b'));
+  const ocfTtm  = pts.map(p => (hasEst(p) ? null : rowUsd(p.ttm, 'ocf_usd',   'ocf_b')));
+  const ocfEst  = pts.map(p => qScale(rowUsd(p.est, 'ocf_usd',   null), p));
   const capHist = pts.map(p => rowUsd(p.hist, 'capex_usd', 'capex_b'));
-  const capTtm  = pts.map(p => rowUsd(p.ttm, 'capex_usd', 'capex_b'));
-  const capTtm2 = pts.map(p => rowUsd(p.ttm2, 'capex_usd', 'capex_b'));
-  const fcfHist = pts.map(p => rowUsd(p.hist, 'fcf_usd', 'fcf_b'));
-  const fcfTtm  = pts.map(p => rowUsd(p.ttm, 'fcf_usd', 'fcf_b'));
-  const fcfTtm2 = pts.map(p => rowUsd(p.ttm2, 'fcf_usd', 'fcf_b'));
-  const allFO = [...ocfHist, ...ocfTtm, ...ocfTtm2, ...capHist, ...capTtm, ...capTtm2, ...fcfHist, ...fcfTtm, ...fcfTtm2].filter(v => v != null);
+  const capTtm  = pts.map(p => (hasEst(p) ? null : rowUsd(p.ttm, 'capex_usd', 'capex_b')));
+  const capEst  = pts.map(p => qScale(rowUsd(p.est, 'capex_usd', null), p));
+  const fcfHist = pts.map(p => rowUsd(p.hist, 'fcf_usd',   'fcf_b'));
+  const fcfTtm  = pts.map(p => (hasEst(p) ? null : rowUsd(p.ttm, 'fcf_usd',   'fcf_b')));
+  const fcfEst  = pts.map(p => qScale(rowUsd(p.est, 'fcf_usd',   null), p));
+
+  const allFO = [...ocfHist, ...ocfTtm, ...ocfEst, ...capHist, ...capTtm, ...capEst,
+                 ...fcfHist, ...fcfTtm, ...fcfEst].filter(v => v != null);
   const maxFO = Math.max(1e-9, ...allFO.map(v => Math.abs(v)));
   const scFO = pickMoneyScale(maxFO);
   const sf = (arr) => arr.map(v => (v == null ? null : v / scFO.div));
@@ -1003,50 +994,38 @@ function renderFinancialCharts(quarters) {
   if (hFcf) hFcf.textContent = 'CFO, CapEx & FCF' + (scFO.suffix ? ' ($' + scFO.suffix + ')' : '');
   hideLoader('fcfLoading');
   const fcfDS = [
-    barDataset('CFO', sf(ocfHist), '#22c55e', { legendGroup: 'cfo' }),
-    barDataset('FCF', sf(fcfHist), '#06b6d4', { legendGroup: 'fcf' }),
+    barDataset('CFO',   sf(ocfHist), '#22c55e', { legendGroup: 'cfo' }),
+    barDataset('FCF',   sf(fcfHist), '#06b6d4', { legendGroup: 'fcf' }),
     barDataset('CapEx', sf(capHist), '#f87171', { legendGroup: 'capex' }),
   ];
-  if (ocfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO TTM', sf(ocfTtm), '#22c55e', 'cfo'));
-  if (ocfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO 2Y avg', sf(ocfTtm2), '#16a34a', 'cfo'));
-  if (fcfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF TTM', sf(fcfTtm), '#06b6d4', 'fcf'));
-  if (fcfTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF 2Y avg', sf(fcfTtm2), '#0891b2', 'fcf'));
+  if (ocfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CFO TTM',   sf(ocfTtm), '#22c55e', 'cfo'));
+  if (ocfEst.some(v => v != null)) fcfDS.push(estBarDataset('CFO Est.',   sf(ocfEst), '#4ade80', 'cfo'));
+  if (fcfTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('FCF TTM',   sf(fcfTtm), '#06b6d4', 'fcf'));
+  if (fcfEst.some(v => v != null)) fcfDS.push(estBarDataset('FCF Est.',   sf(fcfEst), '#67e8f9', 'fcf'));
   if (capTtm.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx TTM', sf(capTtm), '#f87171', 'capex'));
-  if (capTtm2.some(v => v != null)) fcfDS.push(ttmBarDataset('CapEx 2Y avg', sf(capTtm2), '#ef4444', 'capex'));
+  if (capEst.some(v => v != null)) fcfDS.push(estBarDataset('CapEx Est.',sf(capEst), '#fca5a5', 'capex'));
   _finCharts.fcf = mkChartRet('chartFCF', 'bar', labels, fcfDS, BAR_GROUP_OPTS);
 
-  const gm = pts.map(p => {
-    if (p.compareKind === '2y' && p.ttm2) return p.ttm2.gross_margin_pct;
-    if (p.ttm) return p.ttm.gross_margin_pct;
-    if (p.hist) return p.hist.gross_margin_pct;
-    return null;
-  });
-  const nm = pts.map(p => {
-    if (p.compareKind === '2y' && p.ttm2) return p.ttm2.net_margin_pct;
-    if (p.ttm) return p.ttm.net_margin_pct;
-    if (p.hist) return p.hist.net_margin_pct;
-    return null;
-  });
+  // Margins
+  const gm = pts.map(p => p.ttm?.gross_margin_pct ?? p.hist?.gross_margin_pct ?? null);
+  const nm = pts.map(p => p.ttm?.net_margin_pct   ?? p.hist?.net_margin_pct   ?? null);
   hideLoader('marginLoading');
   _finCharts.margin = mkChartRet('chartMargin', 'bar', labels, [
     barDataset('Gross Margin %', gm, '#34d399', { legendGroup: 'grossMargin' }),
-    barDataset('Net Margin %', nm, '#f472b6', { legendGroup: 'netMargin' }),
+    barDataset('Net Margin %',   nm, '#f472b6', { legendGroup: 'netMargin' }),
   ], BAR_GROUP_OPTS);
 
-  const peTtm = pts.map(p => (hasAnalystEst(p) ? null : (p.ttm ? p.ttm.pe_ratio : null)));
-  const peTtm2 = pts.map(p => (hasAnalystEst(p) ? null : (p.ttm2 ? p.ttm2.pe_ratio : null)));
+  // P/E
+  const peTtm  = pts.map(p => (hasEst(p) ? null : (p.ttm  ? p.ttm.pe_ratio  : null)));
   const peHist = pts.map(p => (p.hist ? p.hist.pe_ratio : null));
-  const peEst = pts.map(p => (p.est ? p.est.pe_ratio : null));
-  const peVals = pts.map((p, i) => peTtm2[i] ?? peTtm[i] ?? peHist[i] ?? peEst[i] ?? null);
+  const peEst  = pts.map(p => (p.est  ? p.est.pe_ratio  : null));
+  const peVals = pts.map((p, i) => peTtm[i] ?? peHist[i] ?? peEst[i] ?? null);
 
   hideLoader('peLoading');
   const peCtx = document.getElementById('chartPE');
   if (peCtx && peVals.some(v => v != null)) {
     peCtx.style.display = 'block';
-    const peActual = pts.map((p, i) => {
-      if (p.compareKind === '2y') return peTtm2[i] ?? peHist[i] ?? null;
-      return peTtm[i] ?? peHist[i] ?? null;
-    });
+    const peActual = pts.map((p, i) => peTtm[i] ?? peHist[i] ?? null);
     const peDS = [barDataset('P/E', peHist, '#f59e0b', { legendGroup: 'pe' })];
     if (peTtm.some(v => v != null)) peDS.push(ttmBarDataset('P/E TTM', peTtm, '#fbbf24', 'pe'));
     if (peEst.some(v => v != null)) peDS.push(estBarDataset('Fwd P/E', peEst, '#fcd34d', 'pe'));
