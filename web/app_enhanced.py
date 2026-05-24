@@ -1817,21 +1817,33 @@ def _scale_chart_revenue_estimate(est: dict, factor: float) -> None:
         est.pop("net_income_b", None)
 
 
-def _sanitize_revenue_estimate(rev_est: float | None, ref_rev: float | None) -> float | None:
+def _sanitize_revenue_estimate(
+    rev_est: float | None,
+    ref_rev: float | None,
+    *,
+    min_ratio: float = 0.2,
+) -> float | None:
     """Fix EODHD revenueEstimateAvg when it is clearly not USD (common on dual-listed ADRs).
 
     E.g. GFI: EODHD ~214B vs ~11B USD consensus — ~214B ZAR / ~18 ≈ 11.9B USD.
+
+    min_ratio: the lower bound for rev_est / ref_rev.  Annual estimates use 0.2
+    (one quarter is ~25 % of TTM, so 0.2 gives generous room).  Quarterly
+    estimates use 0.08 — seasonal businesses (e.g. DECK, a footwear company
+    whose summer quarter is only ~19 % of TTM) should not be mistaken for a
+    mis-scaled ADR figure.  Currency-error values are typically > 10× off, so
+    0.08 still catches them comfortably.
     """
     if not rev_est or rev_est <= 0:
         return None
     if not ref_rev or ref_rev <= 0:
         return rev_est
     ratio = rev_est / ref_rev
-    if 0.2 <= ratio <= 3.0:
+    if min_ratio <= ratio <= 3.0:
         return rev_est
     for divisor in (18.5, 18.0, 17.5, 19.0, 16.0):
         fixed = rev_est / divisor
-        if 0.2 <= fixed / ref_rev <= 3.0:
+        if min_ratio <= fixed / ref_rev <= 3.0:
             return fixed
     return None
 
@@ -1906,8 +1918,10 @@ def _estimate_entry_from_trend(
     granularity: str = "annual",
 ) -> dict | None:
     eps_est = _safe_float(t.get("earningsEstimateAvg"))
+    _min_ratio = 0.08 if granularity == "quarter" else 0.2
     rev_est = _sanitize_revenue_estimate(
-        _safe_float(t.get("revenueEstimateAvg")) or None, ref_rev or None
+        _safe_float(t.get("revenueEstimateAvg")) or None, ref_rev or None,
+        min_ratio=_min_ratio,
     )
     if not eps_est and not rev_est:
         return None
