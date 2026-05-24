@@ -404,7 +404,7 @@
                 <span class="reports-toggle-track"></span>
                 <span class="reports-toggle-label">Reports</span>
               </label>
-              <label class="reports-toggle" title="Switch price chart y-axis between linear and logarithmic scale (saved globally)">
+              <label id="logScaleLbl" class="reports-toggle" title="Switch price chart y-axis between linear and logarithmic scale (saved globally)">
                 <input type="checkbox" id="toggleLogScale" class="reports-toggle-input"/>
                 <span class="reports-toggle-track"></span>
                 <span class="reports-toggle-label">Log</span>
@@ -1294,6 +1294,8 @@ function priceLogScaleSet(on) {
   localStorage.setItem(PRICE_LOG_SCALE_KEY, on ? '1' : '0');
   const chk = document.getElementById('toggleLogScale');
   if (chk) chk.checked = on;
+  const lbl = document.getElementById('logScaleLbl');
+  if (lbl) lbl.classList.toggle('active', on);
 }
 function applyLogScaleToChart(on) {
   if (!priceChart) return;
@@ -2225,11 +2227,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // Log scale toggle — persisted globally in localStorage
   const logScaleChk = document.getElementById('toggleLogScale');
+  const logScaleLbl = document.getElementById('logScaleLbl');
   if (logScaleChk) {
-    logScaleChk.checked = priceLogScaleEnabled();
+    const initOn = priceLogScaleEnabled();
+    logScaleChk.checked = initOn;
+    if (logScaleLbl) logScaleLbl.classList.toggle('active', initOn);
     logScaleChk.addEventListener('change', () => {
-      priceLogScaleSet(logScaleChk.checked);
-      applyLogScaleToChart(logScaleChk.checked);
+      const on = logScaleChk.checked;
+      priceLogScaleSet(on);
+      if (logScaleLbl) logScaleLbl.classList.toggle('active', on);
+      applyLogScaleToChart(on);
     });
   }
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
