@@ -1029,7 +1029,7 @@ function renderFinancialCharts(quarters) {
     },
   });
 
-  // EPS
+  // EPS — analyst earningsEstimateAvg is typically adjusted/non-GAAP (≈ OEPS)
   const epsEst  = pts.map(p => qScale(p.est && p.est.eps != null ? p.est.eps : null, p));
   hideLoader('epsLoading');
   const epsHist  = pts.map(p => (p.hist && p.hist.eps  != null ? p.hist.eps  : null));
@@ -1038,7 +1038,10 @@ function renderFinancialCharts(quarters) {
     barDataset('EPS',  epsHist,  '#a855f7', { legendGroup: 'eps' }),
     barDataset('OEPS', oepsHist, '#f59e0b', { legendGroup: 'oeps' }),
   ];
-  if (epsEst.some(v => v != null)) epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc', 'eps'));
+  if (epsEst.some(v => v != null)) {
+    epsDS.push(estBarDataset('EPS Est.',  epsEst, '#c084fc', 'eps'));
+    epsDS.push(estBarDataset('OEPS Est.', epsEst, '#fcd34d', 'oeps'));
+  }
   _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 
   // CFO / CapEx / FCF  — estimates now include 3Y trend projections
