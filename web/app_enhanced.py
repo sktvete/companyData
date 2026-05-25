@@ -5002,9 +5002,14 @@ def moonstocks_analyze_stream(ticker):
     except ImportError as exc:
         return jsonify({"error": f"analyzer not available: {exc}"}), 500
 
-    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+    codex_authenticated = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+    has_api_key = bool(openai_key and openai_key.startswith("sk-"))
 
-    if not use_codex and (not openai_key or not openai_key.startswith("sk-")):
+    # Prefer API key (LangGraph agent) when available; fall back to Codex subscription.
+    # Both use the same underlying GPT models — API key just gets the better agent loop.
+    use_codex = codex_authenticated and not has_api_key
+
+    if not codex_authenticated and not has_api_key:
         return jsonify({
             "error": "Sign in with ChatGPT (Ask AI panel) or provide an OpenAI API key (sk-...)."
         }), 400
