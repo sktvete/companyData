@@ -297,8 +297,9 @@ def parse_json_report(text: str) -> dict:
 def analyze_stream_codex(
     ticker_exchange: str,
     project_root,
-    model: str = "gpt-5.3-codex",
+    model: str | None = None,
 ) -> Generator[dict, None, None]:
+    model = model or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex"
     """
     Yields SSE-compatible dicts. The AI uses EODHD tools on demand —
     visible as {type:"tool"} events — then produces the JSON report.

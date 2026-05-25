@@ -305,8 +305,11 @@
             padding:.45rem .6rem;background:#0d1117;border:1px solid rgba(255,255,255,.15);
             border-radius:6px;color:var(--fg);font-size:.75rem;outline:none;cursor:pointer;width:100%;
           ">
-            <option value="gpt-4.1-mini" selected>gpt-4.1-mini — fast, cheap, great for most analyses</option>
-            <option value="gpt-4.1">gpt-4.1 — deeper quality, higher cost</option>
+            <option value="gpt-5.3-codex" selected>gpt-5.3-codex — latest, best quality</option>
+            <option value="gpt-4.1">gpt-4.1 — smartest non-reasoning</option>
+            <option value="o4-mini">o4-mini — fast reasoning, best value</option>
+            <option value="o3">o3 — deep reasoning, highest quality &amp; cost</option>
+            <option value="gpt-4.1-mini">gpt-4.1-mini — fastest &amp; cheapest</option>
           </select>
         </div>
         <div style="display:flex;align-items:center;gap:.5rem;margin-top:.7rem;padding:.55rem .65rem;background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.2);border-radius:6px">
@@ -2537,7 +2540,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const MS_EFFORT_STORE = 'ms_openai_effort';
 
   function msGetStoredKey()    { return sessionStorage.getItem(MS_KEY_STORE)    || ''; }
-  function msGetStoredModel()  { return sessionStorage.getItem(MS_MODEL_STORE)  || 'gpt-4.1-mini'; }
+  function msGetStoredModel()  { return sessionStorage.getItem(MS_MODEL_STORE)  || 'gpt-5.3-codex'; }
   function msGetStoredEffort() { return sessionStorage.getItem(MS_EFFORT_STORE) === '1'; }
 
   function msStoreKey(key, model, highEffort, save) {

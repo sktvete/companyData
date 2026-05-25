@@ -4585,7 +4585,7 @@ def api_company_chat(symbol):
         history = []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
 
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.3-codex").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
@@ -4650,7 +4650,7 @@ def api_company_chat_stream(symbol):
 
     history = body.get("history") if isinstance(body.get("history"), list) else []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or "gpt-5.3-codex").strip()
+    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
@@ -4948,7 +4948,7 @@ def moonstocks_analyze_stream(ticker):
     """
     body = request.get_json(silent=True) or {}
     openai_key       = (body.get("openai_api_key") or "").strip()
-    model            = (body.get("model") or "gpt-4.1-mini").strip()
+    model            = (body.get("model") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
     reasoning_effort = (body.get("reasoning_effort") or "").strip() or None
 
     try:
@@ -4976,7 +4976,7 @@ def moonstocks_analyze_stream(ticker):
     def _worker():
         try:
             if use_codex:
-                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model="gpt-5.3-codex")
+                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.3-codex")
             else:
                 gen = _la.analyze_stream(ticker, openai_key, model, reasoning_effort=reasoning_effort)
             for event in gen:
