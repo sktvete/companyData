@@ -68,36 +68,51 @@ class AnalystState(TypedDict):
 # ---------------------------------------------------------------------------
 
 REFLECTION_PROMPT = (
-    "You have completed your initial data gathering. "
-    "Before writing the report, take a moment to reflect:\n"
+    "You have completed your initial data gathering (fundamentals, price history, news). "
+    "Do NOT re-call a tool you have already called for the same ticker — the data is cached "
+    "and would return identical results.\n\n"
+    "Reflect before writing:\n"
     "1. What do you know with high confidence?\n"
-    "2. Is there anything unusual, ambiguous, or incomplete — "
-    "a margin move, debt level, earnings miss, guidance cut, acquisition, or valuation outlier "
-    "— that you should verify or dig into further?\n"
-    "3. If YES: call the relevant tool now to investigate. "
+    "2. Is there anything unusual, ambiguous, or incomplete — a margin move, debt level, "
+    "earnings miss, guidance cut, acquisition, or valuation outlier — that requires a "
+    "NEW data source (e.g. a competitor's fundamentals, or news for a different symbol)?\n"
+    "3. If YES: call that specific tool for the new symbol. "
     "If NO: proceed directly to outputting the JSON report."
 )
 
 
 def _make_lc_tools(default_symbol: str):
-    """Return LangChain tool objects for the given ticker."""
+    """Return LangChain tool objects for the given ticker.
+
+    Results are cached per (tool_name, symbol) for the lifetime of this analysis
+    run so the model can't waste tokens re-fetching identical data.
+    """
     raw_executor = _make_tool_executor(default_symbol)
+    _cache: dict[str, str] = {}
+
+    def _cached(name: str, symbol: str) -> str:
+        key = f"{name}:{symbol}"
+        if key not in _cache:
+            _cache[key] = raw_executor(name, {"symbol": symbol})
+        else:
+            logger.debug("Cache hit for %s", key)
+        return _cache[key]
 
     @lc_tool
     def eodhd_fundamentals(symbol: str = default_symbol) -> str:
         """Fetch full company fundamentals from EODHD: income statement, balance sheet,
         cash flow (last 4 years / 6 quarters), analyst ratings, earnings history."""
-        return raw_executor("eodhd_fundamentals", {"symbol": symbol or default_symbol})
+        return _cached("eodhd_fundamentals", symbol or default_symbol)
 
     @lc_tool
     def eodhd_price_history(symbol: str = default_symbol) -> str:
         """Fetch daily OHLCV price history for the past 365 days."""
-        return raw_executor("eodhd_price_history", {"symbol": symbol or default_symbol})
+        return _cached("eodhd_price_history", symbol or default_symbol)
 
     @lc_tool
     def eodhd_news(symbol: str = default_symbol) -> str:
         """Fetch the 15 most recent news articles for the company."""
-        return raw_executor("eodhd_news", {"symbol": symbol or default_symbol})
+        return _cached("eodhd_news", symbol or default_symbol)
 
     return [eodhd_fundamentals, eodhd_price_history, eodhd_news]
 
