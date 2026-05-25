@@ -325,6 +325,12 @@ def _extract_key_ratios(data: dict) -> dict:
     rev_growth_yoy   = _yoy(rev_cur, rev_prev)
     fcf_growth_yoy   = _yoy(fcf_cur, fcf_prev)
 
+    # EODHD computes OperatingMarginTTM as operating_income/revenue; for pre-revenue
+    # companies (revenue < $10M equivalent) this produces nonsense values like 698%.
+    # Suppress it and let the model see the raw income statement instead.
+    raw_op_margin = _f(h.get("OperatingMarginTTM"))
+    op_margin = raw_op_margin if (rev_ttm and abs(rev_ttm) > 10_000_000) else None
+
     # EPS — use Highlights fields (correct EODHD names)
     eps_ttm      = _f(h.get("DilutedEpsTTM")) or _f(h.get("EarningsShare"))
     eps_est_curr = _f(h.get("EPSEstimateCurrentYear"))
@@ -353,7 +359,7 @@ def _extract_key_ratios(data: dict) -> dict:
         "revenue_growth_yoy":   rev_growth_yoy,
         "quarterly_rev_growth": _f(h.get("QuarterlyRevenueGrowthYOY")),
         "gross_margin_ttm":     gross_margin,
-        "operating_margin_ttm": _f(h.get("OperatingMarginTTM")),
+        "operating_margin_ttm": op_margin,   # suppressed for pre-revenue companies
         "profit_margin_ttm":    _f(h.get("ProfitMargin")),
         "ebitda":               ebitda_h,
         # EPS
@@ -408,6 +414,16 @@ def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
                     if isinstance(trend, dict):
                         keys = sorted(trend.keys(), reverse=True)[:16]
                         earn["Trend"] = {k: trend[k] for k in keys}
+                    # Flag pre-revenue companies so the model is not misled by
+                    # EODHD's nonsensical margin/valuation ratios on tiny revenue.
+                    rev = (key_ratios.get("revenue_ttm") or 0)
+                    if rev and abs(rev) < 10_000_000:
+                        key_ratios["_note"] = (
+                            "PRE-REVENUE / EARLY-STAGE COMPANY: Revenue is tiny (<$10M). "
+                            "Margin percentages and P/S ratios from EODHD are unreliable "
+                            "artefacts of near-zero revenue. Focus on absolute NOK/USD figures, "
+                            "cash burn rate, capex, and path to profitability instead."
+                        )
                     # key_ratios goes first so it's within the context window
                     payload = {"KEY_METRICS_USE_THESE_VALUES": key_ratios, **trimmed}
                     raw = json.dumps(payload, default=str)
