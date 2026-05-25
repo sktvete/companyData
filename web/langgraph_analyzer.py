@@ -354,35 +354,18 @@ def _build_graph(tools: list, llm: ChatOpenAI):
 
 
 # ---------------------------------------------------------------------------
-# Public streaming entry-points
+# Shared graph runner — single place to update for both auth paths
 # ---------------------------------------------------------------------------
 
-def analyze_stream_langgraph(
+def _run_graph(
     ticker_exchange: str,
-    openai_api_key: str,
-    model: str | None = None,
-    reasoning_effort: str | None = None,
+    llm,
+    model_label: str,
 ) -> Generator[dict, None, None]:
     """
-    Drop-in replacement for local_analyzer.analyze_stream using LangGraph.
-    Yields the same event dicts as the original.
+    Build and stream the LangGraph analyst for any LLM backend.
+    All output handling lives here — both public entry-points call this.
     """
-    model = model or os.getenv("OPENAI_MODEL") or "gpt-4.1"
-    effort_label = f" (reasoning: {reasoning_effort})" if reasoning_effort else ""
-    yield {"type": "status", "text": f"Starting LangGraph analysis{effort_label}…\n\n"}
-
-    # Build LLM
-    llm_kwargs: dict = {"model": model, "api_key": openai_api_key, "streaming": False}
-    if reasoning_effort:
-        llm_kwargs["reasoning_effort"] = reasoning_effort
-    else:
-        llm_kwargs["temperature"] = 0.2
-    try:
-        llm = ChatOpenAI(**llm_kwargs)
-    except Exception as exc:
-        yield {"type": "error", "text": f"OpenAI init failed: {exc}"}
-        return
-
     tools = _make_lc_tools(ticker_exchange)
     app   = _build_graph(tools, llm)
 
@@ -408,10 +391,9 @@ def analyze_stream_langgraph(
         for step, state_update in enumerate(app.stream(initial_state, stream_mode="updates")):
             node_name = next(iter(state_update))
             node_out  = state_update[node_name]
-            msgs       = node_out.get("messages", [])
+            msgs      = node_out.get("messages", [])
 
             if node_name == "tools":
-                # Emit tool events for each ToolMessage result
                 for msg in msgs:
                     if not isinstance(msg, ToolMessage):
                         continue
@@ -427,13 +409,10 @@ def analyze_stream_langgraph(
                 yield {"type": "status", "text": "Reflecting on research…"}
 
             elif node_name == "analyst":
-                # The final analyst response (after all tools + reflection) is the JSON report
                 for msg in msgs:
                     if isinstance(msg, AIMessage) and msg.content:
                         text = msg.content if isinstance(msg.content, str) else str(msg.content)
-                        # Only stream tokens if it looks like the final JSON output
                         if not getattr(msg, "tool_calls", None):
-                            # Emit in chunks for live display
                             chunk_size = 64
                             for i in range(0, len(text), chunk_size):
                                 chunk = text[i:i + chunk_size]
@@ -455,10 +434,39 @@ def analyze_stream_langgraph(
         report = parse_json_report(final_ai_text)
         report.setdefault("ticker",   ticker_exchange.split(".")[0])
         report.setdefault("exchange", (ticker_exchange.split(".", 1) + ["US"])[1])
-        report["_model"] = f"{model} [langgraph]"
+        report["_model"] = model_label
         yield {"type": "done", "report": report, "raw": final_ai_text}
     except Exception as exc:
         yield {"type": "error", "text": f"JSON parse failed: {exc}\n\nRaw:\n{final_ai_text[:800]}"}
+
+
+# ---------------------------------------------------------------------------
+# Public entry-points — thin wrappers that build the right LLM then delegate
+# ---------------------------------------------------------------------------
+
+def analyze_stream_langgraph(
+    ticker_exchange: str,
+    openai_api_key: str,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> Generator[dict, None, None]:
+    """LangGraph analyst using an OpenAI API key (sk-...)."""
+    model = model or os.getenv("OPENAI_MODEL") or "gpt-4.1"
+    effort_label = f" (reasoning: {reasoning_effort})" if reasoning_effort else ""
+    yield {"type": "status", "text": f"Starting LangGraph analysis{effort_label}…\n\n"}
+
+    llm_kwargs: dict = {"model": model, "api_key": openai_api_key, "streaming": False}
+    if reasoning_effort:
+        llm_kwargs["reasoning_effort"] = reasoning_effort
+    else:
+        llm_kwargs["temperature"] = 0.2
+    try:
+        llm = ChatOpenAI(**llm_kwargs)
+    except Exception as exc:
+        yield {"type": "error", "text": f"OpenAI init failed: {exc}"}
+        return
+
+    yield from _run_graph(ticker_exchange, llm, f"{model} [langgraph]")
 
 
 def analyze_stream_langgraph_codex(
@@ -466,13 +474,10 @@ def analyze_stream_langgraph_codex(
     project_root,
     model: str | None = None,
 ) -> Generator[dict, None, None]:
-    """
-    LangGraph analyst using the ChatGPT subscription (Codex OAuth).
-    Same event protocol as analyze_stream_langgraph.
-    """
+    """LangGraph analyst using the ChatGPT subscription (Codex OAuth)."""
     from pathlib import Path as _Path
     model = model or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex"
-    yield {"type": "status", "text": f"Starting LangGraph analysis via ChatGPT…\n\n"}
+    yield {"type": "status", "text": "Starting LangGraph analysis via ChatGPT…\n\n"}
 
     try:
         llm = CodexChatModel(project_root=_Path(project_root), model_name=model)
@@ -480,70 +485,4 @@ def analyze_stream_langgraph_codex(
         yield {"type": "error", "text": f"Codex model init failed: {exc}"}
         return
 
-    tools = _make_lc_tools(ticker_exchange)
-    app   = _build_graph(tools, llm)
-
-    system_prompt = build_system_prompt()
-    user_msg = (
-        f"Analyze {ticker_exchange}.\n"
-        f"analysis_date: {date.today().isoformat()}\n"
-        f"time_horizon: long_term_1y_plus\n"
-        "Follow the research workflow: call eodhd_fundamentals, eodhd_price_history, "
-        "eodhd_news, then reflect and do at least one follow-up before writing the JSON report."
-    )
-
-    initial_state: AnalystState = {
-        "messages":         [SystemMessage(content=system_prompt), HumanMessage(content=user_msg)],
-        "tool_calls_total": 0,
-        "reflection_done":  False,
-        "ticker":           ticker_exchange,
-    }
-
-    final_ai_text = ""
-
-    try:
-        for step, state_update in enumerate(app.stream(initial_state, stream_mode="updates")):
-            node_name = next(iter(state_update))
-            node_out  = state_update[node_name]
-            msgs       = node_out.get("messages", [])
-
-            if node_name == "tools":
-                for msg in msgs:
-                    if not isinstance(msg, ToolMessage):
-                        continue
-                    tool_name = msg.name or ""
-                    evt: dict = {"type": "tool", "tool": tool_name, "symbol": ticker_exchange}
-                    if tool_name == "eodhd_news":
-                        sites = _extract_news_sites(msg.content or "[]")
-                        if sites:
-                            evt["sites"] = sites
-                    yield evt
-            elif node_name == "reflect":
-                yield {"type": "status", "text": "Reflecting on research…"}
-            elif node_name == "analyst":
-                for msg in msgs:
-                    if isinstance(msg, AIMessage) and msg.content:
-                        text = msg.content if isinstance(msg.content, str) else str(msg.content)
-                        if not getattr(msg, "tool_calls", None):
-                            chunk_size = 64
-                            for i in range(0, len(text), chunk_size):
-                                chunk = text[i:i + chunk_size]
-                                final_ai_text += chunk
-                                yield {"type": "token", "text": chunk}
-    except Exception as exc:
-        yield {"type": "error", "text": f"LangGraph Codex agent failed: {exc}"}
-        return
-
-    if not final_ai_text:
-        yield {"type": "error", "text": "Agent produced no output."}
-        return
-
-    yield {"type": "status", "text": "\n\nParsing and saving report…"}
-    try:
-        report = parse_json_report(final_ai_text)
-        report.setdefault("ticker",   ticker_exchange.split(".")[0])
-        report.setdefault("exchange", (ticker_exchange.split(".", 1) + ["US"])[1])
-        report["_model"] = f"{model} [langgraph-codex]"
-        yield {"type": "done", "report": report, "raw": final_ai_text}
-    except Exception as exc:
-        yield {"type": "error", "text": f"JSON parse failed: {exc}\n\nRaw:\n{final_ai_text[:800]}"}
+    yield from _run_graph(ticker_exchange, llm, f"{model} [langgraph-codex]")
