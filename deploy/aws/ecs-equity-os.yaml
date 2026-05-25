@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  equity-os ECS Fargate service + ALB.
+  Depends on: efs.yaml (EFS stack), rds-moonstocks.yaml (RDS stack).
+  The ECR image is updated separately by the GitHub Actions CI/CD pipeline.
+
+Parameters:
+  # ── Networking ──────────────────────────────────────────────────────────
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the ALB
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for ECS tasks
+
+  # ── Image ────────────────────────────────────────────────────────────────
+  EcrImageUri:
+    Type: String
+    Description: "Full ECR image URI, e.g. 550822830987.dkr.ecr.eu-north-1.amazonaws.com/equity-os:latest"
+
+  # ── ECS cluster ──────────────────────────────────────────────────────────
+  EcsClusterArn:
+    Type: String
+    Description: ARN of the existing ECS cluster
+
+  # ── IAM ──────────────────────────────────────────────────────────────────
+  TaskExecutionRoleArn:
+    Type: String
+    Description: IAM role that lets ECS pull images + write CloudWatch logs + read Secrets Manager
+    Default: "arn:aws:iam::550822830987:role/ecsTaskExecutionRole"
+
+  TaskRoleArn:
+    Type: String
+    Description: IAM role assumed by the running container (needs EFS + optional S3 access)
+    Default: ""
+
+  # ── EFS ──────────────────────────────────────────────────────────────────
+  EfsStackName:
+    Type: String
+    Default: equity-os-efs
+    Description: Name of the EFS CloudFormation stack (for cross-stack refs)
+
+  # ── Secrets (Secrets Manager ARNs) ───────────────────────────────────────
+  EohdApiKeySecretArn:
+    Type: String
+    Description: ARN of the secret holding EODHD_API_KEY
+  OpenAiApiKeySecretArn:
+    Type: String
+    Description: ARN of the secret holding OPENAI_API_KEY
+  DatabaseUrlSecretArn:
+    Type: String
+    Description: ARN of the secret holding MOONSTOCKS_DATABASE_URL (from rds-moonstocks stack)
+  AnalyzerApiKeySecretArn:
+    Type: String
+    Description: ARN of the secret holding ANALYZER_API_KEY (shared with analyzer service)
+
+  # ── Service tuning ───────────────────────────────────────────────────────
+  DesiredCount:
+    Type: Number
+    Default: 1
+  Cpu:
+    Type: String
+    Default: "2048"   # 2 vCPU
+    AllowedValues: ["1024", "2048", "4096"]
+  Memory:
+    Type: String
+    Default: "4096"   # 4 GB
+    AllowedValues: ["2048", "4096", "8192"]
+  GunicornWorkers:
+    Type: String
+    Default: "2"
+  GunicornTimeout:
+    Type: String
+    Default: "300"
+
+  # ── Analyzer internal URL ─────────────────────────────────────────────────
+  AnalyzerServiceUrl:
+    Type: String
+    Default: ""
+    Description: "Internal URL of the analyzer service, e.g. http://analyzer.equity-os.local:8000"
+
+  # ── Optional S3 outputs sync ─────────────────────────────────────────────
+  OutputsS3Uri:
+    Type: String
+    Default: ""
+    Description: "If set, sync outputs from this S3 URI on container startup (e.g. s3://my-bucket/equity-os/outputs)"
+
+  # ── HTTPS ────────────────────────────────────────────────────────────────
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: "ACM certificate ARN for HTTPS on the ALB (leave empty for HTTP-only)"
+
+Resources:
+  # ------------------------------------------------------------------
+  # CloudWatch Log Group
+  # ------------------------------------------------------------------
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/equity-os
+      RetentionInDays: 30
+
+  # ------------------------------------------------------------------
+  # Security Groups
+  # ------------------------------------------------------------------
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: equity-os ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: equity-os ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # ------------------------------------------------------------------
+  # Application Load Balancer
+  # ------------------------------------------------------------------
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: equity-os-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups: [!Ref AlbSecurityGroup]
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: equity-os-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 3000
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      # equity-os loads data at startup; give it enough time.
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+        # SSE streams — disable connection draining timeout killing live streams
+        - Key: load_balancing.algorithm.type
+          Value: least_outstanding_requests
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: "443"
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroup
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ------------------------------------------------------------------
+  # ECS Task Definition
+  # ------------------------------------------------------------------
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: equity-os
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: !Ref Cpu
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !If [HasTaskRole, !Ref TaskRoleArn, !Ref "AWS::NoValue"]
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      # EFS volume for /app/outputs
+      Volumes:
+        - Name: equity-os-outputs
+          EFSVolumeConfiguration:
+            FilesystemId:
+              Fn::ImportValue: !Sub "${EfsStackName}-EfsId"
+            TransitEncryption: ENABLED
+            AuthorizationConfig:
+              AccessPointId:
+                Fn::ImportValue: !Sub "${EfsStackName}-AccessPointId"
+              IAM: DISABLED
+      ContainerDefinitions:
+        - Name: equity-os
+          Image: !Ref EcrImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 3000
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: "3000"
+            - Name: GUNICORN_WORKERS
+              Value: !Ref GunicornWorkers
+            - Name: GUNICORN_THREADS
+              Value: "4"
+            - Name: GUNICORN_TIMEOUT
+              Value: !Ref GunicornTimeout
+            - Name: GUNICORN_LOG_LEVEL
+              Value: info
+            - Name: ANALYZER_LLM_PROVIDER
+              Value: openai
+            - Name: MOONSTOCKS_ANALYZER_URL
+              Value: !Ref AnalyzerServiceUrl
+            - Name: OUTPUTS_S3_URI
+              Value: !Ref OutputsS3Uri
+          Secrets:
+            - Name: EODHD_API_KEY
+              ValueFrom: !Ref EohdApiKeySecretArn
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Ref OpenAiApiKeySecretArn
+            - Name: MOONSTOCKS_DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+            - Name: ANALYZER_API_KEY
+              ValueFrom: !Ref AnalyzerApiKeySecretArn
+          MountPoints:
+            - ContainerPath: /app/outputs
+              SourceVolume: equity-os-outputs
+              ReadOnly: false
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/equity-os
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=8)\""
+            Interval: 30
+            Timeout: 10
+            Retries: 3
+            StartPeriod: 180
+
+  # ------------------------------------------------------------------
+  # ECS Service
+  # ------------------------------------------------------------------
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HttpListener
+    Properties:
+      ServiceName: equity-os
+      Cluster: !Ref EcsClusterArn
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+          AssignPublicIp: DISABLED
+      LoadBalancers:
+        - ContainerName: equity-os
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      # Spread tasks across AZs for resilience
+      PlacementStrategies: []
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  HasTaskRole: !Not [!Equals [!Ref TaskRoleArn, ""]]
+
+Outputs:
+  AlbDnsName:
+    Value: !GetAtt Alb.DNSName
+    Description: Point your domain CNAME here
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TaskSgId"
+  ServiceArn:
+    Value: !Ref Service

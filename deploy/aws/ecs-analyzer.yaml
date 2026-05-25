@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  moonstocks-ai-analyzer ECS Fargate service.
+  Internal only — not exposed to the internet.  equity-os calls it via
+  Cloud Map service discovery or a private ALB DNS name.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+
+  EcrImageUri:
+    Type: String
+    Description: "Full ECR image URI for the analyzer"
+
+  EcsClusterArn:
+    Type: String
+
+  TaskExecutionRoleArn:
+    Type: String
+    Default: "arn:aws:iam::550822830987:role/ecsTaskExecutionRole"
+
+  # Security group of equity-os tasks (allowed to reach analyzer on 8000)
+  EquityOsTaskSgId:
+    Type: String
+    Description: Security group ID exported by the equity-os stack
+
+  # Secrets
+  OpenAiApiKeySecretArn:
+    Type: String
+  EohdApiKeySecretArn:
+    Type: String
+  AnalyzerApiKeySecretArn:
+    Type: String
+  DatabaseUrlSecretArn:
+    Type: String
+
+  # The equity-os base URL the analyzer will call back for company data
+  EquityOsBaseUrl:
+    Type: String
+    Description: "Internal URL of equity-os, e.g. http://equity-os.internal:3000"
+
+  LlmProvider:
+    Type: String
+    Default: openai
+    AllowedValues: [openai, anthropic]
+
+  DesiredCount:
+    Type: Number
+    Default: 1
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/moonstocks-analyzer
+      RetentionInDays: 30
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: moonstocks-analyzer ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref EquityOsTaskSgId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # Cloud Map namespace for service discovery (equity-os → analyzer.equity-os.local:8000)
+  PrivateNamespace:
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+    Properties:
+      Name: equity-os.local
+      Vpc: !Ref VpcId
+
+  AnalyzerServiceDiscovery:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      Name: analyzer
+      NamespaceId: !Ref PrivateNamespace
+      DnsConfig:
+        RoutingPolicy: MULTIVALUE
+        DnsRecords:
+          - Type: A
+            TTL: 10
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: moonstocks-analyzer
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "1024"
+      Memory: "2048"
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: analyzer
+          Image: !Ref EcrImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8000
+              Protocol: tcp
+          Environment:
+            - Name: ANALYZER_LLM_PROVIDER
+              Value: !Ref LlmProvider
+            - Name: ANALYSIS_API_BASE_URL
+              Value: !Ref EquityOsBaseUrl
+          Secrets:
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Ref OpenAiApiKeySecretArn
+            - Name: EODHD_API_KEY
+              ValueFrom: !Ref EohdApiKeySecretArn
+            - Name: ANALYZER_API_KEY
+              ValueFrom: !Ref AnalyzerApiKeySecretArn
+            - Name: MOONSTOCKS_DATABASE_URL
+              ValueFrom: !Ref DatabaseUrlSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /ecs/moonstocks-analyzer
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)\""
+            Interval: 15
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: moonstocks-analyzer
+      Cluster: !Ref EcsClusterArn
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+          AssignPublicIp: DISABLED
+      ServiceRegistries:
+        - RegistryArn: !GetAtt AnalyzerServiceDiscovery.Arn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 0
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+
+Outputs:
+  AnalyzerInternalUrl:
+    Value: !Sub "http://analyzer.equity-os.local:8000"
+    Description: Use this as MOONSTOCKS_ANALYZER_URL in the equity-os stack
+  TaskSecurityGroupId:
+    Value: !Ref TaskSecurityGroup

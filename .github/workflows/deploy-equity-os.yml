@@ -1,5 +1,6 @@
-# Build equity-os image and push to ECR on main (requires repo variables + OIDC role).
-name: Deploy equity-os to ECR
+# Build equity-os image and push to ECR, then update ECS service.
+# Triggers on any push to master that touches equity-os code or infrastructure.
+name: Deploy equity-os
 
 on:
   push:
@@ -7,18 +8,25 @@ on:
     paths:
       - "web/**"
       - "src/**"
+      - "scripts/docker-entrypoint.sh"
+      - "documents/export/**"
       - "Dockerfile"
-      - "docker-compose.moonstocks.yml"
       - "deploy/aws/**"
       - ".github/workflows/deploy-equity-os.yml"
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force deploy even if no relevant files changed"
+        type: boolean
+        default: false
 
 permissions:
-  id-token: write
+  id-token: write   # required for OIDC AWS authentication
   contents: read
 
 jobs:
   deploy:
+    # Skip if repo variables are not configured (e.g. forks without AWS access)
     if: vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
     uses: moonstocksai/workflows/.github/workflows/deploy-to-aws.yml@main
     with:

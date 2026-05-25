@@ -1,14 +1,60 @@
+# ── Version control ──────────────────────────────────────────────────────────
 .git
+.gitignore
+
+# ── Cursor / IDE ──────────────────────────────────────────────────────────────
 .cursor
-outputs/scaled_analysis
-outputs/fundamentals_cache
-outputs/*.jsonl
-moonstocks-api
+terminals
+agent-transcripts
+agent\skills
+agent\mcp
+
+# ── Python artifacts ──────────────────────────────────────────────────────────
 __pycache__
 *.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+dist
+build
+
+# ── Env files (secrets never baked into image) ───────────────────────────────
 .env
 .env.*
-!.env.moonstocks.example
-terminals
+!.env.native.example
+!.env.aws.example
+
+# ── Runtime outputs (ephemeral or mounted via EFS) ───────────────────────────
+outputs/fundamentals_cache
+outputs/scaled_analysis
+outputs/rescored_analysis
+outputs/final_working_analysis
+outputs/analyst_yf_cache
+outputs/*.jsonl
+outputs/*.db
+outputs/*.db-shm
+outputs/*.db-wal
+outputs/.chatgpt_session.json
+outputs/analysis_progress.json
+
+# documents/export/ IS included — it contains the bundled screener JSONL
+# that the app uses as a fallback when EFS has no scaled_analysis data.
+
+# ── Test / dev scripts ────────────────────────────────────────────────────────
+tests/
+scripts/_*.py
+scripts/e2e_*.py
+scripts/demo_*.py
+scripts/test_*.py
+
+# ── Other services (built separately) ────────────────────────────────────────
+moonstocks-api
+moonstocks-ai-analyzer
+moonstocks-api.sln
+
+# ── Docs ─────────────────────────────────────────────────────────────────────
 *.md
-!docs/
+!web/README.md

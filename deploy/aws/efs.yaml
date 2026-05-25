@@ -1,0 +1,93 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  EFS filesystem for equity-os shared outputs (fundamentals_cache, price DB).
+  Mount this at /app/outputs in ECS tasks.  Created once; survives deployments.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets where ECS tasks run (one mount target per AZ)
+  EcsSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to equity-os ECS tasks
+
+Resources:
+  # ------------------------------------------------------------------
+  # EFS filesystem
+  # ------------------------------------------------------------------
+  EquityOsEfs:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain        # Never delete data when stack is removed
+    UpdateReplacePolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      BackupPolicy:
+        Status: ENABLED
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      FileSystemTags:
+        - Key: Name
+          Value: equity-os-outputs
+
+  # Security group that allows NFS (2049) only from ECS tasks
+  EfsMountSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EFS mount targets for equity-os
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref EcsSecurityGroupId
+
+  # One mount target per private subnet (= one per AZ for HA)
+  MountTarget0:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EquityOsEfs
+      SubnetId: !Select [0, !Ref PrivateSubnetIds]
+      SecurityGroups: [!Ref EfsMountSecurityGroup]
+
+  MountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EquityOsEfs
+      SubnetId: !Select [1, !Ref PrivateSubnetIds]
+      SecurityGroups: [!Ref EfsMountSecurityGroup]
+
+  # Access point — equity-os mounts at /equity-os-outputs inside EFS
+  EquityOsAccessPoint:
+    Type: AWS::EFS::AccessPoint
+    Properties:
+      FileSystemId: !Ref EquityOsEfs
+      PosixUser:
+        Uid: "0"
+        Gid: "0"
+      RootDirectory:
+        Path: /equity-os-outputs
+        CreationInfo:
+          OwnerUid: "0"
+          OwnerGid: "0"
+          Permissions: "755"
+      AccessPointTags:
+        - Key: Name
+          Value: equity-os-outputs-ap
+
+Outputs:
+  EfsId:
+    Value: !Ref EquityOsEfs
+    Export:
+      Name: !Sub "${AWS::StackName}-EfsId"
+  AccessPointId:
+    Value: !Ref EquityOsAccessPoint
+    Export:
+      Name: !Sub "${AWS::StackName}-AccessPointId"
+  MountSecurityGroupId:
+    Value: !Ref EfsMountSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-MountSgId"

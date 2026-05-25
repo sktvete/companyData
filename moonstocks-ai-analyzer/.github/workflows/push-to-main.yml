@@ -1,7 +1,7 @@
-name: Push to ECR
+name: Deploy moonstocks-analyzer
 on:
   push:
-    branches: [main]
+    branches: [main, master]
 
 permissions:
   id-token: write
@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   deploy:
+    if: vars.AWS_REGION != '' && vars.ECR_REPOSITORY != ''
     uses: moonstocksai/workflows/.github/workflows/deploy-to-aws.yml@main
     with:
       aws-region: ${{ vars.AWS_REGION }}
@@ -16,5 +17,7 @@ jobs:
       container-name: ${{ vars.CONTAINER_NAME }}
       ecs-service: ${{ vars.ECS_SERVICE }}
       ecs-cluster: ${{ vars.ECS_CLUSTER }}
+      dockerfile-path: Dockerfile
+      docker-context: moonstocks-ai-analyzer
     secrets:
       aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
