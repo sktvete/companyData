@@ -2055,15 +2055,16 @@ def _three_year_quarterly_projections(
 
         proj_rev   = _apply("revenue_usd",   rev_g)
         proj_ni    = _apply("net_income_usd", ni_g)
-        proj_ocf   = _apply("ocf_usd",        ocf_g)
-        proj_capex = _apply("capex_usd",      capex_g)
-        proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else None
         proj_eps   = _apply("eps",            eps_g)
         try:
             fy_year = int(proj_pe[:4])
         except (ValueError, TypeError):
             fy_year = None
 
+        # OCF / CapEx / FCF are intentionally omitted here.
+        # _fill_cashflow_estimates() runs after this function and derives them
+        # from the trailing OCF/revenue ratio, which is far more stable than
+        # same-quarter YoY growth when capex has spiked in a base year.
         entry: dict = {
             "year":                 f"{_quarter_chart_label(proj_pe)}E",
             "fiscal_year":          fy_year,
@@ -2075,9 +2076,6 @@ def _three_year_quarterly_projections(
             "revenue_b":            round(proj_rev / 1e9, 2) if proj_rev else None,
             "net_income_usd":       round(proj_ni)    if proj_ni    else None,
             "net_income_b":         round(proj_ni / 1e9, 2)  if proj_ni  else None,
-            "ocf_usd":              round(proj_ocf)   if proj_ocf   else None,
-            "capex_usd":            round(proj_capex) if proj_capex else None,
-            "fcf_usd":              round(proj_fcf)   if proj_fcf   else None,
         }
         if proj_eps and proj_eps > 0 and price_data:
             entry["pe_ratio"] = round(price_data[-1]["close"] / proj_eps, 1)
