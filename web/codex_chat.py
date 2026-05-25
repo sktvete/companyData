@@ -458,13 +458,17 @@ def stream_codex_chat(
             "Content-Type": "application/json",
             "Authorization": f"Bearer {session['accessToken']}",
         }
-        resp = requests.post(
-            RESPONSES_URL,
-            headers=headers,
-            json=body,
-            stream=True,
-            timeout=300,
-        )
+        try:
+            resp = requests.post(
+                RESPONSES_URL,
+                headers=headers,
+                json=body,
+                stream=True,
+                timeout=300,
+            )
+        except OSError as exc:
+            yield {"error": f"Network error connecting to Codex: {exc}", "done": True}
+            return
         if not resp.ok:
             yield {"error": f"Codex API {resp.status_code}: {resp.text[:800]}", "done": True}
             return
@@ -498,6 +502,12 @@ def stream_codex_chat(
                         "callId": item.get("call_id"),
                         "arguments": args,
                     })
+
+        # Release the SSL connection before any follow-up POST (Windows [Errno 22] fix)
+        try:
+            resp.close()
+        except Exception:
+            pass
 
         if function_calls:
             # Announce tool calls before execution for immediate UI feedback
