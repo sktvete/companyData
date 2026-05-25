@@ -255,14 +255,14 @@ def _compute_technicals(bars: list[dict]) -> dict:
 
 
 def _extract_key_ratios(data: dict) -> dict:
-    """Pull the most important valuation/quality ratios out of raw EODHD fundamentals
-    into a flat dict so the model sees them as pre-computed facts rather than hunting
-    through a deeply nested JSON."""
-    h = data.get("Highlights", {}) or {}
-    v = data.get("Valuation",   {}) or {}
-    g = data.get("General",     {}) or {}
-    t = data.get("Technicals",  {}) or {}
-    ar = data.get("AnalystRatings", {}) or {}
+    """Pre-compute every important fundamental ratio from raw EODHD data so the
+    model receives hard facts and cannot hallucinate plausible-looking substitutes."""
+    h  = data.get("Highlights",    {}) or {}
+    v  = data.get("Valuation",     {}) or {}
+    g  = data.get("General",       {}) or {}
+    t  = data.get("Technicals",    {}) or {}
+    ar = data.get("AnalystRatings",{}) or {}
+    fin = data.get("Financials",   {}) or {}
 
     def _f(val, digits=4):
         try:
@@ -270,39 +270,118 @@ def _extract_key_ratios(data: dict) -> dict:
         except (TypeError, ValueError):
             return None
 
-    gp  = _f(h.get("GrossProfitTTM"))
-    rev = _f(h.get("RevenueTTM"))
+    def _latest(section: str, field: str):
+        """Return the value of `field` from the most recent annual period."""
+        block = fin.get(section, {}).get("yearly", {})
+        if not block:
+            return None
+        yr = sorted(block.keys(), reverse=True)[0]
+        return _f(block[yr].get(field))
+
+    def _prev(section: str, field: str):
+        """Return the value of `field` from the second-most-recent annual period."""
+        block = fin.get(section, {}).get("yearly", {})
+        if not block or len(block) < 2:
+            return None
+        yr = sorted(block.keys(), reverse=True)[1]
+        return _f(block[yr].get(field))
+
+    def _yoy(cur, prev):
+        if cur is not None and prev and prev != 0:
+            return round((cur - prev) / abs(prev), 4)
+        return None
+
+    # ── Income statement ──────────────────────────────────────────────────
+    rev_cur  = _latest("Income_Statement", "totalRevenue")
+    rev_prev = _prev  ("Income_Statement", "totalRevenue")
+    gp_cur   = _latest("Income_Statement", "grossProfit")
+    ebit     = _latest("Income_Statement", "ebit")
+    int_exp  = _latest("Income_Statement", "interestExpense")
+    op_inc   = _latest("Income_Statement", "operatingIncome")
+
+    # ── Cash flow ─────────────────────────────────────────────────────────
+    fcf_cur  = _latest("Cash_Flow", "freeCashFlow")
+    fcf_prev = _prev  ("Cash_Flow", "freeCashFlow")
+    cfo      = _latest("Cash_Flow", "totalCashFromOperatingActivities")
+    capex    = _latest("Cash_Flow", "capitalExpenditures")
+
+    # ── Balance sheet ─────────────────────────────────────────────────────
+    total_debt   = _latest("Balance_Sheet", "shortLongTermDebtTotal")
+    equity       = _latest("Balance_Sheet", "totalStockholderEquity")
+    net_debt_bs  = _latest("Balance_Sheet", "netDebt")
+    cash_bs      = _latest("Balance_Sheet", "cashAndShortTermInvestments")
+
+    # ── Derived ratios ────────────────────────────────────────────────────
+    rev_ttm  = _f(h.get("RevenueTTM"))
+    gp_ttm   = _f(h.get("GrossProfitTTM"))
+    mktcap   = _f(h.get("MarketCapitalization"))
+    ebitda_h = _f(h.get("EBITDA"))
+
+    gross_margin     = round(gp_ttm / rev_ttm, 4)  if gp_ttm  and rev_ttm   else None
+    debt_to_equity   = round(total_debt / equity, 4) if total_debt and equity  else None
+    net_debt_ebitda  = round(net_debt_bs / ebitda_h, 4) if net_debt_bs is not None and ebitda_h else None
+    interest_cov     = round(ebit / int_exp, 2)    if ebit and int_exp and int_exp != 0 else None
+    fcf_yield        = round(fcf_cur / mktcap, 4)  if fcf_cur and mktcap     else None
+    rev_growth_yoy   = _yoy(rev_cur, rev_prev)
+    fcf_growth_yoy   = _yoy(fcf_cur, fcf_prev)
+
+    # EPS — use Highlights fields (correct EODHD names)
+    eps_ttm      = _f(h.get("DilutedEpsTTM")) or _f(h.get("EarningsShare"))
+    eps_est_curr = _f(h.get("EPSEstimateCurrentYear"))
+    eps_est_next = _f(h.get("EPSEstimateNextYear"))
+
+    # Analyst ratios
+    strong_buy = _f(ar.get("StrongBuy")) or 0
+    buy        = _f(ar.get("Buy"))       or 0
+    analyst_buy_pct = round((strong_buy + buy), 1) if ar.get("StrongBuy") is not None else None
+
     return {
-        "company_name":        g.get("Name"),
-        "sector":              g.get("Sector"),
-        "currency":            g.get("CurrencyCode"),
-        "market_cap_usd":      _f(h.get("MarketCapitalizationMln")),
-        "revenue_ttm":         _f(rev),
-        "gross_profit_ttm":    _f(gp),
-        "gross_margin_ttm":    round(gp / rev, 4) if gp and rev else None,
-        "ebitda":              _f(h.get("EBITDA")),
-        "net_income_ttm":      _f(h.get("NetIncomeTTM")),
-        "eps_ttm":             _f(h.get("EpsTtm")),
-        "eps_est_current_yr":  _f(h.get("EpsEstimateCurrentYear")),
-        "eps_est_next_yr":     _f(h.get("EpsEstimateNextYear")),
-        "pe_ratio":            _f(h.get("PERatio")),
-        "forward_pe":          _f(v.get("ForwardPE")),
-        "peg_ratio":           _f(v.get("PEGRatio")),
-        "price_to_sales_ttm":  _f(v.get("PriceSalesTTM")),
-        "price_to_book":       _f(v.get("PriceBookMRQ")),
-        "ev_to_ebitda":        _f(v.get("EnterpriseValueEbitda")),
-        "ev_to_revenue":       _f(v.get("EnterpriseValueRevenue")),
-        "return_on_equity":    _f(h.get("ReturnOnEquityTTM")),
-        "return_on_assets":    _f(h.get("ReturnOnAssetsTTM")),
-        "profit_margin":       _f(h.get("ProfitMargin")),
-        "operating_margin":    _f(h.get("OperatingMarginTTM")),
-        "dividend_yield":      _f(h.get("DividendYield")),
-        "52w_high":            _f(t.get("52WeekHigh")),
-        "52w_low":             _f(t.get("52WeekLow")),
-        "analyst_rating":      ar.get("Rating"),
-        "analyst_target_price":_f(ar.get("TargetPrice")),
-        "analyst_buy_pct":     _f(ar.get("StrongBuy", 0)) + _f(ar.get("Buy", 0))
-                               if _f(ar.get("StrongBuy")) is not None else None,
+        "company_name":         g.get("Name"),
+        "sector":               g.get("Sector"),
+        "currency":             g.get("CurrencyCode"),
+        # Valuation
+        "market_cap_usd":       _f(h.get("MarketCapitalizationMln")),
+        "pe_ratio":             _f(h.get("PERatio")),
+        "forward_pe":           _f(v.get("ForwardPE")),
+        "peg_ratio":            _f(h.get("PEGRatio")) or _f(v.get("PEGRatio")),
+        "price_to_sales_ttm":   _f(v.get("PriceSalesTTM")),
+        "price_to_book":        _f(v.get("PriceBookMRQ")),
+        "ev_to_ebitda":         _f(v.get("EnterpriseValueEbitda")),
+        "ev_to_revenue":        _f(v.get("EnterpriseValueRevenue")),
+        # Income quality
+        "revenue_ttm":          rev_ttm,
+        "revenue_growth_yoy":   rev_growth_yoy,
+        "quarterly_rev_growth": _f(h.get("QuarterlyRevenueGrowthYOY")),
+        "gross_margin_ttm":     gross_margin,
+        "operating_margin_ttm": _f(h.get("OperatingMarginTTM")),
+        "profit_margin_ttm":    _f(h.get("ProfitMargin")),
+        "ebitda":               ebitda_h,
+        # EPS
+        "eps_ttm":              eps_ttm,
+        "eps_est_current_yr":   eps_est_curr,
+        "eps_est_next_yr":      eps_est_next,
+        "quarterly_eps_growth": _f(h.get("QuarterlyEarningsGrowthYOY")),
+        # Cash flow
+        "free_cash_flow":       fcf_cur,
+        "fcf_growth_yoy":       fcf_growth_yoy,
+        "fcf_yield":            fcf_yield,
+        "cfo":                  cfo,
+        "capex":                capex,
+        # Balance sheet / debt
+        "debt_to_equity":       debt_to_equity,
+        "net_debt":             net_debt_bs,
+        "net_debt_to_ebitda":   net_debt_ebitda,
+        "interest_coverage":    interest_cov,
+        "cash_and_investments":  cash_bs,
+        # Returns
+        "return_on_equity":     _f(h.get("ReturnOnEquityTTM")),
+        "return_on_assets":     _f(h.get("ReturnOnAssetsTTM")),
+        # Dividend / yield
+        "dividend_yield":       _f(h.get("DividendYield")),
+        # Analyst
+        "analyst_target_price": _f(ar.get("TargetPrice")),
+        "analyst_rating":       ar.get("Rating"),
+        "analyst_buy_pct":      analyst_buy_pct,
     }
 
 
