@@ -254,6 +254,58 @@ def _compute_technicals(bars: list[dict]) -> dict:
     }
 
 
+def _extract_key_ratios(data: dict) -> dict:
+    """Pull the most important valuation/quality ratios out of raw EODHD fundamentals
+    into a flat dict so the model sees them as pre-computed facts rather than hunting
+    through a deeply nested JSON."""
+    h = data.get("Highlights", {}) or {}
+    v = data.get("Valuation",   {}) or {}
+    g = data.get("General",     {}) or {}
+    t = data.get("Technicals",  {}) or {}
+    ar = data.get("AnalystRatings", {}) or {}
+
+    def _f(val, digits=4):
+        try:
+            return round(float(val), digits) if val not in (None, "", "None") else None
+        except (TypeError, ValueError):
+            return None
+
+    gp  = _f(h.get("GrossProfitTTM"))
+    rev = _f(h.get("RevenueTTM"))
+    return {
+        "company_name":        g.get("Name"),
+        "sector":              g.get("Sector"),
+        "currency":            g.get("CurrencyCode"),
+        "market_cap_usd":      _f(h.get("MarketCapitalizationMln")),
+        "revenue_ttm":         _f(rev),
+        "gross_profit_ttm":    _f(gp),
+        "gross_margin_ttm":    round(gp / rev, 4) if gp and rev else None,
+        "ebitda":              _f(h.get("EBITDA")),
+        "net_income_ttm":      _f(h.get("NetIncomeTTM")),
+        "eps_ttm":             _f(h.get("EpsTtm")),
+        "eps_est_current_yr":  _f(h.get("EpsEstimateCurrentYear")),
+        "eps_est_next_yr":     _f(h.get("EpsEstimateNextYear")),
+        "pe_ratio":            _f(h.get("PERatio")),
+        "forward_pe":          _f(v.get("ForwardPE")),
+        "peg_ratio":           _f(v.get("PEGRatio")),
+        "price_to_sales_ttm":  _f(v.get("PriceSalesTTM")),
+        "price_to_book":       _f(v.get("PriceBookMRQ")),
+        "ev_to_ebitda":        _f(v.get("EnterpriseValueEbitda")),
+        "ev_to_revenue":       _f(v.get("EnterpriseValueRevenue")),
+        "return_on_equity":    _f(h.get("ReturnOnEquityTTM")),
+        "return_on_assets":    _f(h.get("ReturnOnAssetsTTM")),
+        "profit_margin":       _f(h.get("ProfitMargin")),
+        "operating_margin":    _f(h.get("OperatingMarginTTM")),
+        "dividend_yield":      _f(h.get("DividendYield")),
+        "52w_high":            _f(t.get("52WeekHigh")),
+        "52w_low":             _f(t.get("52WeekLow")),
+        "analyst_rating":      ar.get("Rating"),
+        "analyst_target_price":_f(ar.get("TargetPrice")),
+        "analyst_buy_pct":     _f(ar.get("StrongBuy", 0)) + _f(ar.get("Buy", 0))
+                               if _f(ar.get("StrongBuy")) is not None else None,
+    }
+
+
 def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
     """Returns a function(name, args) → JSON-string that calls EODHD."""
 
@@ -263,6 +315,10 @@ def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
             with httpx.Client() as client:
                 if name == "eodhd_fundamentals":
                     data = _eodhd_get(client, f"fundamentals/{symbol}")
+                    # Pre-extract key ratios as a clean flat dict at the very top —
+                    # the model MUST use these values instead of recomputing from
+                    # the raw nested data.
+                    key_ratios = _extract_key_ratios(data)
                     keep = ("General", "Highlights", "Valuation", "SharesStats",
                             "Technicals", "AnalystRatings", "Earnings")
                     trimmed = {k: data[k] for k in keep if k in data}
@@ -273,7 +329,9 @@ def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
                     if isinstance(trend, dict):
                         keys = sorted(trend.keys(), reverse=True)[:16]
                         earn["Trend"] = {k: trend[k] for k in keys}
-                    raw = json.dumps(trimmed, default=str)
+                    # key_ratios goes first so it's within the context window
+                    payload = {"KEY_METRICS_USE_THESE_VALUES": key_ratios, **trimmed}
+                    raw = json.dumps(payload, default=str)
                     return raw[:40_000]  # stay within context budget
 
                 elif name == "eodhd_price_history":
@@ -346,7 +404,18 @@ def parse_json_report(text: str) -> dict:
     start, end = s.find("{"), s.rfind("}")
     if start != -1 and end > start:
         s = s[start:end + 1]
-    return json.loads(s)
+    report = json.loads(s)
+
+    # Models occasionally nest top-level fields (red_flags, data_quality, sources)
+    # inside decision_summary. Hoist them back up.
+    TOP_LEVEL = {"red_flags", "data_quality", "sources", "summary"}
+    ds = report.get("decision_summary")
+    if isinstance(ds, dict):
+        for key in list(ds.keys()):
+            if key in TOP_LEVEL and key not in report:
+                report[key] = ds.pop(key)
+
+    return report
 
 
 # ---------------------------------------------------------------------------
