@@ -1204,27 +1204,30 @@ def run_refresh_and_score(
     missing = set(db.missing_symbols(symbols))
     need_fetch = [s for s in symbols if s in stale or s in missing]
 
-    total_work = len(need_fetch) + db.count()
+    already_cached = db.count()
+    total_work = len(need_fetch) + already_cached
     print(f"REFRESH + SCORE: {len(symbols)} symbols")
-    print(f"  Cache: {db.count()} total, {len(stale)} stale, {len(missing)} missing")
+    print(f"  Cache: {already_cached} total, {len(stale)} stale, {len(missing)} missing")
     print(f"  Need to fetch: {len(need_fetch)} symbols (async, {concurrency} concurrent)")
     print("=" * 60)
 
-    _write_progress(0, total_work, phase=f"Fetching {len(need_fetch)} symbols")
+    # Start progress at already_cached so the bar reflects true overall completion
+    _write_progress(already_cached, total_work, phase=f"Fetching {len(need_fetch)} new symbols")
 
     if need_fetch:
         t0 = time.time()
         fetch_results = asyncio.run(_async_fetch_batch(need_fetch, api_key, concurrency,
                                                        progress_cb=lambda d, t: _write_progress(
-                                                           d, total_work, phase=f"Fetching ({d}/{t})")))
+                                                           already_cached + d, total_work,
+                                                           phase=f"Fetching ({d}/{t})")))
         ok = sum(1 for _, d, _ in fetch_results if d is not None)
         t_fetch = time.time() - t0
         print(f"  Fetched: {ok}/{len(need_fetch)} in {t_fetch:.1f}s ({ok/max(t_fetch,0.1):.0f}/sec)")
-        _write_progress(len(need_fetch), total_work, successful=ok,
+        _write_progress(total_work, total_work, successful=ok,
                         failed_n=len(need_fetch) - ok, phase="Scoring from cache")
     else:
         print("  All symbols fresh in cache — skipping fetch.")
-        _write_progress(0, total_work, phase="Scoring from cache")
+        _write_progress(total_work, total_work, phase="Scoring from cache")
 
     print("\n  Running full rescore from SQLite...")
     run_cache_only_rescore(merge_into=merge_into, workers=workers)
