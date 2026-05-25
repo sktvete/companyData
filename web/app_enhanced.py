@@ -5027,8 +5027,8 @@ def moonstocks_analyze_stream(ticker):
     def _worker():
         try:
             if use_codex:
-                # Codex (ChatGPT subscription) path — uses custom Responses API
-                gen = _la.analyze_stream_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.3-codex")
+                # Codex (ChatGPT subscription) — LangGraph agent via OAuth
+                gen = _lga.analyze_stream_langgraph_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.3-codex")
             else:
                 # API key path — LangGraph agent with proper research loop
                 gen = _lga.analyze_stream_langgraph(ticker, openai_key, model, reasoning_effort=reasoning_effort)
