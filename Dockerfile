@@ -25,8 +25,6 @@ RUN pip install --no-cache-dir -r /app/web/requirements.txt gunicorn==22.0.0
 COPY src /app/src
 COPY web /app/web
 COPY scripts /app/scripts
-# documents/export/ contains the bundled screener JSONL (fallback when EFS is empty)
-COPY documents /app/documents
 
 WORKDIR /app/web
 

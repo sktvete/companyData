@@ -213,10 +213,8 @@ aws cloudformation describe-stacks \
 
 ## Step 8 — Seed EFS with initial data
 
-On first deploy the EFS is empty.  The app falls back to the bundled screener
-JSONL in `documents/export/` inside the image, so the screener works immediately.
-
-To populate EFS with fresh data (and the fundamentals cache from your dev machine):
+On first deploy the EFS is empty so the screener will start with no data.
+Populate it before (or immediately after) the first deploy:
 
 ```bash
 # Upload outputs from local machine to S3, then sync to EFS at next restart
@@ -249,19 +247,16 @@ Every push to `master` then automatically: builds the image → pushes to ECR �
 
 ## Updating screener data
 
-When you run a new screener analysis locally:
+When you run a new screener analysis locally, sync it to EFS via S3:
 
 ```bash
-# 1. Copy new JSONL to documents/export/ (included in next Docker image build)
-cp outputs/scaled_analysis/scaled_analysis_*.jsonl documents/export/
+# Upload new outputs to S3
+aws s3 sync outputs/ s3://my-equity-os-bucket/equity-os/outputs/ \
+  --exclude "*.db-shm" --exclude "*.db-wal" --exclude ".chatgpt_session.json"
 
-# 2. Commit and push → CI/CD builds new image and deploys it
-git add documents/export/
-git commit -m "update screener universe"
-git push
+# Restart the ECS task so it picks up the new data on next startup S3 sync
+aws ecs update-service --cluster moonstocks-prod --service equity-os --force-new-deployment
 ```
-
-The ECS service will perform a rolling deploy with no downtime.
 
 ---
 

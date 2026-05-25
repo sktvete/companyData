@@ -299,10 +299,6 @@ def load_data() -> bool:
     rescored_f = _latest_nonempty(output_dir / "rescored_analysis", "rescored_*.jsonl")
     final_f = _latest_nonempty(output_dir / "final_working_analysis", "*analysis_*.jsonl")
 
-    # Fresh-clone fallback: use the reference export bundled in documents/export/
-    if not scaled_f and not final_f:
-        scaled_f = _largest_nonempty(PROJECT_ROOT / "documents" / "export", "scaled_analysis_*.jsonl")
-
     scaled_rows = read_jsonl(scaled_f) if scaled_f else []
     rescored_rows = read_jsonl(rescored_f) if rescored_f else []
     final_rows = read_jsonl(final_f) if final_f else []
