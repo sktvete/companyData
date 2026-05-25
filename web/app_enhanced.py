@@ -11,6 +11,7 @@ import re
 import sys
 import json
 import math
+import queue as _queue_mod
 import subprocess
 import threading
 import time
@@ -53,6 +54,68 @@ MOONSTOCKS_API_BASE = os.environ.get(
 ).rstrip("/")
 
 app = Flask(__name__)
+
+# ---------------------------------------------------------------------------
+# Analysis broadcast registry — lets ALL users watching a ticker see the
+# live stream, not just the person who triggered it.
+# Structure: ticker → {"buffer": [...events...], "subs": [Queue], "done": bool}
+# This is in-process memory (works perfectly with the single-threaded dev
+# server and with Gunicorn workers=1).  Set GUNICORN_WORKERS=1 for prod SSE.
+# ---------------------------------------------------------------------------
+_BROADCAST_REGISTRY: dict[str, dict] = {}
+_BROADCAST_LOCK = threading.Lock()
+
+
+def _broadcast_register(ticker: str) -> None:
+    with _BROADCAST_LOCK:
+        _BROADCAST_REGISTRY[ticker] = {"buffer": [], "subs": [], "done": False}
+
+
+def _broadcast_event(ticker: str, event: dict) -> None:
+    with _BROADCAST_LOCK:
+        info = _BROADCAST_REGISTRY.get(ticker)
+        if not info:
+            return
+        info["buffer"].append(event)
+        for sub in info["subs"]:
+            try:
+                sub.put_nowait(event)
+            except Exception:
+                pass
+
+
+def _broadcast_finish(ticker: str) -> None:
+    with _BROADCAST_LOCK:
+        info = _BROADCAST_REGISTRY.get(ticker)
+        if info:
+            info["done"] = True
+
+
+def _broadcast_subscribe(ticker: str):
+    """
+    Returns (buffer_snapshot, new_queue, already_done) or None if no active broadcast.
+    """
+    with _BROADCAST_LOCK:
+        info = _BROADCAST_REGISTRY.get(ticker)
+        if not info:
+            return None
+        sub = _queue_mod.Queue()
+        buf = list(info["buffer"])
+        done = info["done"]
+        if not done:
+            info["subs"].append(sub)
+        return buf, sub, done
+
+
+def _broadcast_unsubscribe(ticker: str, sub) -> None:
+    with _BROADCAST_LOCK:
+        info = _BROADCAST_REGISTRY.get(ticker)
+        if info:
+            try:
+                info["subs"].remove(sub)
+            except ValueError:
+                pass
+
 
 def _moonstocks_analyzer_url() -> str:
     return (
@@ -1084,6 +1147,18 @@ def get_company(symbol: str) -> dict | None:
     return None
 
 
+def _calc_forward_pe(highlights: dict, fund_data: dict) -> float | None:
+    """Return Forward P/E = (market_cap / shares) / EPSEstimateNextYear, or None."""
+    eps_ny = _safe_float(highlights.get("EPSEstimateNextYear"))
+    if not eps_ny or eps_ny <= 0:
+        return None
+    mc    = _safe_float(highlights.get("MarketCapitalization"))
+    sh    = _safe_float((fund_data.get("SharesStats") or {}).get("SharesOutstanding"))
+    if not mc or not sh or sh <= 0:
+        return None
+    return round((mc / sh) / eps_ny, 1)
+
+
 def _lynch_peg(pe_display: float, m: dict) -> dict[str, float | str] | None:
     """Classic PEG: P/E ÷ (earnings growth % as a whole number, e.g. 20 for 20% p.a.).
 
@@ -2109,23 +2184,40 @@ def _fill_cashflow_estimates(
     q_capex_ratio = _trailing_ratio(q_hist, "capex_usd",  "revenue_usd") or ann_capex_ratio
 
     for e in estimates:
-        if e.get("ocf_usd") or e.get("fcf_usd"):
-            continue  # already filled (e.g., 3y_trend entries)
-        rev = _safe_float(e.get("revenue_usd"))
-        if not rev:
-            continue
-        granularity = e.get("estimate_granularity", "annual")
-        ocf_r   = q_ocf_ratio   if granularity == "quarter" else ann_ocf_ratio
-        capex_r = q_capex_ratio if granularity == "quarter" else ann_capex_ratio
-        proj_ocf   = round(rev * ocf_r)   if ocf_r   else None
-        proj_capex = round(rev * capex_r) if capex_r else None
-        proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else proj_ocf
-        if proj_ocf:
-            e["ocf_usd"]   = proj_ocf
-        if proj_capex:
-            e["capex_usd"] = proj_capex
-        if proj_fcf:
-            e["fcf_usd"]   = proj_fcf
+        if not (e.get("ocf_usd") or e.get("fcf_usd")):
+            rev = _safe_float(e.get("revenue_usd"))
+            if rev:
+                granularity = e.get("estimate_granularity", "annual")
+                ocf_r   = q_ocf_ratio   if granularity == "quarter" else ann_ocf_ratio
+                capex_r = q_capex_ratio if granularity == "quarter" else ann_capex_ratio
+                proj_ocf   = round(rev * ocf_r)   if ocf_r   else None
+                proj_capex = round(rev * capex_r) if capex_r else None
+                proj_fcf   = (proj_ocf - proj_capex) if (proj_ocf and proj_capex) else proj_ocf
+                if proj_ocf:
+                    e["ocf_usd"]   = proj_ocf
+                if proj_capex:
+                    e["capex_usd"] = proj_capex
+                if proj_fcf:
+                    e["fcf_usd"]   = proj_fcf
+
+    # Derive a stable shares_out from annual history (annual NI/EPS is reliable;
+    # quarterly NI can be distorted by one-time GAAP items like deferred taxes).
+    _ann_shares: list[float] = []
+    for r in annual_history[-4:]:
+        _ni  = _safe_float(r.get("net_income_usd"))
+        _eps = _safe_float(r.get("eps"))
+        if _ni and _eps and _eps > 0:
+            _s = _ni / _eps
+            if _s > 1e6:  # sanity: must be > 1 M shares
+                _ann_shares.append(_s)
+    _avg_shares = sum(_ann_shares) / len(_ann_shares) if _ann_shares else None
+
+    for e in estimates:
+        # OEPS estimate: owner earnings ≈ FCF (OCF − CapEx; SBC excluded since not estimated).
+        # Divide the period's FCF by total shares outstanding (shares don't change per period).
+        fcf = _safe_float(e.get("fcf_usd"))
+        if fcf and _avg_shares and _avg_shares > 0:
+            e["oeps"] = round(fcf / _avg_shares, 4)
 
     return estimates
 
@@ -3906,6 +3998,7 @@ def api_company_history(symbol):
         "price":           _safe_float(h.get("WallStreetTargetPrice")),
         "eps_ttm":         _safe_float(h.get("EarningsShare")),
         "pe_ttm":          _safe_float(h.get("PERatio")),
+        "forward_pe":      _calc_forward_pe(h, d),
         "market_cap_b":    round(mcap_usd / 1e9, 2) if mcap_usd else 0.0,
         "market_cap_usd":  mcap_usd,
         "market_cap_fmt":  _format_usd_compact(mcap_usd),
@@ -3957,6 +4050,7 @@ def api_company(symbol):
             "gross_margin_pct": round(m.get("gross_margin", 0) * 100, 1),
             "net_margin_pct":   round(m.get("net_margin", 0) * 100, 1),
             "pe_ratio":         ci.get("pe_ratio") or m.get("pe_ratio", 0),
+            "forward_pe":       None,
             "lynch_peg":        lynch_peg,
             "pb_ratio":         round(m.get("pb_ratio", 0), 2),
             "ps_ratio":         round(m.get("ps_ratio", 0), 2),
@@ -4028,6 +4122,24 @@ def _chat_stock_context_tiny(c: dict) -> dict:
 
 
 _CHAT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_moonstocks_analysis",
+            "description": (
+                "Read the Moonstocks AI Analysis report stored for this ticker. "
+                "Returns the full JSON analysis including summary, investment thesis, red flags, "
+                "financial health notes, valuation commentary, risk factors, and sources. "
+                "Call this when the user asks about the AI analysis, red flags, Moonstocks scores, "
+                "investment outlook, or anything that the AI analysis may have already covered."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -4251,35 +4363,30 @@ def _chat_ndjson_line(obj: dict) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, default=str) + "\n").encode("utf-8")
 
 
-def _chat_system_prompt(ctx_json: str) -> str:
+def _chat_system_prompt(ticker: str, name: str) -> str:
     return (
-        "You interpret one stock dashboard page. Be **brief**: default to 2–4 tight sentences "
-        "or a tiny bullet list unless the user explicitly asks for depth. No filler. "
-        "**Plain text only** — never HTML tags or markup. "
-        "You have **no browser window** — you cannot “open” a site except via tools. "
-        "Not financial advice; note when numbers are uncertain.\n\n"
-        "**Tools (use them — do not hesitate):**\n"
-        "- `eodhd_fundamentals_snapshot`: **first choice** for metrics and history (default detail_level=financials: "
-        "~12 annual income + cash-flow rows; use full for quarterly). Server API key is already configured — "
-        "never ask the user to enable EODHD or paste keys.\n"
-        "- `web_search`: **default for news/catalysts** (“why down today”, earnings, guidance, legal, product, "
-        "macro). Search before saying you do not know recent events.\n"
-        "- `fetch_web_page`: read a specific URL from search or the user.\n"
-        "- `evaluate_math`: margins, growth %, ratios — substitute literals from context/tools.\n"
-        "**Tool bias:** If a good answer needs live data or recent news, **call tools in the same turn** "
-        "(often `eodhd_fundamentals_snapshot` + `web_search` together). Do **not** ask “want me to search?” — "
-        "just search. Do **not** refuse tools as “unnecessary” when context is thin or the question is timely. "
-        "Only skip tools when context already fully answers a static question about scores on this page.\n\n"
-        "Context JSON is below.\n\n"
-        "**Reply rules:** Answer the **last user message** in the thread only. Do **not** repeat "
-        "the same score-card recap on every turn. If they ask a new question (growth %, valuation, "
-        "risk, comparison, “why ranked here”, opinion), answer **that** with specifics from context "
-        "and tools — do not default to re-explaining Q/V/G/S unless they asked how scoring works. "
-        "If they ask for an exact word count (e.g. “in 10 words”), reply with **one** line of that length only — "
-        "no second summary paragraph.\n\n"
-        + ctx_json
+        f"You are a sharp equity analyst chatbot embedded in a stock dashboard. "
+        f"The user is currently viewing **{name} ({ticker})**. "
+        "Start each conversation fresh - do not pre-assume you know the company's numbers.\n\n"
+        "**Plain text only** - never HTML tags or markdown formatting. "
+        "Be **brief**: 2-4 tight sentences or a short bullet list by default; go deeper only when asked. "
+        "Not financial advice; flag uncertainty when relevant.\n\n"
+        "**Tools available - use them proactively, do not ask permission:**\n"
+        "- `eodhd_fundamentals_snapshot`: financials, ratios, earnings history, analyst estimates. "
+        "Call this whenever you need any numbers. Server API key is pre-configured.\n"
+        "- `read_moonstocks_analysis`: reads the saved Moonstocks AI Analysis report for this ticker "
+        "(summary, scores, red flags, outlook, sources). Call this when the user asks about the AI analysis, "
+        "red flags, investment outlook, or references 'Moonstocks'. Also call it proactively when "
+        "a question is about quality or risk that the analysis might already cover.\n"
+        "- `web_search`: news, catalysts, recent earnings reactions, guidance, macro. "
+        "Search before saying you don't know something recent.\n"
+        "- `fetch_web_page`: read a specific URL from search results or provided by the user.\n"
+        "- `evaluate_math`: margins, growth %, ratios - use literals from tool results.\n\n"
+        "**Tool bias:** If a question needs live data, recent news, or the analysis report - "
+        "call tools immediately in the same turn. Never ask 'want me to look it up?'.\n\n"
+        "**Reply rules:** Answer the last user message only. "
+        "Do not recap scores or repeat yourself on every turn unless asked."
     )
-
 
 def _normalize_chat_history(history: list, max_items: int) -> list[dict]:
     """Keep only valid user/assistant strings; trim to last ``max_items`` messages without orphan turns."""
@@ -4307,11 +4414,7 @@ def _normalize_chat_history(history: list, max_items: int) -> list[dict]:
 
 def _chat_build_messages(c: dict, user_msg: str, history: list, max_in: int, max_turns: int) -> tuple[str, list]:
     sym = c["symbol"]
-    try:
-        ctx_json = json.dumps(_chat_stock_context_tiny(c), ensure_ascii=False, default=str)[:4000]
-    except Exception:
-        ctx_json = "{}"
-    system = _chat_system_prompt(ctx_json)
+    system = _chat_system_prompt(sym, c.get("name", sym))
     messages: list = [{"role": "system", "content": system}]
     max_hist = max(0, max_turns * 2)
     for h in _normalize_chat_history(history, max_hist):
@@ -4344,7 +4447,25 @@ def api_auth_logout():
 
 
 def _chat_tool_executor(sym: str):
+    # Resolve the full EODHD ticker (e.g. "AAPL" → "AAPL.US") once for the executor
+    _c = get_company(sym)
+    _ms_ticker = (_eodhd_ticker(sym, _c) or f"{sym}.US").upper()
+
     def run(name: str, args: dict) -> str:
+        if name == "read_moonstocks_analysis":
+            # Try the full EODHD ticker first, fall back to raw sym
+            row = ms_store.get_analysis(PROJECT_ROOT, _ms_ticker)
+            if not row:
+                row = ms_store.get_analysis(PROJECT_ROOT, sym)
+            if not row:
+                return json.dumps({"error": f"No Moonstocks AI Analysis found for {_ms_ticker} yet. You can trigger one from the dashboard."})
+            try:
+                report = json.loads(row.json_report)
+            except Exception:
+                report = {"raw": row.json_report}
+            import datetime as _dt
+            ts = _dt.datetime.utcfromtimestamp(row.generated_time).strftime("%Y-%m-%d %H:%M UTC") if row.generated_time else "unknown"
+            return json.dumps({"ticker": _ms_ticker, "generated": ts, "analysis": report}, default=str)
         return chat_tools.execute_chat_tool(
             name,
             args,
@@ -4717,6 +4838,18 @@ def company_detail(symbol):
                 "ma_200":   round(float(tech.get("200DayMA") or 0), 2) or None,
                 "beta":     round(float(tech.get("Beta") or 0), 2) or None,
             }
+            # Forward P/E: price / next-year consensus EPS
+            h = fund_data.get("Highlights", {})
+            eps_ny  = _safe_float(h.get("EPSEstimateNextYear"))
+            mc      = _safe_float(h.get("MarketCapitalization"))
+            sh_out  = _safe_float((fund_data.get("SharesStats") or {}).get("SharesOutstanding"))
+            if eps_ny and eps_ny > 0 and mc and sh_out and sh_out > 0:
+                fwd_price = mc / sh_out
+                view["financial_metrics"]["forward_pe"] = round(fwd_price / eps_ny, 1)
+            # Use full description from EODHD fundamentals (universe data is often truncated)
+            full_desc = (fund_data.get("General") or {}).get("Description") or ""
+            if full_desc:
+                view["company_info"]["description"] = full_desc
     except Exception:
         pass
     return render_template('company.html', company=view)
@@ -4789,24 +4922,30 @@ def moonstocks_trigger(ticker):
         return jsonify({"error": str(e)}), 502
 
 
+def _sse_format_event(evt: dict, ticker: str = "") -> str | None:
+    """Convert an internal event dict to an SSE string, or None to skip."""
+    etype = evt.get("type", "status")
+    if etype == "token":
+        return f"event: token\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+    if etype == "status":
+        return f"event: status\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+    if etype == "tool":
+        payload = {'tool': evt.get('tool', ''), 'symbol': evt.get('symbol', ticker)}
+        if evt.get('sites'):
+            payload['sites'] = evt['sites']
+        return f"event: tool\ndata: {json.dumps(payload)}\n\n"
+    if etype == "tool_sites":
+        return f"event: tool_sites\ndata: {json.dumps({'sites': evt.get('sites', [])})}\n\n"
+    return None  # done/error handled separately
+
+
 @app.route('/api/moonstocks/<path:ticker>/analyze-stream', methods=['POST'])
 def moonstocks_analyze_stream(ticker):
     """
-    Run a local OpenAI analysis using the *user's* API key and stream the output
-    back as Server-Sent Events.
-
-    POST body (JSON):
-      { "openai_api_key": "sk-...", "model": "gpt-4o-mini" }   (model optional)
-
-    SSE events:
-      event: status  — short human-readable progress note
-      event: token   — raw AI output text chunk
-      event: done    — analysis complete; data contains the final JSON report
-      event: error   — something went wrong
+    Trigger a local AI analysis.  Events are broadcast to every subscriber
+    (including passive /watch-stream connections) so all users on the ticker
+    page see the live output.
     """
-    import queue as _queue
-    import threading as _threading
-
     body = request.get_json(silent=True) or {}
     openai_key       = (body.get("openai_api_key") or "").strip()
     model            = (body.get("model") or "gpt-4.1-mini").strip()
@@ -4817,7 +4956,6 @@ def moonstocks_analyze_stream(ticker):
     except ImportError as exc:
         return jsonify({"error": f"local_analyzer not available: {exc}"}), 500
 
-    # Prefer ChatGPT OAuth session (user's subscription) over a raw API key
     use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
 
     if not use_codex and (not openai_key or not openai_key.startswith("sk-")):
@@ -4825,7 +4963,15 @@ def moonstocks_analyze_stream(ticker):
             "error": "Sign in with ChatGPT (Ask AI panel) or provide an OpenAI API key (sk-...)."
         }), 400
 
-    q: _queue.Queue = _queue.Queue()
+    # Prevent duplicate simultaneous analyses for the same ticker
+    with _BROADCAST_LOCK:
+        existing = _BROADCAST_REGISTRY.get(ticker)
+        if existing and not existing.get("done"):
+            return jsonify({"error": "Analysis already running for this ticker."}), 409
+
+    _broadcast_register(ticker)
+
+    q: _queue_mod.Queue = _queue_mod.Queue()
 
     def _worker():
         try:
@@ -4835,60 +4981,119 @@ def moonstocks_analyze_stream(ticker):
                 gen = _la.analyze_stream(ticker, openai_key, model, reasoning_effort=reasoning_effort)
             for event in gen:
                 q.put(event)
+                _broadcast_event(ticker, event)
                 if event["type"] in ("done", "error"):
                     return
         except Exception as exc:
-            q.put({"type": "error", "text": str(exc)})
+            ev = {"type": "error", "text": str(exc)}
+            q.put(ev)
+            _broadcast_event(ticker, ev)
+        finally:
+            _broadcast_finish(ticker)
 
-    _threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, daemon=True).start()
 
     def _generate():
         triggered_at = int(datetime.now().timestamp() * 1000)
         ms_store.upsert_trigger(PROJECT_ROOT, ticker, triggered_at)
-        yield f"event: status\ndata: {json.dumps({'text': f'Analysis triggered for {ticker}'})}\n\n"
+        yield f"event: status\ndata: {json.dumps({'text': f'Analysis triggered for {ticker}…'})}\n\n"
 
         while True:
             try:
                 evt = q.get(timeout=55)
-            except _queue.Empty:
+            except _queue_mod.Empty:
                 yield ": keepalive\n\n"
                 continue
 
             etype = evt.get("type", "status")
+            line = _sse_format_event(evt, ticker)
+            if line:
+                yield line
 
-            if etype == "token":
-                yield f"event: token\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
-
-            elif etype == "status":
-                yield f"event: status\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
-
-            elif etype == "done":
+            if etype == "done":
                 report = evt.get("report", {})
-                raw    = evt.get("raw",    "")
                 try:
                     generated_time = int(datetime.now().timestamp() * 1000)
-                    ms_store.upsert_analysis(
-                        PROJECT_ROOT, ticker,
-                        json.dumps(report), generated_time,
-                    )
+                    ms_store.upsert_analysis(PROJECT_ROOT, ticker, json.dumps(report), generated_time)
                     ms_store.delete_trigger(PROJECT_ROOT, ticker)
                     result = ms_store.get_analysis(PROJECT_ROOT, ticker)
                     result_json = ms_store.row_to_moonstocks_json(result) if result else None
                 except Exception as exc:
                     app.logger.error("Failed to save analysis for %s: %s", ticker, exc)
                     result_json = None
-
-                payload = {
-                    "tickerAndExchangeCode": ticker,
-                    "report":                report,
-                    "saved":                 result_json is not None,
-                }
+                payload = {"tickerAndExchangeCode": ticker, "report": report, "saved": result_json is not None}
                 yield f"event: done\ndata: {json.dumps(payload)}\n\n"
                 return
 
-            elif etype == "error":
+            if etype == "error":
                 yield f"event: error\ndata: {json.dumps({'text': evt.get('text', 'Unknown error')})}\n\n"
                 return
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route('/api/moonstocks/<path:ticker>/watch-stream', methods=['GET'])
+def moonstocks_watch_stream(ticker):
+    """
+    Passive SSE endpoint.  Any user who opens this will receive all broadcast
+    events for an in-progress analysis on *ticker* — past (buffered) and future.
+    Returns 204 immediately when no analysis is running.
+    """
+    result = _broadcast_subscribe(ticker)
+    if result is None:
+        return Response(status=204)
+
+    buf, sub, already_done = result
+
+    def _generate():
+        # Replay whatever has already streamed
+        for evt in buf:
+            line = _sse_format_event(evt, ticker)
+            if line:
+                yield line
+            etype = evt.get("type")
+            if etype == "done":
+                report = evt.get("report", {})
+                payload = {"tickerAndExchangeCode": ticker, "report": report, "saved": True}
+                yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+                _broadcast_unsubscribe(ticker, sub)
+                return
+            if etype == "error":
+                yield f"event: error\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+                _broadcast_unsubscribe(ticker, sub)
+                return
+
+        if already_done:
+            _broadcast_unsubscribe(ticker, sub)
+            return
+
+        # Stream new events as they arrive
+        while True:
+            try:
+                evt = sub.get(timeout=55)
+            except _queue_mod.Empty:
+                yield ": keepalive\n\n"
+                continue
+
+            etype = evt.get("type", "status")
+            line = _sse_format_event(evt, ticker)
+            if line:
+                yield line
+
+            if etype == "done":
+                report = evt.get("report", {})
+                payload = {"tickerAndExchangeCode": ticker, "report": report, "saved": True}
+                yield f"event: done\ndata: {json.dumps(payload)}\n\n"
+                break
+            if etype == "error":
+                yield f"event: error\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+                break
+
+        _broadcast_unsubscribe(ticker, sub)
 
     return Response(
         stream_with_context(_generate()),

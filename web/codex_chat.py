@@ -425,13 +425,22 @@ def stream_codex_chat(
     tools: list,
     tool_executor: Callable[[str, dict], str],
     max_tool_rounds: int = 5,
+    min_tool_rounds: int = 0,
+    reflection_prompt: str = "",
+    reflect_after_n_calls: int = 3,
 ) -> Generator[dict, None, None]:
     """
-    Yields dict events: {token}, {phase: tool}, {error}, {done}, {model}.
+    Yields dict events: {token}, {phase: tool}, {phase: reflect}, {error}, {done}, {model}.
+    reflection_prompt: if set, injected once as a user message after reflect_after_n_calls
+                       individual tool invocations, prompting the model to self-evaluate.
+    min_tool_rounds: if > 0, nudge once when total calls < min before writing (fallback).
     """
     session = ensure_valid_token(project_root)
     instructions, current_input = messages_to_codex(messages)
     codex_tools = openai_tools_to_codex(tools)
+    _total_tool_calls = 0     # individual tool invocations across all rounds
+    _reflection_done = False  # inject reflection exactly once
+    _nudge_sent = False       # fallback nudge once to avoid infinite loops
 
     for _round in range(max_tool_rounds):
         body = {
@@ -488,16 +497,10 @@ def stream_codex_chat(
                     })
 
         if function_calls:
-            follow_up: list = []
+            # Announce tool calls before execution for immediate UI feedback
             for fc in function_calls:
                 yield {"phase": "tool", "tool": fc.get("name")}
-                follow_up.append({
-                    "type": "function_call",
-                    "id": fc["id"],
-                    "call_id": fc["callId"],
-                    "name": fc["name"],
-                    "arguments": json.dumps(fc["arguments"]),
-                })
+
             n_workers = min(len(function_calls), 8)
 
             def _run(fc: dict) -> tuple[dict, str]:
@@ -510,13 +513,59 @@ def stream_codex_chat(
                 with ThreadPoolExecutor(max_workers=n_workers) as pool:
                     results = list(pool.map(_run, function_calls))
 
+            # Build follow-up input: each function_call paired with its output (required ordering)
+            follow_up: list = []
             for fc, result in results:
+                # Emit result so callers can extract metadata (e.g. news sites)
+                yield {"phase": "tool_result", "tool": fc["name"], "output": result}
+                follow_up.append({
+                    "type": "function_call",
+                    "id": fc["id"],
+                    "call_id": fc["callId"],
+                    "name": fc["name"],
+                    "arguments": json.dumps(fc["arguments"]),
+                })
                 follow_up.append({
                     "type": "function_call_output",
                     "call_id": fc["callId"],
                     "output": result,
                 })
-            current_input = [*current_input, *follow_up]
+            _total_tool_calls += len(function_calls)
+
+            # Inject reflection exactly once after initial research threshold
+            if reflection_prompt and not _reflection_done and _total_tool_calls >= reflect_after_n_calls:
+                _reflection_done = True
+                current_input = [
+                    *current_input,
+                    *follow_up,
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": reflection_prompt}],
+                    },
+                ]
+                yield {"phase": "reflect"}
+            else:
+                current_input = [*current_input, *follow_up]
+            continue
+
+        # Model produced text without tool calls — nudge once if below minimum individual calls
+        if min_tool_rounds > 0 and _total_tool_calls < min_tool_rounds and not _nudge_sent:
+            _nudge_sent = True
+            nudge = (
+                "You have not yet performed enough research. "
+                "Review what you found so far and identify at least one specific follow-up: "
+                "an unusual trend, a recent development, or a data point that needs verification. "
+                "Call the relevant tool now before writing the final report."
+            )
+            current_input = [
+                *current_input,
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": nudge}],
+                },
+            ]
             continue
 
         yield {"done": True, "model": model}

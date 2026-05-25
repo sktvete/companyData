@@ -79,6 +79,9 @@
   #msStreamOutput::-webkit-scrollbar{width:4px}
   #msStreamOutput::-webkit-scrollbar-track{background:transparent}
   #msStreamOutput::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}
+  .ms-tool-line{display:flex;align-items:center;gap:.45rem;padding:.18rem 0;font-size:.65rem;color:var(--dim);font-family:'JetBrains Mono',monospace;opacity:.85}
+  .ms-tool-badge{background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.3);color:var(--accent);padding:.05rem .35rem;border-radius:2px;font-size:.6rem;letter-spacing:.04em}
+  .ms-tool-sym{color:var(--dim);font-size:.6rem}
   .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.58rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
   .rbtn:hover{color:var(--fg);background:var(--muted)}
   .rbtn.active{color:var(--accent);background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
@@ -172,9 +175,16 @@
           <div id="livePE" style="color:var(--fg);font-size:.78rem;margin-top:.35rem" title="{{ G.pe }}">P/E –</div>
         </div>
       </div>
-      <p style="color:var(--dim);font-size:.75rem;line-height:1.65;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden" id="descText">
-        {{ company.company_info.description or 'No description available.' }}
-      </p>
+      {% set _desc = company.company_info.description or 'No description available.' %}
+      <p style="color:var(--dim);font-size:.75rem;line-height:1.65;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden" id="descText">{{ _desc }}</p>
+      {% if _desc|length > 280 %}
+      <button id="descToggle" onclick="
+        var p=document.getElementById('descText'),b=document.getElementById('descToggle');
+        var expanded=b.getAttribute('data-exp')==='1';
+        if(expanded){p.style.webkitLineClamp='4';p.style.display='-webkit-box';p.style.overflow='hidden';b.textContent='Show more';b.setAttribute('data-exp','0');}
+        else{p.style.webkitLineClamp='unset';p.style.display='block';p.style.overflow='visible';b.textContent='Show less';b.setAttribute('data-exp','1');}
+      " data-exp="0" style="background:none;border:none;color:var(--accent);font-size:.65rem;cursor:pointer;padding:0;margin-top:.3rem;font-family:inherit;letter-spacing:.04em">Show more</button>
+      {% endif %}
     </div>
 
     <!-- Right: score card -->
@@ -332,7 +342,6 @@
         <span id="msRec" class="ms-rec"></span>
         <span id="msConf" class="ms-conf"></span>
         <span id="msDate" style="font-size:.62rem;color:var(--dim)"></span>
-        <a id="msLink" href="#" target="_blank" rel="noopener" style="margin-left:auto;font-size:.62rem;color:var(--accent);text-decoration:none" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">View on Moonstocks ↗</a>
       </div>
 
       <div id="msMainReason" style="font-size:.84rem;color:var(--fg);line-height:1.75;border-left:3px solid var(--accent);padding:.4rem .75rem;background:rgba(59,130,246,.06);border-radius:0 4px 4px 0;margin-bottom:.9rem"></div>
@@ -371,6 +380,20 @@
           <div style="font-size:.6rem;color:var(--dim);text-transform:uppercase;letter-spacing:.07em;margin-bottom:.35rem">What would change the decision</div>
           <ul id="msWwcList" class="ms-list"></ul>
         </div>
+      </div>
+
+      <!-- Sources (hidden, collapsed) -->
+      <div id="msSourcesWrap" style="display:none;margin-top:.65rem">
+        <div class="ms-toggle" onclick="(function(){var w=document.getElementById('msSourcesList'),i=document.getElementById('msSourcesIcon');var open=w.style.display!=='none';w.style.display=open?'none':'block';i.textContent=open?'▶':'▼';})()" style="margin-bottom:.3rem">
+          <span id="msSourcesIcon" class="ms-toggle-icon">▶</span>
+          <span style="color:var(--dim);font-size:.62rem">Sources used</span>
+        </div>
+        <div id="msSourcesList" style="display:none;padding:.45rem .6rem;background:rgba(255,255,255,.03);border-radius:4px;border:1px solid rgba(255,255,255,.07)"></div>
+      </div>
+
+      <!-- Re-run analysis -->
+      <div style="margin-top:.8rem;display:flex;justify-content:flex-end">
+        <button id="msRerunBtn" onclick="msRerun()" style="background:transparent;border:1px solid rgba(255,255,255,.12);color:var(--dim);font-size:.62rem;font-family:'JetBrains Mono',monospace;letter-spacing:.04em;padding:.25rem .65rem;border-radius:2px;cursor:pointer" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='rgba(255,255,255,.12)';this.style.color='var(--dim)'">↺ Re-run analysis</button>
       </div>
     </div>
   </div>
@@ -462,6 +485,7 @@
       <div class="stat-row"><span class="stat-label" title="{{ G.roic }}">ROIC</span><span class="{{ 'bull' if m.roic_pct > 12 else '' }}">{{ '%.1f'|format(m.roic_pct) }}%</span></div>
       <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
       <div class="stat-row"><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span><span id="finPE">{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
+      <div class="stat-row"><span class="stat-label" title="Price ÷ next fiscal year consensus EPS estimate">Forward P/E</span><span id="finFwdPE">{% if m.forward_pe %}{{ '%.1f'|format(m.forward_pe) }}{% else %}–{% endif %}</span></div>
       <div class="stat-row">
         <span class="stat-label" title="{{ G.peg }}">PEG</span>
         {% if m.lynch_peg %}
@@ -1082,11 +1106,12 @@ function renderFinancialCharts(quarters) {
     barDataset('EPS',  epsHist,  '#a855f7', { legendGroup: 'eps' }),
     barDataset('OEPS', oepsHist, '#f59e0b', { legendGroup: 'oeps' }),
   ];
+  const oepsEst = pts.map(p => qScale(p.est && p.est.oeps != null ? p.est.oeps : null, p));
   if (epsEst.some(v => v != null)) {
-    epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc', 'eps'));
-    // OEPS Est. is omitted: analyst estimates are non-GAAP (SBC added back),
-    // which moves in the opposite direction from Owner Earnings (SBC subtracted).
-    // Showing analyst EPS as OEPS estimates would be misleading.
+    epsDS.push(estBarDataset('EPS Est.',  epsEst,  '#c084fc', 'eps'));
+  }
+  if (oepsEst.some(v => v != null)) {
+    epsDS.push(estBarDataset('OEPS Est.', oepsEst, '#fcd34d', 'oeps'));
   }
   _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 
@@ -1127,12 +1152,26 @@ function renderFinancialCharts(quarters) {
   const gm = pts.map(p => p.ttm?.gross_margin_pct ?? p.hist?.gross_margin_pct ?? null);
   const nm = pts.map(p => p.ttm?.net_margin_pct   ?? p.hist?.net_margin_pct   ?? null);
 
-  // Trailing average of last 3 historical gross/net margins used as forward estimate proxy
-  const recentGm = gm.filter(v => v != null).slice(-3);
-  const recentNm = nm.filter(v => v != null).slice(-3);
-  const avgGm = recentGm.length ? recentGm.reduce((a, b) => a + b, 0) / recentGm.length : null;
+  // Project gross margin forward using recent trend (avg YoY delta from last 4 points).
+  // Falls back to the trailing average when not enough history exists.
+  const recentGm = gm.map((v, i) => v != null ? { v, i } : null).filter(Boolean).slice(-4);
+  let gmTrend = null; // per-period delta to apply
+  if (recentGm.length >= 2) {
+    const deltas = [];
+    for (let k = 1; k < recentGm.length; k++) deltas.push(recentGm[k].v - recentGm[k-1].v);
+    gmTrend = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    // Cap trend at ±2 pp per period to avoid runaway projections
+    gmTrend = Math.max(-2, Math.min(2, gmTrend));
+  }
+  const lastGm = recentGm.length ? recentGm[recentGm.length - 1].v : null;
 
-  const gmEst = pts.map(p => (p.est && p.est.revenue_usd && avgGm != null) ? avgGm : null);
+  let _gmEstIdx = 0;
+  const gmEst = pts.map(p => {
+    if (!(p.est && p.est.revenue_usd)) return null;
+    if (lastGm == null) return null;
+    const proj = lastGm + gmTrend * (++_gmEstIdx);
+    return Math.max(0, Math.min(100, proj));
+  });
   const nmEst = pts.map(p => {
     const rv = qScale(rowUsd(p.est, 'revenue_usd', 'revenue_b'), p);
     const ni = qScale(rowUsd(p.est, 'net_income_usd', 'net_income_b'), p);
@@ -1245,6 +1284,7 @@ async function loadHistory() {
       else if (d.market_cap_b > 0) mcapEl.textContent = '$' + d.market_cap_b.toFixed(1) + 'B';
     }
     if (d.pe_ttm > 0) document.getElementById('livePE').textContent = 'P/E ' + d.pe_ttm.toFixed(1);
+    if (d.forward_pe > 0) { const el = document.getElementById('finFwdPE'); if (el) el.textContent = Number(d.forward_pe).toFixed(1); }
     const ttmFcf = d.ttm && Number(d.ttm.fcf_usd);
     if (d.market_cap_usd > 0 && ttmFcf > 0) updateFcfYieldEl(d.market_cap_usd, ttmFcf);
     applyDisplayMetrics(d.display_metrics);
@@ -2381,10 +2421,11 @@ document.addEventListener('DOMContentLoaded', () => {
     confEl.textContent = 'Confidence: ' + (r.confidence || '');
     confEl.className = 'ms-conf ms-conf-' + (r.confidence || 'low');
 
-    msText('msDate', r.analysis_date ? 'Analysis: ' + r.analysis_date : '');
+    const modelLabel = r._model ? ' · ' + r._model : '';
+    msText('msDate', r.analysis_date ? 'Analysis: ' + r.analysis_date + modelLabel : '');
 
     const linkEl = document.getElementById('msLink');
-    linkEl.href = MS_ORIGIN + '/analyses/' + encodeURIComponent(data.tickerAndExchangeCode);
+    if (linkEl) linkEl.href = MS_ORIGIN + '/analyses/' + encodeURIComponent(data.tickerAndExchangeCode);
 
     const ds = r.decision_summary || {};
     const reasonEl = document.getElementById('msMainReason');
@@ -2415,12 +2456,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const flags = r.red_flags || [];
     msText('msFlagCount', flags.length ? `(${flags.length})` : '');
     const flagList = document.getElementById('msFlagList');
-    flags.forEach(f => {
+    if (!flags.length) {
       const div = document.createElement('div');
-      div.style.cssText = 'font-size:.72rem;margin-bottom:.35rem;line-height:1.5';
-      div.innerHTML = `<span class="ms-flag-${f.severity || 'low'}" style="font-weight:600;font-size:.6rem;text-transform:uppercase;letter-spacing:.05em">${f.severity || ''}</span> <span style="color:#94a3b8;font-size:.8rem">${f.detail || f.description || ''}</span>`;
+      div.style.cssText = 'font-size:.72rem;color:var(--pos);opacity:.7';
+      div.textContent = 'No red flags identified.';
       flagList.appendChild(div);
-    });
+    } else {
+      flags.forEach(f => {
+        const div = document.createElement('div');
+        div.style.cssText = 'font-size:.72rem;margin-bottom:.35rem;line-height:1.5';
+        div.innerHTML = `<span class="ms-flag-${f.severity || 'low'}" style="font-weight:600;font-size:.6rem;text-transform:uppercase;letter-spacing:.05em">${f.severity || ''}</span> <span style="color:#94a3b8;font-size:.8rem">${f.detail || f.description || ''}</span>`;
+        flagList.appendChild(div);
+      });
+    }
 
     const wwc = ds.what_would_change_the_decision || [];
     if (wwc.length) {
@@ -2429,10 +2477,59 @@ document.addEventListener('DOMContentLoaded', () => {
       wwc.forEach(item => { const li = document.createElement('li'); li.textContent = item; wwcList.appendChild(li); });
     }
 
+    // Sources
+    const sources = r.sources || [];
+    if (sources.length) {
+      msShow('msSourcesWrap');
+      const sList = document.getElementById('msSourcesList');
+      sources.forEach(s => {
+        const row = document.createElement('div');
+        row.style.cssText = 'font-size:.62rem;color:var(--dim);margin-bottom:.3rem;line-height:1.5';
+        const name = document.createElement('span');
+        name.style.cssText = 'color:var(--accent);font-weight:600;margin-right:.4rem';
+        name.textContent = s.name || s.url_or_endpoint || '';
+        const used = document.createElement('span');
+        used.textContent = s.used_for || '';
+        row.appendChild(name);
+        row.appendChild(used);
+        sList.appendChild(row);
+      });
+    }
+
     msHide('msLoading');
     msShow('msContent');
     msShow('msSection');
   }
+
+  window.msRerun = async function() {
+    // Clear the existing displayed analysis and re-trigger
+    msHide('msContent');
+    msHide('msError');
+    const _msOut = document.getElementById('msStreamOutput');
+    if (_msOut) _msOut.innerHTML = '';
+    const flagList = document.getElementById('msFlagList');
+    const sList    = document.getElementById('msSourcesList');
+    const wwcList  = document.getElementById('msWwcList');
+    if (flagList) flagList.innerHTML = '';
+    if (sList) sList.innerHTML = '';
+    if (wwcList) wwcList.innerHTML = '';
+    msHide('msSourcesWrap');
+    msHide('msWwcWrap');
+
+    // Re-use same flow as the trigger button
+    try {
+      const authR = await fetch('/api/auth/status');
+      const authD = await authR.json();
+      if (authD.authenticated) { msRunStream(null, 'auto'); return; }
+    } catch (_) {}
+    let key = msGetStoredKey(), model = msGetStoredModel(), highEffort = msGetStoredEffort();
+    if (!key || !key.startsWith('sk-')) {
+      const result = await msShowKeyModal();
+      if (!result) return;
+      key = result.key; model = result.model; highEffort = result.highEffort;
+    }
+    msRunStream(key, model, highEffort);
+  };
 
   // ── API-key helpers (sessionStorage) ───────────────────────────────────
   const MS_KEY_STORE    = 'ms_openai_key';
@@ -2548,7 +2645,58 @@ document.addEventListener('DOMContentLoaded', () => {
   function msStreamAppend(text) {
     const el = document.getElementById('msStreamOutput');
     if (!el) return;
-    el.textContent += text;
+    // Append as plain text node so it sits after any tool-call DOM nodes
+    el.appendChild(document.createTextNode(text));
+    el.scrollTop = el.scrollHeight;
+  }
+
+  const _TOOL_LABELS = {
+    eodhd_fundamentals:  '📊 EODHD fundamentals',
+    eodhd_price_history: '📈 EODHD price history',
+    eodhd_news:          '📰 EODHD news',
+  };
+
+  function msStreamToolLine(toolName, symbol, sites) {
+    const el = document.getElementById('msStreamOutput');
+    if (!el) return;
+    const row = document.createElement('div');
+    row.className = 'ms-tool-line';
+    row.setAttribute('data-tool', toolName);
+    const badge = document.createElement('span');
+    badge.className = 'ms-tool-badge';
+    badge.textContent = _TOOL_LABELS[toolName] || toolName;
+    row.appendChild(badge);
+    if (symbol) {
+      const sym = document.createElement('span');
+      sym.className = 'ms-tool-sym';
+      sym.textContent = symbol;
+      row.appendChild(sym);
+    }
+    if (sites && sites.length) {
+      const sitesEl = document.createElement('span');
+      sitesEl.className = 'ms-tool-sym';
+      sitesEl.setAttribute('data-sites', '1');
+      sitesEl.textContent = '· ' + sites.join(', ');
+      row.appendChild(sitesEl);
+    }
+    el.appendChild(row);
+    el.scrollTop = el.scrollHeight;
+    return row;
+  }
+
+  function msStreamToolSites(sites) {
+    const el = document.getElementById('msStreamOutput');
+    if (!el || !sites || !sites.length) return;
+    // Find last news tool line and append sites to it
+    const rows = el.querySelectorAll('[data-tool="eodhd_news"]');
+    const last = rows[rows.length - 1];
+    if (last && !last.querySelector('[data-sites]')) {
+      const sitesEl = document.createElement('span');
+      sitesEl.className = 'ms-tool-sym';
+      sitesEl.setAttribute('data-sites', '1');
+      sitesEl.textContent = '· ' + sites.join(', ');
+      last.appendChild(sitesEl);
+    }
     el.scrollTop = el.scrollHeight;
   }
 
@@ -2574,8 +2722,9 @@ document.addEventListener('DOMContentLoaded', () => {
     msShow('msStreamPanel');
     const modelLabel = key ? (model + (highEffort ? ' · high effort' : '')) : 'ChatGPT';
     msStreamSetModel(modelLabel);
-    msStreamSetLabel('Fetching data…');
-    document.getElementById('msStreamOutput').textContent = '';
+    msStreamSetLabel('Preparing…');
+    const _msOut = document.getElementById('msStreamOutput');
+    if (_msOut) _msOut.innerHTML = '';
 
     const reqBody = key
       ? { openai_api_key: key, model, reasoning_effort: highEffort ? 'high' : undefined }
@@ -2642,6 +2791,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (type === 'status') {
           msStreamSetLabel(payload.text, 'var(--dim)');
 
+        } else if (type === 'tool') {
+          msStreamSetLabel('Using ' + (payload.tool || 'tool') + '…', 'var(--accent)');
+          msStreamToolLine(payload.tool, payload.symbol, payload.sites);
+
+        } else if (type === 'tool_sites') {
+          msStreamToolSites(payload.sites);
+
         } else if (type === 'token') {
           msStreamSetLabel('AI is writing…', 'var(--pos)');
           msStreamAppend(payload.text || '');
@@ -2687,13 +2843,81 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Countdown (used when external analyzer was triggered by someone else) ─
-  function msStartCountdown(triggeredAtMs) {
-    const status     = document.getElementById('msTriggerStatus');
+  async function msStartCountdown(triggeredAtMs) {
     const triggerBtn = document.getElementById('msTriggerBtn');
-    const totalSecs  = 180;
-    const elapsed    = Math.floor((Date.now() - triggeredAtMs) / 1000);
-    let secs         = Math.max(0, totalSecs - elapsed);
     if (triggerBtn) triggerBtn.style.display = 'none';
+
+    // First, try to join the live broadcast stream — all users can watch
+    try {
+      const watchResp = await fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/watch-stream');
+      if (watchResp.ok && watchResp.status !== 204) {
+        // Live stream is active — show it to this user too
+        msHide('msNotFound');
+        const modelLabel = 'Live';
+        const _msOut = document.getElementById('msStreamOutput');
+        if (_msOut) _msOut.innerHTML = '';
+        msShow('msStreamPanel');
+        msStreamSetModel(modelLabel);
+        msStreamSetLabel('Joining live analysis stream…');
+
+        const reader  = watchResp.body.getReader();
+        const decoder = new TextDecoder();
+        let   buf     = '';
+        const parseEvents = (raw) => {
+          const events = []; const parts = raw.split('\n\n'); const rest = parts.pop();
+          for (const part of parts) {
+            let type = 'message', data = '';
+            for (const line of part.split('\n')) {
+              if (line.startsWith('event: ')) type = line.slice(7).trim();
+              else if (line.startsWith('data: ')) data = line.slice(6).trim();
+            }
+            if (data) events.push({ type, data });
+          }
+          return { events, rest };
+        };
+
+        while (true) {
+          let chunk; try { chunk = await reader.read(); } catch { break; }
+          if (chunk.done) break;
+          buf += decoder.decode(chunk.value, { stream: true });
+          const { events, rest } = parseEvents(buf); buf = rest;
+          for (const { type, data } of events) {
+            let payload; try { payload = JSON.parse(data); } catch { payload = { text: data }; }
+            if (type === 'status')       { msStreamSetLabel(payload.text, 'var(--dim)'); }
+            else if (type === 'tool')    { msStreamSetLabel('Using ' + (payload.tool || 'tool') + '…', 'var(--accent)'); msStreamToolLine(payload.tool, payload.symbol, payload.sites); }
+            else if (type === 'tool_sites') { msStreamToolSites(payload.sites); }
+            else if (type === 'token')   { msStreamSetLabel('AI is writing…', 'var(--pos)'); msStreamAppend(payload.text || ''); }
+            else if (type === 'done')   {
+              const dot = document.getElementById('msStreamDot');
+              if (dot) dot.classList.remove('blink');
+              msStreamSetLabel('Analysis complete — loading result…', 'var(--pos)');
+              setTimeout(async () => {
+                msHide('msStreamPanel');
+                const r = await fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER));
+                if (r.ok) { const d = await r.json().catch(() => null); if (d && !d.pending) { msHide('msNotFound'); msHide('msLoading'); msRender(d); return; } }
+                if (payload.report) { msHide('msNotFound'); msHide('msLoading'); msRender({ tickerAndExchangeCode: MS_TICKER, report: payload.report }); }
+                else { msShow('msNotFound'); if (triggerBtn) triggerBtn.style.display = ''; }
+              }, 1200);
+              return;
+            } else if (type === 'error') {
+              const dot = document.getElementById('msStreamDot');
+              if (dot) dot.classList.remove('blink');
+              msStreamSetLabel('Error: ' + payload.text, 'var(--neg)');
+              msStreamAppend('\n\n— Analysis failed —');
+              setTimeout(() => { msShow('msNotFound'); if (triggerBtn) { triggerBtn.style.display = ''; triggerBtn.disabled = false; } }, 4000);
+              return;
+            }
+          }
+        }
+        return; // watch-stream handled everything
+      }
+    } catch (_) {}
+
+    // Fallback: no active broadcast — show countdown timer
+    const status = document.getElementById('msTriggerStatus');
+    const totalSecs = 180;
+    const elapsed   = Math.floor((Date.now() - triggeredAtMs) / 1000);
+    let secs        = Math.max(0, totalSecs - elapsed);
     if (!status) return;
     status.style.display = '';
 
@@ -2701,11 +2925,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (secs > 0) {
         const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, '0');
         status.style.color  = 'var(--pos)';
-        status.textContent  = `Analysis queued — arriving in ~${m}:${s}`;
+        status.textContent  = `Analysis running — ~${m}:${s} remaining`;
         secs--;
         setTimeout(tick, 1000);
       } else {
-        // Countdown expired — offer to clear and retry
         status.innerHTML =
           `<span style="color:var(--dim)">Analysis didn't arrive. </span>` +
           `<button onclick="msClearAndRetry()" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:inherit;padding:0;text-decoration:underline">Try again</button>`;
