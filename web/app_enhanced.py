@@ -4466,11 +4466,24 @@ def _chat_tool_executor(sym: str):
             import datetime as _dt
             ts = _dt.datetime.utcfromtimestamp(row.generated_time).strftime("%Y-%m-%d %H:%M UTC") if row.generated_time else "unknown"
             # Summarise to avoid huge tool-result payloads (Windows SSL buffer limit)
-            def _short(v):
-                s = str(v) if not isinstance(v, str) else v
-                return s[:400] + "…" if len(s) > 400 else s
-            compact = {k: _short(v) for k, v in report.items() if not k.startswith("_")}
-            return json.dumps({"ticker": _ms_ticker, "generated": ts, "analysis": compact}, default=str)
+            # Keep only the most useful fields, each capped at 300 chars
+            KEY_ORDER = ["summary", "strengths", "red_flags", "outlook", "valuation",
+                         "recommendation", "risks", "management", "financials", "moat"]
+            compact = {}
+            for k in KEY_ORDER:
+                if k in report:
+                    v = str(report[k]) if not isinstance(report[k], str) else report[k]
+                    compact[k] = v[:300] + "…" if len(v) > 300 else v
+            # Add any remaining keys not in KEY_ORDER, capped tightly
+            for k, v in report.items():
+                if k not in compact and not k.startswith("_"):
+                    v = str(v) if not isinstance(v, str) else v
+                    compact[k] = v[:150] + "…" if len(v) > 150 else v
+            result_str = json.dumps({"ticker": _ms_ticker, "generated": ts, "analysis": compact}, default=str)
+            # Hard cap at 3000 chars to avoid any SSL buffer issues on Windows
+            if len(result_str) > 3000:
+                result_str = result_str[:3000] + '…"}'
+            return result_str
         return chat_tools.execute_chat_tool(
             name,
             args,

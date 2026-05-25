@@ -301,19 +301,22 @@ def _line_str(raw) -> str | None:
 
 def _iter_sse_json(resp: requests.Response):
     """Parse SSE data: lines from a Codex/Responses stream."""
-    for raw in resp.iter_lines():
-        line = _line_str(raw)
-        if not line or line.startswith(":"):
-            continue
-        if not line.startswith("data: "):
-            continue
-        data = line[6:].strip()
-        if not data or data == "[DONE]":
-            continue
-        try:
-            yield json.loads(data)
-        except json.JSONDecodeError:
-            continue
+    try:
+        for raw in resp.iter_lines():
+            line = _line_str(raw)
+            if not line or line.startswith(":"):
+                continue
+            if not line.startswith("data: "):
+                continue
+            data = line[6:].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                yield json.loads(data)
+            except json.JSONDecodeError:
+                continue
+    except OSError:
+        return  # Windows [Errno 22] on closed/reset socket — stop iteration cleanly
 
 
 def messages_to_codex(messages: list[dict]) -> tuple[str, list]:
