@@ -12,6 +12,10 @@ __pycache__/
 
 data/
 outputs/
+# Allow snapshot data so clones work out of the box
+!outputs/company_universe.json
+!outputs/scaled_analysis/
+!outputs/scaled_analysis/snapshot.jsonl
 **/.chatgpt_session.json
 
 web/__pycache__/
