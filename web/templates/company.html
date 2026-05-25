@@ -522,6 +522,12 @@
       <span style="color:var(--border);margin:0 5px;user-select:none">|</span>
       <button class="rbtn active" id="finCadenceQ">Quarterly</button>
       <button class="rbtn" id="finCadenceA">Yearly</button>
+      <span style="color:var(--border);margin:0 5px;user-select:none">|</span>
+      <label id="finLogScaleLbl" class="reports-toggle" title="Switch financial chart y-axes between linear and logarithmic scale (saved globally)">
+        <input type="checkbox" id="toggleFinLogScale" class="reports-toggle-input"/>
+        <span class="reports-toggle-track"></span>
+        <span class="reports-toggle-label">Log</span>
+      </label>
     </div>
   </div>
 
@@ -1226,15 +1232,21 @@ function renderFinancialCharts(quarters) {
   }
 }
 
+// Charts that should NOT use log scale (percentages / ratios that can be negative or near-zero)
+const _FIN_LOG_EXCLUDED = new Set(['chartMargin', 'chartPE']);
+
 function mkChartRet(id, type, labels, datasets, extraOpts) {
   const ctx = document.getElementById(id);
   if (!ctx) return null;
   ctx.style.display = 'block';
-  return new Chart(ctx, {
-    type,
-    data: { labels, datasets },
-    options: { ...CHARTJS_DEFAULTS, maintainAspectRatio: true, ...(extraOpts || {}) },
-  });
+  const opts = { ...CHARTJS_DEFAULTS, maintainAspectRatio: true, ...(extraOpts || {}) };
+  // Apply log scale to financial charts when enabled (skip margin/P/E charts)
+  if (finLogScaleEnabled() && !_FIN_LOG_EXCLUDED.has(id)) {
+    if (!opts.scales) opts.scales = {};
+    if (!opts.scales.y) opts.scales.y = {};
+    opts.scales.y.type = 'logarithmic';
+  }
+  return new Chart(ctx, { type, data: { labels, datasets }, options: opts });
 }
 
 function applyDisplayMetrics(dm) {
@@ -1335,6 +1347,16 @@ let _priceChartRange = '1y';
 
 const PRICE_LOG_SCALE_KEY = 'price_log_scale';
 function priceLogScaleEnabled() { return localStorage.getItem(PRICE_LOG_SCALE_KEY) === '1'; }
+
+const FIN_LOG_SCALE_KEY = 'fin_log_scale';
+function finLogScaleEnabled() { return localStorage.getItem(FIN_LOG_SCALE_KEY) === '1'; }
+function finLogScaleSet(on) {
+  localStorage.setItem(FIN_LOG_SCALE_KEY, on ? '1' : '0');
+  const chk = document.getElementById('toggleFinLogScale');
+  if (chk) chk.checked = on;
+  const lbl = document.getElementById('finLogScaleLbl');
+  if (lbl) lbl.classList.toggle('active', on);
+}
 function priceLogScaleSet(on) {
   localStorage.setItem(PRICE_LOG_SCALE_KEY, on ? '1' : '0');
   const chk = document.getElementById('toggleLogScale');
@@ -2271,7 +2293,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (volChart) volChart.update('none');
     });
   }
-  // Log scale toggle — persisted globally in localStorage
+  // Price log scale toggle — persisted globally in localStorage
   const logScaleChk = document.getElementById('toggleLogScale');
   const logScaleLbl = document.getElementById('logScaleLbl');
   if (logScaleChk) {
@@ -2283,6 +2305,19 @@ document.addEventListener('DOMContentLoaded', () => {
       priceLogScaleSet(on);
       if (logScaleLbl) logScaleLbl.classList.toggle('active', on);
       applyLogScaleToChart(on);
+    });
+  }
+  // Financial charts log scale toggle — persisted globally in localStorage
+  const finLogChk = document.getElementById('toggleFinLogScale');
+  const finLogLbl = document.getElementById('finLogScaleLbl');
+  if (finLogChk) {
+    const initFinOn = finLogScaleEnabled();
+    finLogChk.checked = initFinOn;
+    if (finLogLbl) finLogLbl.classList.toggle('active', initFinOn);
+    finLogChk.addEventListener('change', () => {
+      const on = finLogChk.checked;
+      finLogScaleSet(on);
+      renderFinancialCharts(_finQuarters); // rebuild all charts with new scale
     });
   }
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
