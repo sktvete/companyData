@@ -1097,7 +1097,8 @@ async def _async_fetch_batch(
         return done
 
     async def _fetch_one(session: aiohttp.ClientSession, sym: str):
-        url = f"https://eodhd.com/api/fundamentals/{sym}.US"
+        eodhd_sym = sym if "." in sym else f"{sym}.US"
+        url = f"https://eodhd.com/api/fundamentals/{eodhd_sym}"
         params = {"api_token": api_key, "fmt": "json"}
         async with sem:
             for attempt in range(3):
