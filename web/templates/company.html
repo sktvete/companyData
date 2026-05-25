@@ -1353,9 +1353,10 @@ function finLogScaleEnabled() { return localStorage.getItem(FIN_LOG_SCALE_KEY) =
 function finLogScaleSet(on) {
   localStorage.setItem(FIN_LOG_SCALE_KEY, on ? '1' : '0');
   const chk = document.getElementById('toggleFinLogScale');
-  if (chk) chk.checked = on;
+  if (chk) { chk.checked = on; }
   const lbl = document.getElementById('finLogScaleLbl');
   if (lbl) lbl.classList.toggle('active', on);
+  console.debug('[finLog] set to', on);
 }
 function priceLogScaleSet(on) {
   localStorage.setItem(PRICE_LOG_SCALE_KEY, on ? '1' : '0');
@@ -2310,14 +2311,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // Financial charts log scale toggle — persisted globally in localStorage
   const finLogChk = document.getElementById('toggleFinLogScale');
   const finLogLbl = document.getElementById('finLogScaleLbl');
-  if (finLogChk) {
+  if (finLogLbl) {
     const initFinOn = finLogScaleEnabled();
-    finLogChk.checked = initFinOn;
-    if (finLogLbl) finLogLbl.classList.toggle('active', initFinOn);
-    finLogChk.addEventListener('change', () => {
-      const on = finLogChk.checked;
+    if (finLogChk) finLogChk.checked = initFinOn;
+    finLogLbl.classList.toggle('active', initFinOn);
+    finLogLbl.addEventListener('click', (e) => {
+      e.preventDefault(); // prevent double-toggle from label→input propagation
+      const on = !finLogScaleEnabled(); // toggle current stored state
       finLogScaleSet(on);
-      renderFinancialCharts(_finQuarters); // rebuild all charts with new scale
+      renderFinancialCharts(_finQuarters);
     });
   }
   document.querySelectorAll('#rangeBar .rbtn').forEach(btn => {
