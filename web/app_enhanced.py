@@ -4465,7 +4465,12 @@ def _chat_tool_executor(sym: str):
                 report = {"raw": row.json_report}
             import datetime as _dt
             ts = _dt.datetime.utcfromtimestamp(row.generated_time).strftime("%Y-%m-%d %H:%M UTC") if row.generated_time else "unknown"
-            return json.dumps({"ticker": _ms_ticker, "generated": ts, "analysis": report}, default=str)
+            # Summarise to avoid huge tool-result payloads (Windows SSL buffer limit)
+            def _short(v):
+                s = str(v) if not isinstance(v, str) else v
+                return s[:400] + "…" if len(s) > 400 else s
+            compact = {k: _short(v) for k, v in report.items() if not k.startswith("_")}
+            return json.dumps({"ticker": _ms_ticker, "generated": ts, "analysis": compact}, default=str)
         return chat_tools.execute_chat_tool(
             name,
             args,
@@ -4503,26 +4508,30 @@ def _stream_chat_via_api_key(messages, api_key, model, tools, tool_executor, max
         full_content = ""
         finish_reason = None
 
-        for chunk in stream:
-            choice = chunk.choices[0] if chunk.choices else None
-            if not choice:
-                continue
-            finish_reason = choice.finish_reason or finish_reason
-            delta = choice.delta
-            if delta.content:
-                full_content += delta.content
-                yield {"token": delta.content}
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": tc.id or "", "name": tc.function.name or "", "args": ""}
-                    if tc.id:
-                        tool_calls_acc[idx]["id"] = tc.id
-                    if tc.function.name:
-                        tool_calls_acc[idx]["name"] = tc.function.name
-                    if tc.function.arguments:
-                        tool_calls_acc[idx]["args"] += tc.function.arguments
+        try:
+            for chunk in stream:
+                choice = chunk.choices[0] if chunk.choices else None
+                if not choice:
+                    continue
+                finish_reason = choice.finish_reason or finish_reason
+                delta = choice.delta
+                if delta.content:
+                    full_content += delta.content
+                    yield {"token": delta.content}
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {"id": tc.id or "", "name": tc.function.name or "", "args": ""}
+                        if tc.id:
+                            tool_calls_acc[idx]["id"] = tc.id
+                        if tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                        if tc.function.arguments:
+                            tool_calls_acc[idx]["args"] += tc.function.arguments
+        except OSError as exc:
+            yield {"error": f"Stream read error: {exc}", "done": True}
+            return
 
         if finish_reason == "tool_calls" and tool_calls_acc and tool_executor:
             import json as _json
