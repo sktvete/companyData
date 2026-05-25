@@ -4585,7 +4585,10 @@ def api_company_chat(symbol):
         history = []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
 
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+    if use_codex:
+        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+    else:
+        model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
@@ -4650,7 +4653,11 @@ def api_company_chat_stream(symbol):
 
     history = body.get("history") if isinstance(body.get("history"), list) else []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
-    model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+    if use_codex:
+        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+    else:
+        # gpt-5.3-codex is Codex-only; use a standard Chat Completions model for API key path
+        model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
 
