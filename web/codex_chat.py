@@ -517,8 +517,11 @@ def stream_codex_chat(
             n_workers = min(len(function_calls), 8)
 
             def _run(fc: dict) -> tuple[dict, str]:
-                out = tool_executor(fc["name"], fc["arguments"])
-                return fc, out if isinstance(out, str) else json.dumps(out)
+                try:
+                    out = tool_executor(fc["name"], fc["arguments"])
+                    return fc, out if isinstance(out, str) else json.dumps(out)
+                except Exception as exc:
+                    return fc, json.dumps({"error": f"Tool failed: {exc}"})
 
             if n_workers <= 1:
                 results = [_run(fc) for fc in function_calls]

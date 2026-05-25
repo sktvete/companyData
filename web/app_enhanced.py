@@ -4464,7 +4464,10 @@ def _chat_tool_executor(sym: str):
             except Exception:
                 report = {"raw": row.json_report}
             import datetime as _dt
-            ts = _dt.datetime.utcfromtimestamp(row.generated_time).strftime("%Y-%m-%d %H:%M UTC") if row.generated_time else "unknown"
+            try:
+                ts = _dt.datetime.utcfromtimestamp(row.generated_time).strftime("%Y-%m-%d %H:%M UTC") if row.generated_time else "unknown"
+            except (OSError, ValueError, OverflowError):
+                ts = "unknown"
             # Summarise to avoid huge tool-result payloads (Windows SSL buffer limit)
             # Keep only the most useful fields, each capped at 300 chars
             KEY_ORDER = ["summary", "strengths", "red_flags", "outlook", "valuation",
@@ -4500,9 +4503,16 @@ def _stream_chat_via_api_key(messages, api_key, model, tools, tool_executor, max
     a user-supplied API key.  Yields the same event dicts:
       {"token": "..."} | {"done": True, "model": model} | {"error": "..."}
     """
+    import httpx
     from openai import OpenAI as _OAI
 
-    client = _OAI(api_key=api_key)
+    # Disable keep-alive so httpx never reuses a stale SSL socket across rounds
+    # (Windows [Errno 22] / WSAEINVAL on connection reuse after streaming response)
+    http_client = httpx.Client(
+        limits=httpx.Limits(max_keepalive_connections=0, max_connections=10),
+        timeout=httpx.Timeout(300.0),
+    )
+    client = _OAI(api_key=api_key, http_client=http_client)
     current_messages = list(messages)
 
     for _round in range(max_tool_rounds + 1):
@@ -4545,6 +4555,12 @@ def _stream_chat_via_api_key(messages, api_key, model, tools, tool_executor, max
         except OSError as exc:
             yield {"error": f"Stream read error: {exc}", "done": True}
             return
+        finally:
+            # Always close the stream/connection so httpx doesn't pool a stale SSL socket
+            try:
+                stream.close()
+            except Exception:
+                pass
 
         if finish_reason == "tool_calls" and tool_calls_acc and tool_executor:
             import json as _json
