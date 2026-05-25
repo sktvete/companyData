@@ -200,6 +200,60 @@ _OPENAI_TOOLS = [
 ]
 
 
+def _compute_technicals(bars: list[dict]) -> dict:
+    """Compute RSI-14, SMA-50, SMA-200 and price-vs-MA from raw OHLCV bars."""
+    closes = [float(b.get("close") or b.get("adjusted_close") or 0) for b in bars]
+    if not closes:
+        return {}
+
+    last_price = closes[-1]
+
+    def sma(n: int) -> float | None:
+        if len(closes) < n:
+            return None
+        return round(sum(closes[-n:]) / n, 4)
+
+    def rsi(n: int = 14) -> float | None:
+        if len(closes) < n + 1:
+            return None
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            d = closes[i] - closes[i - 1]
+            gains.append(max(d, 0))
+            losses.append(max(-d, 0))
+        # Wilder smoothing over last n+1 deltas
+        ag = sum(gains[-n:]) / n
+        al = sum(losses[-n:]) / n
+        if al == 0:
+            return 100.0
+        rs = ag / al
+        return round(100 - 100 / (1 + rs), 2)
+
+    sma50  = sma(50)
+    sma200 = sma(200)
+
+    def pct_vs(ma: float | None) -> float | None:
+        if ma is None or ma == 0:
+            return None
+        return round((last_price - ma) / ma * 100, 2)
+
+    high52 = max(closes[-252:]) if len(closes) >= 252 else max(closes)
+    low52  = min(closes[-252:]) if len(closes) >= 252 else min(closes)
+
+    return {
+        "last_close":       round(last_price, 4),
+        "rsi_14":           rsi(),
+        "sma_50":           sma50,
+        "sma_200":          sma200,
+        "pct_vs_sma50":     pct_vs(sma50),
+        "pct_vs_sma200":    pct_vs(sma200),
+        "52w_high":         round(high52, 4),
+        "52w_low":          round(low52, 4),
+        "pct_from_52w_high": round((last_price - high52) / high52 * 100, 2) if high52 else None,
+        "bars_available":   len(closes),
+    }
+
+
 def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
     """Returns a function(name, args) → JSON-string that calls EODHD."""
 
@@ -228,8 +282,13 @@ def _make_tool_executor(default_symbol: str) -> Callable[[str, dict], str]:
                     data   = _eodhd_get(client, f"eod/{symbol}", {
                         "from": yr_ago.isoformat(), "to": today.isoformat(), "period": "d",
                     })
-                    prices = data[-60:] if isinstance(data, list) else data
-                    return json.dumps(prices, default=str)[:8_000]
+                    if isinstance(data, list) and data:
+                        technicals = _compute_technicals(data)
+                        prices = data[-60:]  # last 60 bars for context
+                        payload = {"technicals": technicals, "recent_prices": prices}
+                    else:
+                        payload = data
+                    return json.dumps(payload, default=str)[:10_000]
 
                 elif name == "eodhd_news":
                     data = _eodhd_get(client, "news", {"s": symbol, "limit": 15})
