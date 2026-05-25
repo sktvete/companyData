@@ -1083,8 +1083,10 @@ function renderFinancialCharts(quarters) {
     barDataset('OEPS', oepsHist, '#f59e0b', { legendGroup: 'oeps' }),
   ];
   if (epsEst.some(v => v != null)) {
-    epsDS.push(estBarDataset('EPS Est.',  epsEst, '#c084fc', 'eps'));
-    epsDS.push(estBarDataset('OEPS Est.', epsEst, '#fcd34d', 'oeps'));
+    epsDS.push(estBarDataset('EPS Est.', epsEst, '#c084fc', 'eps'));
+    // OEPS Est. is omitted: analyst estimates are non-GAAP (SBC added back),
+    // which moves in the opposite direction from Owner Earnings (SBC subtracted).
+    // Showing analyst EPS as OEPS estimates would be misleading.
   }
   _finCharts.eps = mkChartRet('chartEPS', 'bar', labels, epsDS, BAR_GROUP_OPTS);
 

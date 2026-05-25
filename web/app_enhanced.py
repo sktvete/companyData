@@ -2078,7 +2078,7 @@ def _three_year_quarterly_projections(
             "net_income_b":         round(proj_ni / 1e9, 2)  if proj_ni  else None,
         }
         if proj_eps and proj_eps > 0 and price_data:
-            entry["pe_ratio"] = round(price_data[-1]["close"] / proj_eps, 1)
+            entry["pe_ratio"] = round(price_data[-1]["close"] / (proj_eps * 4), 1)
         projections.append(entry)
 
     return projections
@@ -2174,7 +2174,9 @@ def _estimate_entry_from_trend(
         "net_income_b": round(ni_est / 1e9, 2) if ni_est else None,
     }
     if eps_est and eps_est > 0 and price_data:
-        entry["pe_ratio"] = round(price_data[-1]["close"] / eps_est, 1)
+        # Quarterly EPS must be annualised (×4) to get a comparable trailing P/E.
+        _eps_for_pe = (eps_est * 4) if granularity == "quarter" else eps_est
+        entry["pe_ratio"] = round(price_data[-1]["close"] / _eps_for_pe, 1)
     return entry
 
 
