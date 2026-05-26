@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -141,6 +142,7 @@ class PriceStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        self._lock = threading.Lock()
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("""
@@ -167,9 +169,10 @@ class PriceStore:
         sym = symbol.upper()
         if sym in self._mem:
             return self._mem[sym]
-        row = self._conn.execute(
-            "SELECT data, last_date FROM price_history WHERE symbol = ?", (sym,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT data, last_date FROM price_history WHERE symbol = ?", (sym,)
+            ).fetchone()
         if row is not None:
             try:
                 prices = self._decompress(row[0])
@@ -181,10 +184,11 @@ class PriceStore:
 
     def get_last_date(self, symbol: str) -> str | None:
         """Get the last stored date for a symbol."""
-        row = self._conn.execute(
-            "SELECT last_date FROM price_history WHERE symbol = ?",
-            (symbol.upper(),)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT last_date FROM price_history WHERE symbol = ?",
+                (symbol.upper(),)
+            ).fetchone()
         return row[0] if row else None
 
     def put(self, symbol: str, prices: list) -> None:
@@ -195,11 +199,12 @@ class PriceStore:
         self._mem[sym] = prices
         last_date = prices[-1]["date"] if prices else ""
         blob = self._compress(prices)
-        self._conn.execute(
-            "INSERT OR REPLACE INTO price_history (symbol, data, last_date, updated_at) VALUES (?, ?, ?, ?)",
-            (sym, blob, last_date, time.time())
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO price_history (symbol, data, last_date, updated_at) VALUES (?, ?, ?, ?)",
+                (sym, blob, last_date, time.time())
+            )
+            self._conn.commit()
 
     def append(self, symbol: str, new_prices: list) -> list:
         """Append new price points to existing data and persist."""

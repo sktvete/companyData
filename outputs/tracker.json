@@ -1,0 +1,530 @@
+{
+  "investors": [
+    {
+      "id": "fbbce7c1-a359-4c51-9298-77747a2db463",
+      "name": "Leopold Aschenbrenner",
+      "bio": "Founder & CIO of Situational Awareness LP ($13.7B). Former OpenAI Superalignment researcher. Author of 'Situational Awareness: The Decade Ahead' (2024). Thesis: AI capex bottleneck is electricity and physical infrastructure, not chips. Fund backed by Patrick & John Collison (Stripe), Nat Friedman, Daniel Gross. Co-managed with Carl Shulman (Director of Research).",
+      "transactions": [
+        {
+          "id": "cc0a0377-1365-4e99-8fb5-e909f593b51d",
+          "symbol": "BE",
+          "action": "buy",
+          "date": "2024-09-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 Bloom Energy; fund launch Sept 2024 (grew to 15.87% of Q4 2025 book)"
+        },
+        {
+          "id": "a238eb7a-10be-4401-9326-a6d9238114fb",
+          "symbol": "CRWV",
+          "action": "buy",
+          "date": "2024-09-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 CoreWeave; GPU cloud; calls position at fund launch"
+        },
+        {
+          "id": "9c905f18-579c-4df4-a12a-6067ce5c91ee",
+          "symbol": "INTC",
+          "action": "buy",
+          "date": "2024-09-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 Intel calls $747M notional; contrarian CHIPS Act bet (fully exited Q1 2026)"
+        },
+        {
+          "id": "0a31f202-8ba9-4e9b-9ee5-279436831cae",
+          "symbol": "CORZ",
+          "action": "buy",
+          "date": "2024-09-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 Core Scientific; BTC miner turned AI hosting"
+        },
+        {
+          "id": "976615bc-46b4-4159-9394-c7b0acf09bb4",
+          "symbol": "LITE",
+          "action": "buy",
+          "date": "2024-09-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 Lumentum Holdings; optical comms (exited Q1 2026)"
+        },
+        {
+          "id": "17c71684-9d05-4b7f-9d54-a412f99d3926",
+          "symbol": "COHR",
+          "action": "buy",
+          "date": "2024-10-01",
+          "shares": null,
+          "price": null,
+          "notes": "Initial position \u2014 Coherent Corp; optical transceivers (exited Q1 2026)"
+        },
+        {
+          "id": "78e76fa5-8921-4a4c-901f-cd7fe6fef689",
+          "symbol": "BE",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 408500,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Bloom Energy calls $55M notional; bullish leverage on $878M common"
+        },
+        {
+          "id": "75bd9e0a-9e1f-4467-91dd-79d32bfd78db",
+          "symbol": "SNDK",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 611900,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 SanDisk calls $389M notional; additional leverage on top of $724M common"
+        },
+        {
+          "id": "3f5c4ec1-0bd0-466e-897d-3687fcb1d9cc",
+          "symbol": "CRWV",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1814500,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 CoreWeave calls $141M notional (reduced 83%; rotated to common)"
+        },
+        {
+          "id": "caba7e50-31c6-40b4-a954-ab9c31d748b9",
+          "symbol": "IREN",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 11698835,
+          "price": 34.28,
+          "notes": "13F Q1 2026 \u2014 IREN Ltd; Bitcoin miner pivoting to AI hosting"
+        },
+        {
+          "id": "3190d7e0-8db9-4107-8903-7387409055f6",
+          "symbol": "CORZ",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 26008473,
+          "price": 14.96,
+          "notes": "13F Q1 2026 \u2014 Core Scientific; BTC miner / AI hosting (trimmed)"
+        },
+        {
+          "id": "223f2176-81bb-46ae-9abb-7ace6ccdfa32",
+          "symbol": "APLD",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 13478438,
+          "price": 23.74,
+          "notes": "13F Q1 2026 \u2014 Applied Digital; AI infrastructure & HPC data centers"
+        },
+        {
+          "id": "8ec4a515-686a-4828-bb41-4ccba8ba3278",
+          "symbol": "RIOT",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 11502137,
+          "price": 12.36,
+          "notes": "13F Q1 2026 \u2014 Riot Platforms; Bitcoin miner with stranded power assets"
+        },
+        {
+          "id": "b44d3316-d902-4864-bd1e-6e3926fd7bc9",
+          "symbol": "CLSK",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 12276139,
+          "price": 8.51,
+          "notes": "13F Q1 2026 \u2014 CleanSpark; BTC miner pivoting to AI hosting (+648%)"
+        },
+        {
+          "id": "07c64625-73b8-4f30-be0a-3a7cf532803f",
+          "symbol": "SEI",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1105551,
+          "price": 56.5,
+          "notes": "13F Q1 2026 \u2014 Solaris Energy Infrastructure; mobile turbine/on-site power for data centers"
+        },
+        {
+          "id": "589d6aed-2cf3-430d-b2b0-16e73a928ab0",
+          "symbol": "TE",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 10000000,
+          "price": 4.39,
+          "notes": "13F Q1 2026 \u2014 T1 Energy; solar/battery manufacturer NEW"
+        },
+        {
+          "id": "e7093338-52ad-475f-a05b-df5e8f6e029a",
+          "symbol": "BITF",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 19875840,
+          "price": 1.95,
+          "notes": "13F Q1 2026 \u2014 Bitfarms/Keel Infrastructure; rebranded April 2026 (+188%)"
+        },
+        {
+          "id": "acd6c331-89c6-4366-9dd0-d94daa317439",
+          "symbol": "BTDR",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 3439450,
+          "price": 8.65,
+          "notes": "13F Q1 2026 \u2014 Bitdeer Technologies; mining and AI compute hosting"
+        },
+        {
+          "id": "de653ed3-be62-4dc6-8b2e-e5bdedfccf42",
+          "symbol": "PSIX",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 432300,
+          "price": 60.89,
+          "notes": "13F Q1 2026 \u2014 Power Solutions International; industrial/on-site power"
+        },
+        {
+          "id": "9a16ff67-a6db-4591-96f7-7da8567f6a2d",
+          "symbol": "WYFI",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1757600,
+          "price": 11.91,
+          "notes": "13F Q1 2026 \u2014 WhiteFiber; IT services"
+        },
+        {
+          "id": "c6c1d9c6-fc52-4332-9f7e-6f67b171ffb0",
+          "symbol": "BW",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1353900,
+          "price": 14.69,
+          "notes": "13F Q1 2026 \u2014 Babcock & Wilcox; power equipment/heating"
+        },
+        {
+          "id": "554fa9f7-8229-467e-98c0-2e2c21ba36d9",
+          "symbol": "SHAZ",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 796108,
+          "price": 22.74,
+          "notes": "13F Q1 2026 \u2014 SharonAI Holdings; AI infrastructure services NEW"
+        },
+        {
+          "id": "35cb3bfe-16fe-4447-b6b7-e4666aa8040c",
+          "symbol": "PUMP",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 910300,
+          "price": 14.41,
+          "notes": "13F Q1 2026 \u2014 ProPetro Holding; oil & gas field services"
+        },
+        {
+          "id": "44ab27da-b968-4c9d-a3fa-da6e5c791c5d",
+          "symbol": "HIVE",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 3391547,
+          "price": 1.9,
+          "notes": "13F Q1 2026 \u2014 Hive Digital Technologies; crypto mining \u2192 AI/HPC hosting NEW"
+        },
+        {
+          "id": "2abb66e5-3c81-4d87-9a3a-90e34a8951e0",
+          "symbol": "MU",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1250000,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Micron calls $422M notional; two-way vol bet (also holds puts)"
+        },
+        {
+          "id": "c9e37183-c867-4b45-8b96-6f3aa39dad30",
+          "symbol": "TSM",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 1050000,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Taiwan Semi calls $355M notional; two-way vol bet (also holds puts)"
+        },
+        {
+          "id": "d05badb5-0061-4bb6-bb1c-ce352a8b95cf",
+          "symbol": "SMH",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 5327900,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 VanEck Semiconductor ETF PUTS $2.04B notional; portfolio-level semiconductor hedge NEW"
+        },
+        {
+          "id": "762763be-43ae-4a05-8ec1-8293f0107691",
+          "symbol": "NVDA",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 8992300,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Nvidia PUTS $1.57B notional; bearish on dominant AI chip name NEW"
+        },
+        {
+          "id": "4fd6929f-4952-4458-82d8-1355dad1a5cf",
+          "symbol": "ORCL",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 7293000,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Oracle PUTS $1.07B notional; AI cloud premium overpriced NEW"
+        },
+        {
+          "id": "506b4a3f-f923-4194-b14a-8bec9ae8a37b",
+          "symbol": "AVGO",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 3251100,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Broadcom PUTS $1.01B notional; hedge on AI ASIC/networking NEW"
+        },
+        {
+          "id": "7731d3fb-a88d-45cf-be3b-3c8604d3f147",
+          "symbol": "AMD",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 4764100,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 AMD PUTS $969M notional; net negative on AMD despite small common NEW"
+        },
+        {
+          "id": "81926a4a-35cf-427b-ac71-db9b5f3cc509",
+          "symbol": "MU",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 1727700,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Micron PUTS $584M notional; volatility play (also holds calls)"
+        },
+        {
+          "id": "f80a76b5-ec60-428b-ac48-2456d77d46e1",
+          "symbol": "TSM",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 1583400,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Taiwan Semi PUTS $535M notional; volatility + geopolitics NEW"
+        },
+        {
+          "id": "7d641f71-8e9a-424d-812c-78dac47af043",
+          "symbol": "ASML",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 374100,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 ASML PUTS $494M notional; sole EUV maker valuation hedge NEW"
+        },
+        {
+          "id": "2320851c-8f5b-4f82-bb8a-962e754e8aa5",
+          "symbol": "INTC",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 3605400,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Intel PUTS $159M notional; net negative after unwinding prior call options NEW"
+        },
+        {
+          "id": "2e38512c-7728-4de2-b1d0-b3f8f5503c81",
+          "symbol": "GLW",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 154600,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Corning PUTS $21M notional; optical fiber chip-adjacent hedge NEW"
+        },
+        {
+          "id": "42e1b26c-bc0d-4377-bfbf-249def4880ae",
+          "symbol": "INFY",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 500000,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Infosys PUTS $6.76M notional; bearish on Indian IT exposure to AI displacement"
+        },
+        {
+          "id": "b9e9a746-ae75-48c9-8f7a-0d198fd2b465",
+          "symbol": "LITE",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 1298400,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Lumentum Holdings; optical comms; full exit (was 8.68%)"
+        },
+        {
+          "id": "0d531982-3231-4e0a-b4f8-64eb071821d2",
+          "symbol": "COHR",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 480300,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Coherent Corp; optical transceivers; full exit"
+        },
+        {
+          "id": "68dbdc11-2717-45be-9ea1-ed54f33c8920",
+          "symbol": "HUT",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 860200,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Hut 8 Corp; crypto miner; full exit"
+        },
+        {
+          "id": "328d5102-5a40-4a93-86e3-e4e5968e0cb2",
+          "symbol": "TSEM",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 723004,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Tower Semiconductor; specialty foundry; full exit"
+        },
+        {
+          "id": "8ba1b1e2-ee7f-4ba5-b004-1ae7080de130",
+          "symbol": "CIFR",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 10469093,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Cipher Mining; crypto miner; full exit"
+        },
+        {
+          "id": "2bdae44c-9b92-435b-877a-ba51943a82ad",
+          "symbol": "EQT",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 2482225,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 EQT Corporation; natural gas producer; full exit"
+        },
+        {
+          "id": "0b4acb92-3e9d-4699-8a15-2f19b6f29ddc",
+          "symbol": "KRC",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 1327700,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Kilroy Realty; REIT; full exit"
+        },
+        {
+          "id": "9ac722a9-b6d5-41ac-897a-6d2100ef65e0",
+          "symbol": "LBRT",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 567200,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Liberty Energy; oilfield services; full exit"
+        },
+        {
+          "id": "70ac22b1-3cb7-400d-bbfb-6ddc0ac15c55",
+          "symbol": "SMH",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 5327900.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): VanEck ETF Trust holding reported as Put; tool-parsed 13F position, filing-date used as snapshot date."
+        },
+        {
+          "id": "0e911e25-b73e-49cc-b5ac-ce68a6624a7e",
+          "symbol": "NVDA",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 8992300.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): NVIDIA Corporation holding reported as Put; filing-date snapshot."
+        },
+        {
+          "id": "b5f73ef9-8386-45d0-8636-d41592d35182",
+          "symbol": "ORCL",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 7293000.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Oracle Corp holding reported as Put; filing-date snapshot."
+        },
+        {
+          "id": "de071436-94be-4b3a-9fd9-c9da0821458e",
+          "symbol": "AVGO",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 3251100.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Broadcom Inc holding reported as Put; filing-date snapshot."
+        },
+        {
+          "id": "02c69468-6d23-4d76-9bf3-87f7a0ed2b70",
+          "symbol": "AMD",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 4764100.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Advanced Micro Devices Inc holding reported as Put; filing-date snapshot."
+        },
+        {
+          "id": "638d144e-418f-45bf-9461-a78d7f4b8c80",
+          "symbol": "BE",
+          "action": "buy",
+          "date": "2026-05-18",
+          "shares": 6485408.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Bloom Energy Corp common stock Long; filing-date snapshot."
+        },
+        {
+          "id": "8243ef85-4e3c-4cbd-a819-eef01b4fb897",
+          "symbol": "SNDK",
+          "action": "buy",
+          "date": "2026-05-18",
+          "shares": 1140119.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): SanDisk Corp common stock Long; filing-date snapshot."
+        },
+        {
+          "id": "e9a172b8-b63f-4805-849c-1ce370f2ca08",
+          "symbol": "MU",
+          "action": "sell",
+          "date": "2026-05-18",
+          "shares": 1727700.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Micron Technology Inc holding reported as Put; filing-date snapshot."
+        },
+        {
+          "id": "9e19857a-2c3b-421e-b15f-54660609820b",
+          "symbol": "CRWV",
+          "action": "buy",
+          "date": "2026-05-18",
+          "shares": 7177919.0,
+          "price": null,
+          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): CoreWeave Inc common stock Long; filing-date snapshot."
+        }
+      ],
+      "slug": "LeopoldAschenbrenner"
+    },
+    {
+      "id": "25328121-e1b2-4af5-8b89-61cc71bdfc52",
+      "name": "Donald Trump",
+      "bio": "",
+      "transactions": [
+        {
+          "id": "d487a645-ea7c-4b33-865c-cf0560852aab",
+          "symbol": "DJT",
+          "action": "buy",
+          "date": "2024-04-26",
+          "shares": 114750000.0,
+          "price": null,
+          "notes": "Primary SEC Schedule 13D/A filed 2024-04-30 by Donald J. Trump for Trump Media & Technology Group Corp. (CUSIP 25400Q105): reports 114,750,000 shares of common stock beneficially owned (64.9%) as of April 26, 2024 event date; includes merger/earnout-related holdings, not necessarily an open-market purchase.",
+          "position_type": "long"
+        }
+      ],
+      "slug": "DonaldTrump"
+    },
+    {
+      "id": "0cc80829-d972-4c10-8daf-14499c2c0328",
+      "name": "Elon Musk",
+      "bio": "",
+      "transactions": [],
+      "slug": "ElonMusk"
+    },
+    {
+      "id": "0b047577-161f-447c-917b-3154f70cedef",
+      "slug": "PeterLynch",
+      "name": "Peter Lynch",
+      "bio": "",
+      "transactions": []
+    }
+  ]
+}

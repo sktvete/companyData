@@ -10,19 +10,36 @@
 </head>
 <style>
   :root{
-    --bg:#0b0f19;--card:#111827;--muted:#1a2332;--fg:#cbd5e1;
+    --bg:#0b0f19;--card:#111827;--muted:#1a2332;--fg:#e8edf4;
     --accent:#3b82f6;--accent2:#06b6d4;--accent3:#22c55e;
-    --border:#1e2d3d;--dim:#475569;
+    --border:#1e2d3d;--dim:#8899aa;
     --pos:#22c55e;--neg:#ef4444;--warn:#f59e0b;
   }
   *{box-sizing:border-box}
   body{background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',monospace}
   .card{background:var(--card);border:1px solid var(--border);border-radius:3px}
   .card:hover{border-color:rgba(59,130,246,.4);transition:border-color .15s}
-  .stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid rgba(30,45,61,.7);font-size:.78rem}
+  .stat-row{display:flex;justify-content:space-between;padding:.4rem 0;border-bottom:1px solid rgba(30,45,61,.7);font-size:.82rem}
   .stat-row:last-child{border:none}
   .stat-label{color:var(--dim);letter-spacing:.04em}
-  .has-tip,[title].stat-label,.section-h[title],.tech-tag[title]{cursor:help;border-bottom:1px dotted rgba(71,85,105,.55)}
+  /* metric drag-to-overlay */
+  .stat-row[draggable="true"]{cursor:grab;transition:background .1s}
+  .stat-row[draggable="true"]:hover{background:rgba(59,130,246,.07);border-radius:2px;margin:0 -.4rem;padding:.4rem .4rem}
+  .stat-row[draggable="true"]:active{cursor:grabbing}
+  .drag-label-group{display:inline-flex;align-items:center;gap:.3rem}
+  .stat-row[draggable="true"] .drag-grip{opacity:.3;font-size:.65rem;pointer-events:none}
+  .stat-row[draggable="true"]:hover .drag-grip{opacity:.7}
+  .stat-row.dragging{opacity:.35}
+  .price-chart-pane.drag-over::after{content:'Drop to overlay on chart';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:.78rem;color:var(--accent);border:2px dashed var(--accent);border-radius:2px;background:rgba(59,130,246,.06);pointer-events:none;z-index:10;letter-spacing:.06em}
+  #overlayChips{position:absolute;top:.4rem;left:.5rem;z-index:5;display:flex;flex-wrap:wrap;gap:.3rem;pointer-events:none}
+  .overlay-chip{display:inline-flex;align-items:center;gap:.3rem;padding:.15rem .45rem;font-size:.6rem;font-weight:600;letter-spacing:.04em;border-radius:2px;border:1px solid;line-height:1.5;pointer-events:auto}
+  .overlay-chip .chip-remove{background:none;border:none;cursor:pointer;padding:0 0 0 .1rem;line-height:1;opacity:.6;font-size:.8rem;color:inherit;display:inline-flex;align-items:center}
+  .overlay-chip .chip-remove:hover{opacity:1}
+  .has-tip,[title].stat-label,.section-h[title],.tech-tag[title]:not(.tech-draggable){cursor:help;border-bottom:1px dotted rgba(71,85,105,.55)}
+  .tech-tag.tech-draggable{cursor:grab;user-select:none;border-bottom:1px dotted rgba(71,85,105,.55)}
+  .tech-tag.tech-draggable:hover{color:var(--fg)}
+  .tech-tag.tech-draggable.dragging{opacity:.35}
+  .tech-tag.tech-draggable::before{content:'⠿ ';opacity:.35;font-size:.55rem}
   .badge{display:inline-block;padding:.1rem .4rem;font-size:.6rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:2px}
   .badge-excellent{background:rgba(34,197,94,.1);color:#4ade80;border:1px solid rgba(34,197,94,.3)}
   .badge-good     {background:rgba(59,130,246,.1);color:#60a5fa;border:1px solid rgba(59,130,246,.3)}
@@ -64,14 +81,14 @@
   .gchat-foot textarea{width:100%;min-height:3.2rem;padding:.35rem;font-size:.72rem;resize:vertical}
   .gchat-foot button{background:var(--accent);color:#fff;font-weight:700;padding:.35rem .6rem;border:none;cursor:pointer;font-size:.65rem;letter-spacing:.05em;border-radius:3px}
   .gchat-foot button:disabled{opacity:.4;cursor:not-allowed}
-  .gchat-hint{font-size:.58rem;color:var(--dim);line-height:1.35}
+  .gchat-hint{font-size:.65rem;color:var(--dim);line-height:1.35}
   .gchat-auth{padding:.5rem .65rem;border-bottom:1px solid var(--border);display:none}
   .gchat-auth.show{display:block}
   .gchat-auth button{width:100%;background:linear-gradient(135deg,#10a37f,#0d8a6a);color:#fff;font-weight:700;padding:.45rem;border:none;border-radius:4px;cursor:pointer;font-size:.68rem;letter-spacing:.04em}
   .gchat-auth button:disabled{opacity:.5;cursor:not-allowed}
-  .gchat-signed{font-size:.58rem;color:var(--pos);margin-top:.35rem;display:none}
+  .gchat-signed{font-size:.65rem;color:var(--pos);margin-top:.35rem;display:none}
   .gchat-signed.show{display:block}
-  .section-h{color:var(--dim);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.65rem;font-family:'JetBrains Mono',monospace}
+  .section-h{color:var(--dim);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.65rem;font-family:'JetBrains Mono',monospace}
   .run-btn{background:transparent;color:var(--accent);border:1px solid rgba(59,130,246,.4);padding:.35rem .85rem;font-size:.72rem;font-family:'JetBrains Mono',monospace;font-weight:600;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;border-radius:2px}
   .run-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
   #msKeyInput:focus{border-color:var(--accent);outline:none}
@@ -82,10 +99,10 @@
   .ms-tool-line{display:flex;align-items:center;gap:.45rem;padding:.18rem 0;font-size:.65rem;color:var(--dim);font-family:'JetBrains Mono',monospace;opacity:.85}
   .ms-tool-badge{background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.3);color:var(--accent);padding:.05rem .35rem;border-radius:2px;font-size:.6rem;letter-spacing:.04em}
   .ms-tool-sym{color:var(--dim);font-size:.6rem}
-  .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.58rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
+  .rbtn{background:transparent;color:var(--dim);border:1px solid transparent;padding:.15rem .4rem;font-size:.65rem;font-family:'JetBrains Mono',monospace;font-weight:600;letter-spacing:.03em;cursor:pointer;border-radius:2px;transition:all .12s}
   .rbtn:hover{color:var(--fg);background:var(--muted)}
   .rbtn.active{color:var(--accent);background:rgba(59,130,246,.12);border-color:rgba(59,130,246,.35)}
-  .reports-toggle{display:inline-flex;align-items:center;gap:.45rem;margin-left:.4rem;padding:.18rem .5rem .18rem .35rem;font-size:.58rem;font-weight:600;letter-spacing:.03em;color:var(--dim);cursor:pointer;border:1px solid var(--border);border-radius:3px;user-select:none;vertical-align:middle;transition:border-color .12s,background .12s,color .12s}
+  .reports-toggle{display:inline-flex;align-items:center;gap:.45rem;margin-left:.4rem;padding:.18rem .5rem .18rem .35rem;font-size:.65rem;font-weight:600;letter-spacing:.03em;color:var(--dim);cursor:pointer;border:1px solid var(--border);border-radius:3px;user-select:none;vertical-align:middle;transition:border-color .12s,background .12s,color .12s}
   .reports-toggle:hover{color:var(--fg);border-color:rgba(148,163,184,.35);background:rgba(26,35,50,.6)}
   .reports-toggle.active{color:#fbbf24;border-color:rgba(245,158,11,.5);background:rgba(245,158,11,.1)}
   .reports-toggle-input{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
@@ -103,8 +120,8 @@
   .ms-conf-medium{color:var(--warn);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.07)}
   .ms-conf-low{color:var(--neg);border-color:rgba(239,68,68,.35);background:rgba(239,68,68,.07)}
   .ms-flag-high{color:#f87171}.ms-flag-medium{color:#fbbf24}.ms-flag-low{color:var(--dim)}
-  .ms-list{list-style:disc;padding-left:1.1rem;font-size:.82rem;line-height:1.75;color:#94a3b8}.ms-list li{margin-bottom:.35rem}
-  .ms-toggle{cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.63rem;color:var(--dim);padding:.35rem 0;letter-spacing:.06em;text-transform:uppercase;user-select:none}
+  .ms-list{list-style:disc;padding-left:1.1rem;font-size:.85rem;line-height:1.75;color:#b8c4d0}.ms-list li{margin-bottom:.35rem}
+  .ms-toggle{cursor:pointer;display:flex;align-items:center;gap:.4rem;font-size:.68rem;color:var(--dim);padding:.35rem 0;letter-spacing:.06em;text-transform:uppercase;user-select:none}
   .ms-toggle:hover{color:var(--fg)}.ms-toggle-icon{font-size:.65rem;transition:transform .15s;display:inline-block}
   #chartPrice{cursor:crosshair}
   #chartPrice.reports-hit{cursor:pointer}
@@ -114,21 +131,31 @@
   .price-range-row{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-bottom:.25rem}
   .price-chart-stack{padding:0 .75rem .5rem;overflow:visible;display:flex;flex-direction:column;flex:1;min-height:0}
   .price-chart-pane,.vol-chart-pane{overflow:hidden;position:relative}
-  .price-chart-pane{flex:1 1 auto;min-height:clamp(280px,42vh,520px);height:clamp(280px,42vh,520px)}
+  .price-chart-pane{flex:1 1 auto;min-height:clamp(240px,36vh,440px);height:clamp(240px,36vh,440px)}
   .price-chart-pane canvas,.vol-chart-pane canvas{width:100%!important;height:100%!important;max-height:none!important}
-  .vol-chart-pane{flex:0 0 auto;height:clamp(56px,9vh,88px)}
-  /* Price chart beside financials: grow chart to match the taller column */
+  .vol-chart-pane{flex:0 0 auto;height:clamp(48px,7vh,72px)}
+  .price-fin-stack .price-chart-card{display:flex;flex-direction:column}
   @media (min-width:1024px){
-    .price-fin-row{align-items:stretch}
-    .price-fin-row .price-chart-card{display:flex;flex-direction:column;min-height:100%}
-    .price-fin-row .price-chart-stack{flex:1 1 auto;min-height:0}
-    .price-fin-row .price-chart-pane{
-      flex:1 1 auto;
-      min-height:clamp(360px,54vh,720px);
-      height:auto;
-      max-height:none;
+    .price-fin-stack .price-chart-pane{
+      min-height:clamp(260px,40vh,560px);
+      height:clamp(260px,40vh,560px);
     }
-    .price-fin-row .vol-chart-pane{flex:0 0 clamp(52px,7vh,76px);height:clamp(52px,7vh,76px)}
+    .price-fin-stack .vol-chart-pane{flex:0 0 clamp(48px,6vh,68px);height:clamp(48px,6vh,68px)}
+  }
+  .fin-panel-grid{
+    display:grid;
+    grid-template-columns:repeat(4, minmax(0, 1fr));
+    gap:0 1.5rem;
+    align-items:start;
+  }
+  .fin-panel-col{display:flex;flex-direction:column;min-width:0}
+  .fin-panel-col .stat-row:last-child{border:none}
+  .fin-panel-col .stat-row[draggable="true"]:hover{margin:0;padding:.4rem .25rem}
+  @media (max-width:1023px){
+    .fin-panel-grid{grid-template-columns:repeat(2, minmax(0, 1fr));row-gap:1rem}
+  }
+  @media (max-width:639px){
+    .fin-panel-grid{grid-template-columns:1fr}
   }
   #priceHover{
     display:none;pointer-events:none;flex:0 1 auto;align-self:flex-start;min-width:0;max-width:min(100%,22rem);
@@ -138,12 +165,13 @@
   #hoverDate{color:var(--fg);font-weight:600;margin-bottom:.2rem;font-size:.62rem}
   #hoverPrice{color:var(--fg);letter-spacing:.02em;white-space:normal;word-break:break-word}
   #hoverVol{margin-top:.15rem}
+  #hoverOverlay{margin-top:.25rem;padding-top:.25rem;border-top:1px solid rgba(30,45,61,.7);font-size:.58rem;line-height:1.45}
+  #hoverOverlay:empty{display:none}
 </style>
 <body class="min-h-screen">
 <nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
   <div class="flex items-center gap-3 flex-wrap">
-    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.06em;color:var(--fg)">Equity<span style="color:var(--accent)">OS</span></span>
+    <a href="/" style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.08em;color:var(--accent2);text-decoration:none">MOON<span style="color:var(--fg)">STOCKS</span></a>
     <a href="/" class="run-btn" style="padding:.25rem .55rem;font-size:.62rem">&larr; Dashboard</a>
     <span style="color:var(--border);font-size:.7rem">/</span>
     <span style="font-weight:700;font-size:.8rem;color:var(--accent);letter-spacing:.04em">{{ company.symbol }}</span>
@@ -401,29 +429,30 @@
     </div>
   </div>
 
-  <!-- Stock price + Financials row -->
+  <!-- Stock price + Financials (stacked: chart full width, financials below) -->
   {% set m = company.financial_metrics %}
   {% set ci = company.company_info %}
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6 price-fin-row">
+  <div class="price-fin-stack mb-6">
 
-    <!-- Left: Stock price chart (2 cols wide) -->
-    <div class="card lg:col-span-2 price-chart-card" style="padding:0">
+    <!-- Stock price chart (full width) -->
+    <div class="card price-chart-card mb-4" style="padding:0">
       <!-- Price header -->
       <div class="price-toolbar">
         <div class="price-toolbar-main">
           <div class="price-range-row">
             <span class="section-h" style="margin-bottom:0">{{ company.symbol }}</span>
             <div id="rangeBar" style="display:flex;flex-wrap:wrap;gap:2px">
+              {% set _d = company.ipo_days | default(99999) %}
               <button class="rbtn" data-r="1d" title="Last ~2 sessions, 1-minute bars">1D</button>
               <button class="rbtn" data-r="1w" title="~200 daily bars (EOD)">1W</button>
               <button class="rbtn" data-r="1m">1M</button>
-              <button class="rbtn" data-r="3m">3M</button>
-              <button class="rbtn" data-r="6m">6M</button>
+              {% if _d >= 90 %}<button class="rbtn" data-r="3m">3M</button>{% endif %}
+              {% if _d >= 180 %}<button class="rbtn" data-r="6m">6M</button>{% endif %}
               <button class="rbtn" data-r="ytd" title="{{ G.ytd }}">YTD</button>
-              <button class="rbtn active" data-r="1y">1Y</button>
-              <button class="rbtn" data-r="3y">3Y</button>
-              <button class="rbtn" data-r="5y">5Y</button>
-              <button class="rbtn" data-r="10y">10Y</button>
+              {% if _d >= 365 %}<button class="rbtn {% if _d < 365*3 %}active{% endif %}" data-r="1y">1Y</button>{% endif %}
+              {% if _d >= 365*3 %}<button class="rbtn {% if _d < 365*5 %}active{% endif %}" data-r="3y">3Y</button>{% endif %}
+              {% if _d >= 365*5 %}<button class="rbtn {% if _d < 365*10 %}active{% endif %}" data-r="5y">5Y</button>{% endif %}
+              {% if _d >= 365*10 %}<button class="rbtn active" data-r="10y">10Y</button>{% endif %}
               <button class="rbtn" data-r="max">Max</button>
               <label id="reportsToggleLbl" class="reports-toggle" title="Quarterly SEC filings on the price line — click a dot to open the 10-Q/10-K filing">
                 <input type="checkbox" id="toggleQuarterlyReports" class="reports-toggle-input"/>
@@ -451,11 +480,13 @@
           <div id="hoverDate"></div>
           <div id="hoverPrice"></div>
           <div id="hoverVol"></div>
+          <div id="hoverOverlay"></div>
         </div>
       </div>
       <!-- Price + volume (shared horizontal plot width) -->
       <div class="price-chart-stack">
         <div class="price-chart-pane" style="position:relative">
+          <div id="overlayChips"></div>
           <canvas id="chartPrice"></canvas>
         </div>
         <div class="vol-chart-pane" style="position:relative">
@@ -467,47 +498,56 @@
       <div class="flex flex-wrap gap-x-5 gap-y-1 px-4 py-2" style="font-size:.62rem;color:var(--dim);border-top:1px solid var(--border)">
         <span class="tech-tag" title="{{ G.w52_high }}">52W High <b style="color:var(--pos)">{{ company.technicals.high_52w or '–' }}</b></span>
         <span class="tech-tag" title="{{ G.w52_low }}">52W Low <b style="color:var(--neg)">{{ company.technicals.low_52w or '–' }}</b></span>
-        <span class="tech-tag" title="{{ G.dma50 }}">50 DMA <b>{{ company.technicals.ma_50 or '–' }}</b></span>
-        <span class="tech-tag" title="{{ G.dma200 }}">200 DMA <b>{{ company.technicals.ma_200 or '–' }}</b></span>
+        <span class="tech-tag tech-draggable" draggable="true" data-metric="ma50" title="Drag onto price chart to overlay 50-day moving average">50 DMA <b>{{ company.technicals.ma_50 or '–' }}</b></span>
+        <span class="tech-tag tech-draggable" draggable="true" data-metric="ma200" title="Drag onto price chart to overlay 200-day moving average">200 DMA <b>{{ company.technicals.ma_200 or '–' }}</b></span>
         <span class="tech-tag" title="{{ G.beta }}">Beta <b>{{ company.technicals.beta or '–' }}</b></span>
       </div>
     </div>
 
-    <!-- Right: Financials summary (scan TTM until /history loads; then EODHD TTM + filed FY label) -->
+    <!-- Financials summary (horizontal grid below chart) -->
     <div class="card p-5 fin-panel-card">
       <div class="section-h">Financials</div>
       <div id="finBasisNote" style="display:none;font-size:.62rem;color:var(--dim);margin:-.25rem 0 .5rem;line-height:1.35"></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.revenue }}">Revenue</span><span id="finRevenue" style="font-weight:600">{{ m.revenue_fmt }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.net_income }}">Net Income</span><span id="finNetIncome" style="font-weight:600">{{ m.net_income_fmt }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.cfo }}">Operating CF (CFO)</span><span id="finCFO" style="font-weight:600;color:var(--accent2)">{{ m.operating_cash_flow_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.capex }}">CapEx</span><span id="finCapEx">{{ m.capital_expenditure_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.fcf }}">Free Cash Flow</span><span id="finFCF" style="font-weight:600">{{ m.free_cash_flow_fmt or '–' }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.gross_margin }}">Gross Margin</span><span id="finGrossMargin">{{ '%.1f'|format(m.gross_margin_pct) }}%</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.net_margin }}">Net Margin</span><span id="finNetMargin">{{ '%.1f'|format(m.net_margin_pct) }}%</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.roe }}">ROE</span><span class="{{ 'bull' if m.roe_pct > 12 else '' }}">{{ '%.1f'|format(m.roe_pct) }}%</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.roic }}">ROIC</span><span class="{{ 'bull' if m.roic_pct > 12 else '' }}">{{ '%.1f'|format(m.roic_pct) }}%</span></div>
-      <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span><span id="finPE">{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="Price ÷ next fiscal year consensus EPS estimate">Forward P/E</span><span id="finFwdPE">{% if m.forward_pe %}{{ '%.1f'|format(m.forward_pe) }}{% else %}–{% endif %}</span></div>
-      <div class="stat-row">
-        <span class="stat-label" title="{{ G.peg }}">PEG</span>
-        {% if m.lynch_peg %}
-        <span title="P/E {{ '%.1f'|format(m.pe_ratio or 0) }} ÷ {{ m.lynch_peg.growth_pct }}% — {{ m.lynch_peg.basis }}">{{ '%.2f'|format(m.lynch_peg.value) }}</span>
-        {% else %}
-        <span style="color:var(--dim)">N/A</span>
-        {% endif %}
+      <div class="fin-panel-grid">
+        <div class="fin-panel-col">
+          <div class="stat-row" draggable="true" data-metric="revenue_usd" title="Drag onto price chart to overlay Revenue"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.revenue }}">Revenue</span></span><span id="finRevenue" style="font-weight:600">{{ m.revenue_fmt }}</span></div>
+          <div class="stat-row" draggable="true" data-metric="net_income_usd" title="Drag onto price chart to overlay Net Income"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.net_income }}">Net Income</span></span><span id="finNetIncome" style="font-weight:600">{{ m.net_income_fmt }}</span></div>
+          <div class="stat-row" draggable="true" data-metric="ocf_usd" title="Drag onto price chart to overlay Operating CF"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.cfo }}">Operating CF (CFO)</span></span><span id="finCFO" style="font-weight:600;color:var(--accent2)">{{ m.operating_cash_flow_fmt or '–' }}</span></div>
+          <div class="stat-row" draggable="true" data-metric="capex_usd" title="Drag onto price chart to overlay CapEx"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.capex }}">CapEx</span></span><span id="finCapEx">{{ m.capital_expenditure_fmt or '–' }}</span></div>
+          <div class="stat-row" draggable="true" data-metric="fcf_usd" title="Drag onto price chart to overlay Free Cash Flow"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.fcf }}">Free Cash Flow</span></span><span id="finFCF" style="font-weight:600">{{ m.free_cash_flow_fmt or '–' }}</span></div>
+        </div>
+        <div class="fin-panel-col">
+          <div class="stat-row" draggable="true" data-metric="gross_margin_pct" title="Drag onto price chart to overlay Gross Margin"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.gross_margin }}">Gross Margin</span></span><span id="finGrossMargin">{{ '%.1f'|format(m.gross_margin_pct) }}%</span></div>
+          <div class="stat-row" draggable="true" data-metric="net_margin_pct" title="Drag onto price chart to overlay Net Margin"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.net_margin }}">Net Margin</span></span><span id="finNetMargin">{{ '%.1f'|format(m.net_margin_pct) }}%</span></div>
+          <div class="stat-row" draggable="true" data-metric="roe_pct" title="Drag onto price chart to overlay ROE"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.roe }}">ROE</span></span><span class="{{ 'bull' if m.roe_pct > 12 else '' }}">{{ '%.1f'|format(m.roe_pct) }}%</span></div>
+          <div class="stat-row" draggable="true" data-metric="eps" title="Drag onto price chart to overlay EPS"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.eps }}">EPS</span></span><span id="finEPS" style="font-weight:600">–</span></div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.roic }}">ROIC</span><span class="{{ 'bull' if m.roic_pct > 12 else '' }}">{{ '%.1f'|format(m.roic_pct) }}%</span></div>
+        </div>
+        <div class="fin-panel-col">
+          <div class="stat-row" draggable="true" data-metric="pe_ratio" title="Drag onto price chart to overlay P/E Ratio"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.pe }}">P/E Ratio</span></span><span id="finPE">{{ '%.1f'|format(m.pe_ratio or 0) }}</span></div>
+          <div class="stat-row"><span class="stat-label" title="Price ÷ next fiscal year consensus EPS estimate">Forward P/E</span><span id="finFwdPE">{% if m.forward_pe %}{{ '%.1f'|format(m.forward_pe) }}{% else %}–{% endif %}</span></div>
+          <div class="stat-row">
+            <span class="stat-label" title="{{ G.peg }}">PEG</span>
+            {% if m.lynch_peg %}
+            <span title="P/E {{ '%.1f'|format(m.pe_ratio or 0) }} ÷ {{ m.lynch_peg.growth_pct }}% — {{ m.lynch_peg.basis }}">{{ '%.2f'|format(m.lynch_peg.value) }}</span>
+            {% else %}
+            <span style="color:var(--dim)">N/A</span>
+            {% endif %}
+          </div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.ev_ebitda }}">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
+          <div class="stat-row" draggable="true" data-metric="fcf_yield" title="Drag onto price chart to overlay FCF Yield"><span class="drag-label-group"><span class="drag-grip">⠿</span><span class="stat-label" title="{{ G.fcf_yield }}">FCF Yield</span></span><span id="fcfYield" style="color:var(--fg)">{% if m.fcf_yield_pct and m.fcf_yield_pct > 0 %}{{ '%.1f'|format(m.fcf_yield_pct) }}%{% else %}–{% endif %}</span></div>
+        </div>
+        <div class="fin-panel-col">
+          <div class="stat-row"><span class="stat-label" title="{{ G.de }}">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.current_ratio }}">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.altman_z }}">Altman Z</span><span>{{ '%.1f'|format(m.altman_z_score or 0) }}</span></div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.piotroski }}">Piotroski</span><span>{{ m.piotroski_score or 0 }}/9</span></div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.rev_growth_1y }}">Rev Growth 1Y</span>
+            <span class="{{ 'bull' if m.revenue_growth_1y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_growth_1y_pct) }}%</span>
+          </div>
+          <div class="stat-row"><span class="stat-label" title="{{ G.oeps_cagr }}">OEPS CAGR</span><span class="{{ 'bull' if m.oeps_cagr_pct > 0 else 'bear' }}">{{ '%.1f'|format(m.oeps_cagr_pct) }}%</span></div>
+        </div>
       </div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.ev_ebitda }}">EV/EBITDA</span><span>{{ '%.1f'|format(m.ev_ebitda or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.fcf_yield }}">FCF Yield</span><span id="fcfYield" style="color:var(--fg)">{% if m.fcf_yield_pct and m.fcf_yield_pct > 0 %}{{ '%.1f'|format(m.fcf_yield_pct) }}%{% else %}–{% endif %}</span></div>
-      <div style="border-top:1px solid var(--border);margin:.6rem 0"></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.de }}">Debt / Equity</span><span>{{ '%.2f'|format(m.debt_to_equity or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.current_ratio }}">Current Ratio</span><span>{{ '%.2f'|format(m.current_ratio or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.altman_z }}">Altman Z</span><span>{{ '%.1f'|format(m.altman_z_score or 0) }}</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.piotroski }}">Piotroski</span><span>{{ m.piotroski_score or 0 }}/9</span></div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.rev_growth_1y }}">Rev Growth 1Y</span>
-        <span class="{{ 'bull' if m.revenue_growth_1y_pct > 0 else 'bear' }}">{{ '%+.1f'|format(m.revenue_growth_1y_pct) }}%</span>
-      </div>
-      <div class="stat-row"><span class="stat-label" title="{{ G.oeps_cagr }}">OEPS CAGR</span><span class="{{ 'bull' if m.oeps_cagr_pct > 0 else 'bear' }}">{{ '%.1f'|format(m.oeps_cagr_pct) }}%</span></div>
     </div>
   </div>
 
@@ -719,6 +759,7 @@ function renderAnalyst(ar) {
 let _fullHist = [];
 let _annualHist = [];
 let _ttmData = null;
+let _sharesOut = 0;
 let _ttm2Data = null;
 let _estData = [];
 let _quarterlyEstData = [];
@@ -1308,6 +1349,11 @@ async function loadHistory() {
     _fullHist = d.history || [];
     _annualHist = d.annual_history || [];
     _ttmData = d.ttm || null;
+    _sharesOut = Number(d.shares_outstanding) || 0;
+    if (_ttmData && _ttmData.eps != null) {
+      const epsEl = document.getElementById('finEPS');
+      if (epsEl) epsEl.textContent = Number(_ttmData.eps).toFixed(2);
+    }
     _ttm2Data = d.ttm2 || null;
     _cadence = d.history_cadence || 'quarterly';
     _viewMode = 'quarterly';
@@ -1431,7 +1477,7 @@ function fmtPriceDateFull(ds) {
   return _PRICE_MONTHS[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10) + ', ' + parts[0];
 }
 
-function updatePriceHover(idx) {
+function updatePriceHover(idx, hoverElems) {
   _priceHoverIdx = idx;
   const hoverBox = document.getElementById('priceHover');
   const s = _priceSeries;
@@ -1443,11 +1489,40 @@ function updatePriceHover(idx) {
   const hoverDate = document.getElementById('hoverDate');
   const hoverPr = document.getElementById('hoverPrice');
   const hoverVol = document.getElementById('hoverVol');
+  const hoverOverlay = document.getElementById('hoverOverlay');
   if (hoverDate) hoverDate.textContent = fmtPriceDateFull(s.labels[idx]);
   const ohlc = 'O ' + fmtPriceAxis(s.opens[idx]) + ' · H ' + fmtPriceAxis(s.highs[idx])
     + ' · L ' + fmtPriceAxis(s.lows[idx]) + ' · C ' + fmtPriceAxis(s.closes[idx]);
   if (hoverPr) hoverPr.textContent = ohlc;
   if (hoverVol) hoverVol.textContent = 'Vol ' + fmtVolAxis(s.volumes[idx]);
+
+  const lines = [];
+  if (priceChart) {
+    const highlighted = new Set();
+    (hoverElems || []).forEach(e => {
+      if (e.datasetIndex <= 0) return;
+      const ds = priceChart.data.datasets[e.datasetIndex];
+      const val = ds.data[e.index];
+      if (val == null || !ds.metricKey) return;
+      const def = OVERLAY_METRICS[ds.metricKey];
+      if (!def) return;
+      highlighted.add(e.datasetIndex);
+      lines.push({ label: def.label, text: def.yFmt(val), color: ds.borderColor });
+    });
+    priceChart.data.datasets.forEach((ds, di) => {
+      if (di === 0 || highlighted.has(di) || !ds.metricKey) return;
+      const val = ds.data[idx];
+      if (val == null) return;
+      const def = OVERLAY_METRICS[ds.metricKey];
+      if (!def) return;
+      lines.push({ label: def.label, text: def.yFmt(val), color: ds.borderColor });
+    });
+  }
+  if (hoverOverlay) {
+    hoverOverlay.innerHTML = lines.length
+      ? lines.map(l => `<div><span style="color:${l.color};font-weight:600">${l.label}</span> ${l.text}</div>`).join('')
+      : '';
+  }
 }
 
 function destroyPriceCharts() {
@@ -1480,11 +1555,25 @@ function clearPriceCrosshair() {
 }
 
 function handlePriceChartHover(chart, evt, elems) {
-  if (!elems.length || !pointerInChartArea(chart, evt)) {
+  if (!pointerInChartArea(chart, evt)) {
     clearPriceCrosshair();
     return;
   }
-  updatePriceHover(elems[0].index);
+  if (chart.canvas.id === 'chartPrice' && priceChart) {
+    const overlayHits = chart.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, false)
+      .filter(e => e.datasetIndex > 0);
+    if (overlayHits.length) {
+      updatePriceHover(overlayHits[0].index, overlayHits);
+      _priceHoverMouseY = evt.y;
+      if (volChart) volChart.update('none');
+      return;
+    }
+  }
+  if (!elems.length) {
+    clearPriceCrosshair();
+    return;
+  }
+  updatePriceHover(elems[0].index, elems);
   _priceHoverMouseY = evt.y;
   if (chart.canvas.id === 'chartPrice' && volChart) volChart.update('none');
   else if (chart.canvas.id === 'chartVolume' && priceChart) priceChart.update('none');
@@ -1609,7 +1698,7 @@ function renderPriceCharts(prices, range) {
       onResize: () => alignVolumeChartToPrice(),
       onHover: (evt, elems) => handlePriceChartHover(priceChart, evt, elems),
     },
-    plugins: [crosshairLinePlugin, makeQuarterlyReportsPlugin()]
+    plugins: [crosshairLinePlugin, overlayGutterPlugin, makeQuarterlyReportsPlugin()]
   });
   bindPriceChartReportClicks(ctxP);
   bindPriceCrosshairLeave(ctxP);
@@ -1640,6 +1729,7 @@ function renderPriceCharts(prices, range) {
   schedulePriceChartResize();
   bindPriceChartResizeObserver();
   updatePriceHeaderFromSeries(prices, range);
+  if (_activeOverlays && _activeOverlays.length) applyOverlaysToChart();
 }
 
 function schedulePriceChartResize() {
@@ -1653,7 +1743,7 @@ function schedulePriceChartResize() {
 let _priceChartResizeObs = null;
 function bindPriceChartResizeObserver() {
   if (_priceChartResizeObs) return;
-  const pane = document.querySelector('.price-fin-row .price-chart-pane');
+  const pane = document.querySelector('.price-chart-pane');
   if (!pane || typeof ResizeObserver === 'undefined') return;
   _priceChartResizeObs = new ResizeObserver(() => schedulePriceChartResize());
   _priceChartResizeObs.observe(pane);
@@ -1685,6 +1775,21 @@ function reportsInPriceRange(labels) {
 const _REPORT_DOT_R = 3.5;
 const _REPORT_DOT_HIT = 9;
 const _REPORT_DOT_INNER = 2.1;
+const OVERLAY_LEFT_GUTTER = 52;
+
+const overlayGutterPlugin = {
+  id: 'overlayGutter',
+  afterLayout(chart) {
+    if (chart.canvas?.id !== 'chartPrice') return;
+    const ca = chart.chartArea;
+    if (!ca) return;
+    const hasLeftOverlay = _activeOverlays.some(o => {
+      const def = OVERLAY_METRICS[o.key];
+      return def && !def.usePriceAxis;
+    });
+    if (hasLeftOverlay) ca.left = OVERLAY_LEFT_GUTTER;
+  },
+};
 
 function alignVolumeChartToPrice() {
   if (!priceChart?.chartArea || !volChart) return;
@@ -1776,7 +1881,9 @@ function bootPriceChart() {
   _priceChartBooted = true;
   const el = document.getElementById('priceLoading');
   if (el) el.style.display = 'block';
-  loadPriceChart('1y');
+  const _ipoDays = {{ company.ipo_days | default(99999) }};
+  const _defaultRange = _ipoDays < 90 ? 'max' : _ipoDays < 180 ? '1m' : _ipoDays < 365 ? '6m' : _ipoDays < 365*3 ? '1y' : _ipoDays < 365*5 ? '3y' : _ipoDays < 365*10 ? '5y' : '10y';
+  loadPriceChart(_defaultRange);
 }
 
 async function loadPriceChart(range) {
@@ -2270,10 +2377,227 @@ async function gchatSend() {
   }
   btn.disabled = false;
 }
+// ── Metric Overlay System ────────────────────────────────────────────────────
+const OVERLAY_COLORS = ['#f59e0b', '#a78bfa', '#ec4899', '#06b6d4', '#f97316', '#22c55e', '#eab308', '#14b8a6', '#f472b6', '#818cf8'];
+const OVERLAY_METRICS = {
+  pe_ratio:         { label: 'P/E',          histField: 'pe_ratio',         skipZero: true, yFmt: v => v.toFixed(0) },
+  fcf_usd:          { label: 'FCF',           histField: 'fcf_usd',          yFmt: v => _fmtOvUsd(v) },
+  capex_usd:        { label: 'CapEx',         histField: 'capex_usd',        yFmt: v => _fmtOvUsd(v) },
+  roe_pct:          { label: 'ROE',           histField: 'roe_pct',          yFmt: v => v.toFixed(0) + '%' },
+  eps:              { label: 'EPS',           histField: 'eps',              yFmt: v => '$' + v.toFixed(2) },
+  fcf_yield:        { label: 'FCF Yield',     build: _buildFcfYieldOverlay, yFmt: v => v.toFixed(1) + '%' },
+  revenue_usd:      { label: 'Revenue',       histField: 'revenue_usd',      yFmt: v => _fmtOvUsd(v) },
+  net_income_usd:   { label: 'Net Inc.',      histField: 'net_income_usd',   yFmt: v => _fmtOvUsd(v) },
+  gross_margin_pct: { label: 'Gross Margin',  histField: 'gross_margin_pct', yFmt: v => v.toFixed(0) + '%' },
+  net_margin_pct:   { label: 'Net Margin',    histField: 'net_margin_pct',   yFmt: v => v.toFixed(0) + '%' },
+  ma50:             { label: '50 DMA',        build: labels => _buildMaOverlay(labels, 50),  usePriceAxis: true },
+  ma200:            { label: '200 DMA',       build: labels => _buildMaOverlay(labels, 200), usePriceAxis: true },
+};
+function _fmtOvUsd(v) {
+  if (v == null || !Number.isFinite(v)) return '–';
+  const a = Math.abs(v), s = v < 0 ? '-' : '';
+  if (a >= 1e9) return s + '$' + (a / 1e9).toFixed(1) + 'B';
+  if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(0) + 'M';
+  return s + '$' + a.toFixed(0);
+}
+
+function _smaSeries(values, period) {
+  return values.map((_, i) => {
+    if (i < period - 1) return null;
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += values[j];
+    return sum / period;
+  });
+}
+
+function _buildMaOverlay(labels, period) {
+  if (!priceChart?.data?.datasets?.[0]?.data?.length) return null;
+  const closes = priceChart.data.datasets[0].data;
+  if (closes.length !== labels.length) return null;
+  return _smaSeries(closes, period);
+}
+
+function _buildFcfYieldOverlay(labels) {
+  const hist = (_fullHist && _fullHist.length) ? _fullHist : (_annualHist || []);
+  if (!hist.length || !_sharesOut) return null;
+  const sorted = hist.slice().sort((a, b) => (a.period_end || '').localeCompare(b.period_end || ''));
+  const rangeStart = labels[0], rangeEnd = labels[labels.length - 1];
+  const sparse = new Array(labels.length).fill(null);
+  for (let i = 0; i < sorted.length; i++) {
+    const row = sorted[i];
+    const d = row.period_end;
+    if (!d || d < rangeStart || d > rangeEnd) continue;
+    const px = Number(row.ye_price);
+    if (!px || px <= 0) continue;
+    let ttmFcf = 0, count = 0;
+    for (let j = Math.max(0, i - 3); j <= i; j++) {
+      const f = Number(sorted[j].fcf_usd);
+      if (Number.isFinite(f)) { ttmFcf += f; count++; }
+    }
+    if (count < 4) continue;
+    const mcap = px * _sharesOut;
+    if (mcap <= 0) continue;
+    sparse[indexForReportDate(labels, d)] = (ttmFcf / mcap) * 100;
+  }
+  return sparse;
+}
+
+let _activeOverlays = []; // [{key, color}]
+
+function _buildOverlayData(key, labels) {
+  const def = OVERLAY_METRICS[key];
+  if (!def || !labels || !labels.length) return null;
+  if (def.build) return def.build(labels);
+  if (!def.histField) return null;
+  const hist = (_fullHist && _fullHist.length) ? _fullHist : (_annualHist || []);
+  if (!hist.length) return null;
+  const source = (def.histField === 'roe_pct' && !hist.some(r => r.roe_pct != null) && _annualHist.length)
+    ? _annualHist : hist;
+  const rangeStart = labels[0], rangeEnd = labels[labels.length - 1];
+  const sparse = new Array(labels.length).fill(null);
+  for (const row of source) {
+    const d = row.period_end;
+    if (!d || d < rangeStart || d > rangeEnd) continue;
+    const idx = indexForReportDate(labels, d);
+    const val = row[def.histField];
+    if (val == null || !Number.isFinite(Number(val))) continue;
+    if (def.skipZero && Number(val) === 0) continue;
+    sparse[idx] = Number(val);
+  }
+  return sparse;
+}
+
+function applyOverlaysToChart() {
+  if (!priceChart || !_activeOverlays.length) return;
+  const labels = priceChart.data.labels;
+  priceChart.data.datasets = priceChart.data.datasets.slice(0, 1);
+  const newScales = {};
+  let leftAxisCount = 0;
+  _activeOverlays.forEach((ov) => {
+    const def = OVERLAY_METRICS[ov.key];
+    if (!def) return;
+    const data = _buildOverlayData(ov.key, labels);
+    if (!data || !data.some(v => v != null)) return;
+    const onPriceAxis = !!def.usePriceAxis;
+    let yId = 'y';
+    if (!onPriceAxis) {
+      const isFirstLeft = leftAxisCount === 0;
+      yId = 'y_ov' + leftAxisCount++;
+      newScales[yId] = {
+        type: 'linear',
+        position: 'left',
+        display: isFirstLeft,
+        afterFit(scale) { scale.width = isFirstLeft ? OVERLAY_LEFT_GUTTER : 0; },
+        ticks: {
+          color: ov.color,
+          font: { size: 8, family: "'JetBrains Mono', monospace" },
+          maxTicksLimit: 5,
+          callback: v => def.yFmt(v),
+        },
+        grid: { display: false },
+      };
+    }
+    priceChart.data.datasets.push({
+      label: def.label,
+      metricKey: ov.key,
+      data,
+      yAxisID: yId,
+      borderColor: ov.color,
+      backgroundColor: 'transparent',
+      pointRadius: onPriceAxis ? 0 : data.map(v => v != null ? 3 : 0),
+      pointHitRadius: onPriceAxis ? 0 : data.map(v => v != null ? 22 : 0),
+      pointBackgroundColor: ov.color,
+      pointBorderColor: '#0b0f19',
+      pointBorderWidth: 1,
+      pointHoverRadius: onPriceAxis ? 4 : 5,
+      pointHoverBackgroundColor: ov.color,
+      pointHoverBorderColor: '#0b0f19',
+      pointHoverBorderWidth: 2,
+      borderWidth: onPriceAxis ? 1.2 : 1.6,
+      borderDash: onPriceAxis ? [] : [5, 3],
+      tension: onPriceAxis ? 0.15 : 0.2,
+      spanGaps: true,
+      fill: false,
+    });
+  });
+  const scales = priceChart.options.scales;
+  for (const k of Object.keys(scales)) { if (k.startsWith('y_ov')) delete scales[k]; }
+  Object.assign(scales, newScales);
+  priceChart.update('none');
+  alignVolumeChartToPrice();
+}
+
+function removeOverlay(key) {
+  _activeOverlays = _activeOverlays.filter(o => o.key !== key);
+  renderOverlayChips();
+  if (!priceChart) return;
+  priceChart.data.datasets = priceChart.data.datasets.slice(0, 1);
+  const scales = priceChart.options.scales;
+  for (const k of Object.keys(scales)) { if (k.startsWith('y_ov')) delete scales[k]; }
+  if (_activeOverlays.length) applyOverlaysToChart();
+  else { priceChart.update('none'); alignVolumeChartToPrice(); }
+}
+
+function renderOverlayChips() {
+  const el = document.getElementById('overlayChips');
+  if (!el) return;
+  el.innerHTML = '';
+  _activeOverlays.forEach(ov => {
+    const def = OVERLAY_METRICS[ov.key];
+    if (!def) return;
+    const chip = document.createElement('div');
+    chip.className = 'overlay-chip';
+    chip.style.cssText = `color:${ov.color};border-color:${ov.color}55;background:${ov.color}18`;
+    const lbl = document.createElement('span');
+    lbl.textContent = def.label;
+    const btn = document.createElement('button');
+    btn.className = 'chip-remove';
+    btn.title = 'Remove overlay';
+    btn.innerHTML = '&times;';
+    btn.addEventListener('click', () => removeOverlay(ov.key));
+    chip.appendChild(lbl);
+    chip.appendChild(btn);
+    el.appendChild(chip);
+  });
+}
+
+function initOverlayDragAndDrop() {
+  const pane = document.querySelector('.price-chart-pane');
+  if (!pane) return;
+  document.querySelectorAll('[draggable="true"][data-metric]').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('text/plain', el.dataset.metric);
+      e.dataTransfer.effectAllowed = 'copy';
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+  });
+  pane.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    pane.classList.add('drag-over');
+  });
+  pane.addEventListener('dragleave', e => {
+    if (!pane.contains(e.relatedTarget)) pane.classList.remove('drag-over');
+  });
+  pane.addEventListener('drop', e => {
+    e.preventDefault();
+    pane.classList.remove('drag-over');
+    const key = e.dataTransfer.getData('text/plain');
+    if (!key || !OVERLAY_METRICS[key]) return;
+    if (_activeOverlays.find(o => o.key === key)) return;
+    const color = OVERLAY_COLORS[_activeOverlays.length % OVERLAY_COLORS.length];
+    _activeOverlays.push({ key, color });
+    renderOverlayChips();
+    applyOverlaysToChart();
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   _historyPayloadPromise = loadHistory();
   bootPriceChart();
   restartLiveQuotePolling();
+  initOverlayDragAndDrop();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (_liveQuoteTimer) { clearInterval(_liveQuoteTimer); _liveQuoteTimer = null; }

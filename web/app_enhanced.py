@@ -2494,6 +2494,7 @@ def _build_quarterly_history(
     shares_out: float,
     price_by_date: dict | None,
     *,
+    q_bs: dict | None = None,
     max_quarters: int = 80,
     eps_history: dict | None = None,
 ) -> list[dict]:
@@ -2530,6 +2531,12 @@ def _build_quarterly_history(
                     ye_p = row.get("ye_price")
                     if ye_p and ea > 0:
                         row["pe_ratio"] = round(ye_p / (ea * 4), 1)
+        if q_bs:
+            bs = q_bs.get(period_end, {})
+            eq = _safe_float(bs.get("totalStockholderEquity"))
+            if eq:
+                ni = _safe_float(row.get("net_income_usd"))
+                row["roe_pct"] = round(ni / eq * 100, 1)
         history.append(row)
     return history
 
@@ -3861,9 +3868,11 @@ def api_company_history(symbol):
 
     q_inc = d.get("Financials", {}).get("Income_Statement", {}).get("quarterly", {})
     q_cf = d.get("Financials", {}).get("Cash_Flow", {}).get("quarterly", {})
+    q_bs = d.get("Financials", {}).get("Balance_Sheet", {}).get("quarterly", {})
     history = _build_quarterly_history(
         q_inc, q_cf, shares_out, price_by_date, max_quarters=80,
         eps_history=q_eps_history,
+        q_bs=q_bs,
     )
     if not history and annual_history:
         history = annual_history
@@ -4896,6 +4905,15 @@ def company_detail(symbol):
             full_desc = (fund_data.get("General") or {}).get("Description") or ""
             if full_desc:
                 view["company_info"]["description"] = full_desc
+            ipo_date = (fund_data.get("General") or {}).get("IPODate") or ""
+            if ipo_date:
+                view["ipo_date"] = ipo_date
+                try:
+                    from datetime import date as _date
+                    ipo_dt = _date.fromisoformat(ipo_date)
+                    view["ipo_days"] = (datetime.now().date() - ipo_dt).days
+                except Exception:
+                    pass
     except Exception:
         pass
     return render_template('company.html', company=view)
@@ -5206,6 +5224,472 @@ def trigger_analysis_api(ticker_and_exchange_code):
 @app.route('/sectors')
 def sectors_page():
     return render_template('sectors.html')
+
+
+# ── Tracker ──────────────────────────────────────────────────────────────────
+
+_TRACKER_FILE = PROJECT_ROOT / "outputs" / "tracker.json"
+
+
+def _tracker_load() -> dict:
+    if _TRACKER_FILE.exists():
+        try:
+            data = json.loads(_TRACKER_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            data = {"investors": []}
+    else:
+        data = {"investors": []}
+    return _tracker_ensure_slugs(data, persist=True)
+
+
+def _tracker_slug_from_name(name: str) -> str:
+    words = re.findall(r"[a-zA-Z0-9]+", name or "")
+    if words:
+        return "".join(w[:1].upper() + w[1:] for w in words)
+    return "Investor"
+
+
+def _tracker_ensure_slugs(data: dict, *, persist: bool = False) -> dict:
+    seen: set[str] = set()
+    changed = False
+    for inv in data.get("investors", []):
+        slug = (inv.get("slug") or "").strip()
+        if not slug:
+            slug = _tracker_slug_from_name(inv.get("name", ""))
+            changed = True
+        base = slug
+        n = 2
+        while slug in seen:
+            slug = f"{base}{n}"
+            n += 1
+        if inv.get("slug") != slug:
+            inv["slug"] = slug
+            changed = True
+        seen.add(slug)
+    if changed and persist:
+        _tracker_save(data)
+    return data
+
+
+def _tracker_unique_slug(data: dict, name: str) -> str:
+    seen = {(i.get("slug") or "").strip() for i in data.get("investors", []) if i.get("slug")}
+    slug = _tracker_slug_from_name(name)
+    base = slug
+    n = 2
+    while slug in seen:
+        slug = f"{base}{n}"
+        n += 1
+    return slug
+
+
+def _tracker_save(data: dict) -> None:
+    _TRACKER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _TRACKER_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(_TRACKER_FILE)
+
+
+def _tracker_txn_key(txn: dict) -> tuple[str, str, str]:
+    """Normalized identity for duplicate detection."""
+    return (
+        (txn.get("symbol") or "").upper().strip(),
+        (txn.get("action") or "buy").lower().strip(),
+        (txn.get("date") or "")[:10],
+    )
+
+
+def _tracker_txn_richness(txn: dict) -> int:
+    score = len(txn.get("notes") or "")
+    if txn.get("shares") is not None:
+        score += 4
+    if txn.get("price") is not None:
+        score += 4
+    return score
+
+
+def _tracker_find_duplicate(transactions: list[dict], candidate: dict) -> dict | None:
+    key = _tracker_txn_key(candidate)
+    if not key[0] or not key[2]:
+        return None
+    for t in transactions:
+        if _tracker_txn_key(t) == key:
+            return t
+    return None
+
+
+def _tracker_dedupe_transactions(transactions: list[dict]) -> tuple[list[dict], int]:
+    """Keep one row per symbol+action+date; prefer the most complete record."""
+    best: dict[tuple[str, str, str], dict] = {}
+    order: list[tuple[str, str, str]] = []
+    for t in transactions:
+        key = _tracker_txn_key(t)
+        if not key[0] or not key[2]:
+            continue
+        if key not in best:
+            best[key] = t
+            order.append(key)
+        elif _tracker_txn_richness(t) > _tracker_txn_richness(best[key]):
+            best[key] = t
+    deduped = [best[k] for k in order]
+    removed = len(transactions) - len(deduped)
+    return deduped, removed
+
+
+def _tracker_normalize_txn(body: dict, *, default_notes: str = "") -> dict:
+    import uuid as _uuid
+    txn = {
+        "id": str(_uuid.uuid4()),
+        "symbol": (body.get("symbol") or "").upper().strip(),
+        "action": (body.get("action") or "buy").lower().strip(),
+        "date": (body.get("date") or "")[:10],
+        "shares": body.get("shares"),
+        "price": body.get("price"),
+        "notes": body.get("notes") or default_notes,
+    }
+    position_type = (body.get("position_type") or "").strip().lower()
+    if position_type:
+        txn["position_type"] = position_type
+    return txn
+
+
+@app.route('/tracker')
+@app.route('/tracker/<slug>')
+def tracker_page(slug=None):
+    return render_template('tracker.html', initial_slug=slug or '')
+
+
+@app.route('/api/tracker/investors', methods=['GET'])
+def tracker_get_investors():
+    return jsonify(_tracker_load())
+
+
+@app.route('/api/tracker/investors', methods=['POST'])
+def tracker_add_investor():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    data = _tracker_load()
+    import uuid as _uuid
+    slug = _tracker_unique_slug(data, name)
+    investor = {"id": str(_uuid.uuid4()), "slug": slug, "name": name, "bio": body.get("bio", ""), "transactions": []}
+    data["investors"].append(investor)
+    _tracker_save(data)
+    return jsonify(investor), 201
+
+
+@app.route('/api/tracker/investors/<inv_id>', methods=['DELETE'])
+def tracker_delete_investor(inv_id):
+    data = _tracker_load()
+    data["investors"] = [i for i in data["investors"] if i["id"] != inv_id]
+    _tracker_save(data)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/tracker/investors/<inv_id>/transactions', methods=['POST'])
+def tracker_add_transaction(inv_id):
+    body = request.get_json(silent=True) or {}
+    data = _tracker_load()
+    investor = next((i for i in data["investors"] if i["id"] == inv_id), None)
+    if not investor:
+        return jsonify({"error": "investor not found"}), 404
+    txn = _tracker_normalize_txn(body)
+    if not txn["symbol"] or not txn["date"]:
+        return jsonify({"error": "symbol and date required"}), 400
+    if txn["action"] not in ("buy", "sell"):
+        return jsonify({"error": "action must be buy or sell"}), 400
+    dup = _tracker_find_duplicate(investor.get("transactions", []), txn)
+    if dup:
+        return jsonify({
+            "error": "duplicate transaction",
+            "duplicate": True,
+            "existing": dup,
+        }), 409
+    investor["transactions"].append(txn)
+    _tracker_save(data)
+    return jsonify(txn), 201
+
+
+@app.route('/api/tracker/investors/<inv_id>/dedupe', methods=['POST'])
+def tracker_dedupe_transactions(inv_id):
+    """Remove duplicate transactions (same symbol + action + date)."""
+    data = _tracker_load()
+    investor = next((i for i in data["investors"] if i["id"] == inv_id), None)
+    if not investor:
+        return jsonify({"error": "investor not found"}), 404
+    before = len(investor.get("transactions", []))
+    deduped, _ = _tracker_dedupe_transactions(investor.get("transactions", []))
+    investor["transactions"] = deduped
+    _tracker_save(data)
+    removed = before - len(deduped)
+    return jsonify({"ok": True, "removed": removed, "remaining": len(deduped)})
+
+
+@app.route('/api/tracker/investors/<inv_id>/transactions/<txn_id>', methods=['DELETE'])
+def tracker_delete_transaction(inv_id, txn_id):
+    data = _tracker_load()
+    investor = next((i for i in data["investors"] if i["id"] == inv_id), None)
+    if not investor:
+        return jsonify({"error": "investor not found"}), 404
+    investor["transactions"] = [t for t in investor["transactions"] if t["id"] != txn_id]
+    _tracker_save(data)
+    return jsonify({"ok": True})
+
+
+# ── Tracker AI Research ────────────────────────────────────────────────────────
+# Keyed by investor UUID.  Same broadcast pattern as the stock analyzer.
+_RESEARCH_REGISTRY: dict[str, dict] = {}
+_RESEARCH_LOCK = threading.Lock()
+
+
+def _research_register(inv_id: str) -> None:
+    with _RESEARCH_LOCK:
+        _RESEARCH_REGISTRY[inv_id] = {"buffer": [], "subs": [], "done": False}
+
+
+def _research_broadcast(inv_id: str, event: dict) -> None:
+    with _RESEARCH_LOCK:
+        info = _RESEARCH_REGISTRY.get(inv_id)
+        if not info:
+            return
+        info["buffer"].append(event)
+        for sub in info["subs"]:
+            try:
+                sub.put_nowait(event)
+            except Exception:
+                pass
+
+
+def _research_finish(inv_id: str) -> None:
+    with _RESEARCH_LOCK:
+        info = _RESEARCH_REGISTRY.get(inv_id)
+        if info:
+            info["done"] = True
+
+
+def _research_subscribe(inv_id: str):
+    with _RESEARCH_LOCK:
+        info = _RESEARCH_REGISTRY.get(inv_id)
+        if not info:
+            return None
+        sub = _queue_mod.Queue()
+        buf = list(info["buffer"])
+        done = info["done"]
+        if not done:
+            info["subs"].append(sub)
+        return buf, sub, done
+
+
+def _research_unsubscribe(inv_id: str, sub) -> None:
+    with _RESEARCH_LOCK:
+        info = _RESEARCH_REGISTRY.get(inv_id)
+        if info:
+            try:
+                info["subs"].remove(sub)
+            except ValueError:
+                pass
+
+
+def _research_sse_line(evt: dict) -> str | None:
+    """Format one research broadcast event as an SSE chunk."""
+    etype = evt.get("type", "status")
+    if etype == "status":
+        return f"event: status\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+    if etype == "tool":
+        return (
+            f"event: tool\ndata: {json.dumps({'tool': evt.get('tool', ''), 'detail': evt.get('detail', ''), 'symbol': evt.get('symbol', ''), 'url': evt.get('url', '')})}\n\n"
+        )
+    if etype == "think":
+        return f"event: think\ndata: {json.dumps({'title': evt.get('title', ''), 'text': evt.get('text', '')})}\n\n"
+    if etype == "tool_result":
+        return (
+            f"event: tool_result\ndata: {json.dumps({'tool': evt.get('tool', ''), 'summary': evt.get('summary', ''), 'urls': evt.get('urls', [])})}\n\n"
+        )
+    if etype == "token":
+        return f"event: token\ndata: {json.dumps({'text': evt.get('text', '')})}\n\n"
+    if etype == "txn_added":
+        return f"event: txn_added\ndata: {json.dumps({'txn': evt.get('txn', {})})}\n\n"
+    if etype == "txn_removed":
+        return f"event: txn_removed\ndata: {json.dumps({'txn_id': evt.get('txn_id', '')})}\n\n"
+    if etype == "done":
+        return f"event: done\ndata: {json.dumps({'total_found': evt.get('total_found', 0)})}\n\n"
+    if etype == "error":
+        return f"event: error\ndata: {json.dumps({'text': evt.get('text', 'Unknown error')})}\n\n"
+    return None
+
+
+@app.route('/api/tracker/investors/<inv_id>/research-stream', methods=['POST'])
+def tracker_research_stream(inv_id):
+    """Trigger and stream AI research for an investor (SSE)."""
+    data = _tracker_load()
+    investor = next((i for i in data["investors"] if i["id"] == inv_id), None)
+    if not investor:
+        return jsonify({"error": "investor not found"}), 404
+
+    # Prevent duplicate runs
+    with _RESEARCH_LOCK:
+        existing = _RESEARCH_REGISTRY.get(inv_id)
+        if existing and not existing.get("done"):
+            return jsonify({"error": "Research already running for this investor."}), 409
+
+    _research_register(inv_id)
+    inv_name = investor["name"]
+    start_evt = {"type": "status", "text": f"Research started for {inv_name}\u2026"}
+    _research_broadcast(inv_id, start_evt)
+    q: _queue_mod.Queue = _queue_mod.Queue()
+    q.put(start_evt)
+
+    existing_txns = list(investor.get("transactions", []))
+    import uuid as _uuid
+
+    def _on_add_txn(txn: dict) -> dict:
+        """Persist a new transaction immediately and return it with its ID."""
+        saved = _tracker_normalize_txn(txn, default_notes="AI research")
+        try:
+            fresh = _tracker_load()
+            inv_obj = next((i for i in fresh["investors"] if i["id"] == inv_id), None)
+            if inv_obj is not None:
+                dup = _tracker_find_duplicate(inv_obj.get("transactions", []), saved)
+                if dup:
+                    return dup
+                inv_obj["transactions"].append(saved)
+                _tracker_save(fresh)
+        except Exception as exc:
+            app.logger.error("Research on_add_txn save error: %s", exc)
+        _research_broadcast(inv_id, {"type": "txn_added", "txn": saved})
+        return saved
+
+    def _on_remove_txn(txn_id: str) -> bool:
+        """Remove a transaction by ID and persist."""
+        try:
+            fresh = _tracker_load()
+            inv_obj = next((i for i in fresh["investors"] if i["id"] == inv_id), None)
+            if inv_obj is None:
+                return False
+            before = len(inv_obj["transactions"])
+            inv_obj["transactions"] = [t for t in inv_obj["transactions"] if t.get("id") != txn_id]
+            if len(inv_obj["transactions"]) < before:
+                _tracker_save(fresh)
+                _research_broadcast(inv_id, {"type": "txn_removed", "txn_id": txn_id})
+                return True
+        except Exception as exc:
+            app.logger.error("Research on_remove_txn error: %s", exc)
+        return False
+
+    def _worker():
+        try:
+            from web.tracker_research_agent import research_stream as _rs
+        except ImportError:
+            try:
+                from tracker_research_agent import research_stream as _rs
+            except ImportError as e:
+                ev = {"type": "error", "text": f"Research agent unavailable: {e}"}
+                q.put(ev)
+                _research_broadcast(inv_id, ev)
+                _research_finish(inv_id)
+                return
+
+        try:
+            for event in _rs(
+                investor["name"], inv_id, existing_txns,
+                on_add_txn=_on_add_txn, on_remove_txn=_on_remove_txn,
+                project_root=PROJECT_ROOT,
+            ):
+                # txn_added/removed are already broadcast by the callbacks; still queue for SSE stream
+                q.put(event)
+                if event["type"] not in ("txn_added", "txn_removed"):
+                    _research_broadcast(inv_id, event)
+                if event["type"] in ("done", "error"):
+                    return
+        except Exception as exc:
+            ev = {"type": "error", "text": str(exc)}
+            q.put(ev)
+            _research_broadcast(inv_id, ev)
+        finally:
+            _research_finish(inv_id)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    def _generate():
+        while True:
+            try:
+                evt = q.get(timeout=55)
+            except _queue_mod.Empty:
+                yield ": keepalive\n\n"
+                continue
+
+            line = _research_sse_line(evt)
+            if line:
+                yield line
+            if evt.get("type") in ("done", "error"):
+                return
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route('/api/tracker/investors/<inv_id>/research-watch', methods=['GET'])
+def tracker_research_watch(inv_id):
+    """
+    Passive SSE endpoint. Replays buffered events then streams live updates for
+    an in-progress research job. Returns 204 when no job is registered.
+    """
+    result = _research_subscribe(inv_id)
+    if result is None:
+        return Response(status=204)
+
+    buf, sub, already_done = result
+
+    def _generate():
+        for evt in buf:
+            line = _research_sse_line(evt)
+            if line:
+                yield line
+            if evt.get("type") in ("done", "error"):
+                _research_unsubscribe(inv_id, sub)
+                return
+
+        if already_done:
+            _research_unsubscribe(inv_id, sub)
+            return
+
+        while True:
+            try:
+                evt = sub.get(timeout=55)
+            except _queue_mod.Empty:
+                yield ": keepalive\n\n"
+                continue
+
+            line = _research_sse_line(evt)
+            if line:
+                yield line
+            if evt.get("type") in ("done", "error"):
+                break
+
+        _research_unsubscribe(inv_id, sub)
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.route('/api/tracker/investors/<inv_id>/research-status', methods=['GET'])
+def tracker_research_status(inv_id):
+    """Check whether a research job is active for this investor."""
+    with _RESEARCH_LOCK:
+        info = _RESEARCH_REGISTRY.get(inv_id)
+    if not info:
+        return jsonify({"running": False, "done": False, "eventCount": 0})
+    return jsonify({
+        "running": not info["done"],
+        "done": info["done"],
+        "eventCount": len(info["buffer"]),
+    })
 
 
 @app.route('/api/analysis/progress')

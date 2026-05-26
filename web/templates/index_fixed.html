@@ -78,13 +78,13 @@
 <!-- Nav -->
 <nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
   <div class="flex items-center gap-3">
-    <svg class="w-4 h-4" fill="none" stroke="var(--accent)" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.06em;color:var(--fg)">Equity<span style="color:var(--accent)">OS</span></span>
+    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.08em;color:var(--accent2)">MOON<span style="color:var(--fg)">STOCKS</span></span>
     <span id="headerBadge" class="badge badge-good" style="font-size:.58rem" title="Rankings from saved snapshot files">SNAPSHOT</span>
   </div>
   <div class="flex items-center gap-4">
     <a href="/" style="color:var(--accent);font-size:.72rem;letter-spacing:.05em">Dashboard</a>
     <a href="/sectors" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
+    <a href="/tracker" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Tracker</a>
     <button class="run-btn" id="runBtn" onclick="openRunModal()" title="Re-runs the pipeline on your saved symbol list (thousands of US names). Uses EODHD; can take many minutes. Updates the numbers behind this dashboard.">Universe scan</button>
   </div>
 </nav>
