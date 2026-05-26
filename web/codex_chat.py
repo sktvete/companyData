@@ -1,6 +1,7 @@
 """
 ChatGPT subscription chat via OAuth PKCE + Codex Responses API.
-Session persisted to outputs/.chatgpt_session.json (refresh token → no re-login).
+OAuth tokens live in the browser (localStorage); server holds them in memory only
+during the :1455 callback handshake, then returns them once via /api/auth/codex/claim.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ SESSION_FILENAME = ".chatgpt_session.json"
 _lock = threading.Lock()
 _oauth_lock = threading.Lock()
 _pending: dict[str, Any] | None = None
+_PENDING_MAX_AGE = 180  # seconds; abandon stuck OAuth attempts
 
 
 def session_path(project_root: Path) -> Path:
@@ -38,26 +40,32 @@ def session_path(project_root: Path) -> Path:
     return p
 
 
-def _load_session(project_root: Path) -> dict:
+def _delete_legacy_session_file(project_root: Path) -> None:
     fp = session_path(project_root)
-    try:
-        data = json.loads(fp.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        pass
+    if fp.is_file():
+        try:
+            fp.unlink()
+        except Exception:
+            pass
+
+
+def normalize_session(raw: dict) -> dict:
     return {
-        "accessToken": None,
-        "refreshToken": None,
-        "expiresAt": 0,
-        "accountId": None,
+        "accessToken": raw.get("accessToken") or raw.get("access_token"),
+        "refreshToken": raw.get("refreshToken") or raw.get("refresh_token"),
+        "expiresAt": float(raw.get("expiresAt") or raw.get("expires_at") or 0),
+        "accountId": raw.get("accountId") or raw.get("account_id"),
     }
 
 
-def _save_session(project_root: Path, session: dict) -> None:
-    session_path(project_root).write_text(
-        json.dumps(session, indent=2), encoding="utf-8"
-    )
+def session_from_payload(body: dict | None) -> dict | None:
+    if not isinstance(body, dict):
+        return None
+    raw = body.get("codex_session") or body.get("session")
+    if not isinstance(raw, dict):
+        return None
+    sess = normalize_session(raw)
+    return sess if sess.get("accessToken") else None
 
 
 def _extract_account_id(access_token: str) -> str | None:
@@ -129,48 +137,81 @@ def _refresh_token(session: dict) -> dict:
     return res.json()
 
 
-def ensure_valid_token(project_root: Path) -> dict:
+def ensure_valid_token(*, session: dict) -> dict:
+    """Refresh a client-provided session if near expiry; mutates and returns it."""
     with _lock:
-        session = _load_session(project_root)
-        if not session.get("accessToken"):
+        sess = normalize_session(session)
+        if not sess.get("accessToken"):
             raise RuntimeError("Not authenticated. Sign in with ChatGPT.")
-        if time.time() > float(session.get("expiresAt") or 0) - 60:
-            if not session.get("refreshToken"):
+        if time.time() > float(sess.get("expiresAt") or 0) - 60:
+            if not sess.get("refreshToken"):
                 raise RuntimeError("Session expired. Sign in again.")
-            data = _refresh_token(session)
-            session["accessToken"] = data["access_token"]
-            session["refreshToken"] = data.get("refresh_token") or session["refreshToken"]
-            session["expiresAt"] = time.time() + float(data.get("expires_in", 3600))
-            session["accountId"] = _extract_account_id(session["accessToken"])
-            _save_session(project_root, session)
-        return session
+            data = _refresh_token(sess)
+            sess["accessToken"] = data["access_token"]
+            sess["refreshToken"] = data.get("refresh_token") or sess["refreshToken"]
+            sess["expiresAt"] = time.time() + float(data.get("expires_in", 3600))
+            sess["accountId"] = _extract_account_id(sess["accessToken"])
+        session.clear()
+        session.update(sess)
+        return sess
+
+
+def oauth_in_progress() -> bool:
+    _clear_stale_pending()
+    with _oauth_lock:
+        return _pending is not None and not _pending.get("done")
+
+
+def _clear_stale_pending() -> None:
+    """Drop abandoned OAuth attempts so claim/login do not stay stuck."""
+    global _pending
+    with _oauth_lock:
+        if not _pending or _pending.get("done"):
+            return
+        started = float(_pending.get("startedAt") or 0)
+        if started and time.time() - started > _PENDING_MAX_AGE:
+            _pending = None
+
+
+def claim_session(project_root: Path) -> dict[str, Any]:
+    """Return one-time claim result after OAuth callback completes."""
+    global _pending
+    _clear_stale_pending()
+    with _oauth_lock:
+        if not _pending:
+            return {"loginInProgress": False}
+        if not _pending.get("done"):
+            return {"loginInProgress": True}
+        if _pending.get("claimed"):
+            return {"loginInProgress": False}
+        if _pending.get("error"):
+            err = str(_pending["error"])
+            _pending = None
+            return {"error": err, "loginInProgress": False}
+        sess = _pending.get("session")
+        if sess:
+            _pending["claimed"] = True
+            _delete_legacy_session_file(project_root)
+            return {"session": dict(sess), "authenticated": True, "loginInProgress": False}
+    return {"loginInProgress": False}
 
 
 def auth_status(project_root: Path) -> dict:
-    session = _load_session(project_root)
-    ok = bool(session.get("accessToken")) and time.time() < float(session.get("expiresAt") or 0) - 30
-    if ok:
-        return {"authenticated": True, "accountId": session.get("accountId")}
-    if session.get("refreshToken"):
-        try:
-            ensure_valid_token(project_root)
-            session = _load_session(project_root)
-            return {"authenticated": True, "accountId": session.get("accountId")}
-        except Exception:
-            pass
-    with _oauth_lock:
-        pending = _pending is not None and not _pending.get("done")
-    return {"authenticated": False, "loginInProgress": pending}
+    """Legacy hook — Codex tokens live in the browser; server never persists them."""
+    _delete_legacy_session_file(project_root)
+    return {"authenticated": False, "loginInProgress": oauth_in_progress()}
 
 
 def logout(project_root: Path) -> None:
-    with _lock:
-        fp = session_path(project_root)
-        if fp.is_file():
-            fp.unlink()
+    clear_oauth_state(project_root)
+
+
+def clear_oauth_state(project_root: Path) -> None:
+    """Clear in-flight OAuth handshake state (does not touch browser localStorage)."""
     global _pending
     with _oauth_lock:
         _pending = None
+    _delete_legacy_session_file(project_root)
 
 
 def _make_callback_handler(holder: dict):
@@ -200,7 +241,7 @@ def _make_callback_handler(holder: dict):
             body = (
                 "<html><body style='font-family:sans-serif;background:#0b0f19;color:#e2e8f0;"
                 "display:flex;align-items:center;justify-content:center;height:100vh'>"
-                "<div><h2>Signed in</h2><p>You can close this tab and return to EquityOS.</p></div></body></html>"
+                "<div><h2>Signed in</h2><p>You can close this tab and return to MoonStocks.</p></div></body></html>"
             ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -232,13 +273,12 @@ def _finish_login(project_root: Path, holder: dict) -> None:
         if not code:
             raise RuntimeError("Login timed out or was cancelled")
         data = _exchange_code(holder["verifier"], code)
-        session = {
+        holder["session"] = {
             "accessToken": data["access_token"],
             "refreshToken": data.get("refresh_token"),
             "expiresAt": time.time() + float(data.get("expires_in", 3600)),
             "accountId": _extract_account_id(data["access_token"]),
         }
-        _save_session(project_root, session)
     finally:
         with _oauth_lock:
             if _pending is holder:
@@ -248,10 +288,7 @@ def _finish_login(project_root: Path, holder: dict) -> None:
 def start_login(project_root: Path) -> str:
     """Start OAuth flow; returns authorization URL. Callback on port 1455."""
     global _pending
-    status = auth_status(project_root)
-    if status.get("authenticated"):
-        raise RuntimeError("Already signed in")
-
+    _clear_stale_pending()
     with _oauth_lock:
         if _pending and not _pending.get("done"):
             return _pending["authUrl"]
@@ -265,6 +302,7 @@ def start_login(project_root: Path) -> str:
             "code": None,
             "error": None,
             "done": False,
+            "startedAt": time.time(),
             "authUrl": _build_auth_url(verifier, state),
         }
         _pending = holder
@@ -423,6 +461,7 @@ def _collect_function_calls_from_stream(resp: requests.Response) -> tuple[list[d
 def stream_codex_chat(
     project_root: Path,
     *,
+    codex_session: dict,
     model: str,
     messages: list[dict],
     tools: list,
@@ -438,7 +477,7 @@ def stream_codex_chat(
                        individual tool invocations, prompting the model to self-evaluate.
     min_tool_rounds: if > 0, nudge once when total calls < min before writing (fallback).
     """
-    session = ensure_valid_token(project_root)
+    session = ensure_valid_token(session=codex_session)
     instructions, current_input = messages_to_codex(messages)
     codex_tools = openai_tools_to_codex(tools)
     _total_tool_calls = 0     # individual tool invocations across all rounds

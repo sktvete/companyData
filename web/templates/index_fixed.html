@@ -73,18 +73,21 @@
   @keyframes blink{50%{opacity:0}}
   .blink{animation:blink 1s step-end infinite}
 </style>
+<link rel="stylesheet" href="/static/user.css"/>
+<script src="/static/user.js" defer></script>
 <body class="min-h-screen">
 
 <!-- Nav -->
 <nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
   <div class="flex items-center gap-3">
-    <span style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.08em;color:var(--accent2)">MOON<span style="color:var(--fg)">STOCKS</span></span>
+    <a href="/" style="font-family:'JetBrains Mono',monospace;font-weight:700;font-size:.85rem;letter-spacing:.08em;color:var(--accent2);text-decoration:none">MOON<span style="color:var(--fg)">STOCKS</span></a>
     <span id="headerBadge" class="badge badge-good" style="font-size:.58rem" title="Rankings from saved snapshot files">SNAPSHOT</span>
   </div>
   <div class="flex items-center gap-4">
     <a href="/" style="color:var(--accent);font-size:.72rem;letter-spacing:.05em">Dashboard</a>
     <a href="/sectors" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
     <a href="/tracker" style="color:var(--dim);font-size:.72rem;letter-spacing:.05em" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Tracker</a>
+    <div id="msUserNav" class="ms-user-nav"></div>
     <button class="run-btn" id="runBtn" onclick="openRunModal()" title="Re-runs the pipeline on your saved symbol list (thousands of US names). Uses EODHD; can take many minutes. Updates the numbers behind this dashboard.">Universe scan</button>
   </div>
 </nav>
@@ -124,9 +127,6 @@
     </div>
   </div>
 
-  <!-- Category pills -->
-  <div id="catPills" class="flex flex-wrap gap-2 mb-4"></div>
-
   <!-- Scoring weights panel -->
   <div class="card p-3 mb-4" id="weightPanel" style="display:none">
     <label style="display:flex;align-items:flex-start;gap:.55rem;margin-bottom:.75rem;cursor:pointer;font-size:.72rem;color:var(--fg);line-height:1.35">
@@ -148,11 +148,6 @@
   <div class="flex flex-wrap gap-2 mb-4 items-center">
     <div class="inp-wrap flex-1" style="min-width:180px;max-width:280px"><input id="searchBox" type="text" placeholder="Search name or symbol…" style="width:100%" oninput="debounceReset()"></div>
     <div class="inp-wrap"><select id="sectorFilter" onchange="resetAndLoad()"><option value="">All Sectors</option></select></div>
-    <div class="inp-wrap"><select id="catFilter" onchange="resetAndLoad()">
-      <option value="">All Categories</option>
-      <option value="EXCELLENT">Excellent</option><option value="GOOD">Good</option>
-      <option value="FAIR">Fair</option><option value="POOR">Poor</option><option value="RISKY">Risky</option>
-    </select></div>
     <div class="inp-wrap"><select id="sortBy" onchange="onSortSelect()">
       <option value="listing_score" selected>Screener rank (quality + long-term growth)</option>
       <option value="momentum_score">Short-term growth (quarterly)</option>
@@ -173,7 +168,9 @@
       <option value="symbol">A → Z</option>
     </select></div>
     <button onclick="toggleWeights()" class="run-btn" style="padding:.3rem .6rem;font-size:.65rem" id="weightBtn">Weights</button>
-    <div class="inp-wrap" style="width:96px"><input id="minScore" type="number" placeholder="min score" min="0" max="20" style="width:100%" oninput="debounceReset()"></div>
+    <label class="ms-fav-filter" id="favFilterWrap" style="display:none" title="Show only your starred companies">
+      <input type="checkbox" id="favFilterOnly" onchange="resetAndLoad()"> Favorites
+    </label>
     <span style="color:var(--dim);font-size:.68rem" id="resultCount"></span>
   </div>
 
@@ -184,6 +181,7 @@
         <thead>
           <tr>
             <th id="th_rank" class="px-2 text-left" style="width:28px" title="Position in the current table.">#</th>
+            <th class="px-1 text-center" style="width:22px" title="Favorite">★</th>
             <th id="th_symbol" onclick="thSort('symbol')" class="px-2 text-left" title="Ticker. Click to sort A–Z.">Symbol</th>
             <th id="th_name" class="px-2 text-left" title="Company name.">Name</th>
             <th id="th_score" onclick="thSortScoreColumn()" class="px-2 text-center sort-active sort-desc" title="Composite score (Screener rank / Raw model / Custom blend).">Score</th>
@@ -465,6 +463,7 @@ function rowHtml(c, rank) {
   const T = c.metric_tones || {};
   return `<tr>
     <td class="px-2 py-1.5" style="color:var(--border);font-size:.62rem">${rank}</td>
+    <td class="px-1 py-1.5 text-center">${window.MoonUser ? MoonUser.starBtn('symbol', c.symbol) : ''}</td>
     <td class="px-2 py-1.5"><a href="/company/${c.symbol}" style="color:var(--accent);font-size:.75rem;font-weight:700;letter-spacing:.03em">${c.symbol}</a></td>
     <td class="px-2 py-1.5" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.7rem" title="${c.name} — ${c.sector}">${c.name}</td>
     <td class="px-2 py-1.5 text-center" title="${scoreTip}"><span style="font-size:.88rem;font-weight:700;color:${sc}">${fmtNum(disp)}</span> <span style="margin-left:.2rem">${badgeHtml(badgeFromScore(disp))}</span></td>
@@ -518,8 +517,6 @@ function getParams() {
     sort_by:    _sortCol,
     sort_order: _sortDir,
     sector:     $('sectorFilter').value,
-    category:   $('catFilter').value,
-    min_score:  $('minScore').value || 0,
     search:     ($('searchBox').value || '').trim(),
     wq: auto ? '5' : $('wQ').value,
     wv: auto ? '5' : $('wV').value,
@@ -528,6 +525,7 @@ function getParams() {
     wa: auto ? '0' : $('wA').value,
   };
   if (!auto) p.wc = '1';
+  if ($('favFilterOnly')?.checked) p.favorites_only = '1';
   return new URLSearchParams(p);
 }
 
@@ -611,13 +609,6 @@ async function loadSummary() {
     $('statMcap').textContent   = d.total_market_cap_fmt || fmtUsdB(d.total_market_cap_b != null ? d.total_market_cap_b : d.total_market_cap_t * 1000);
     $('headerBadge').textContent = d.total_companies + ' in snapshot';
 
-    /* Category pills */
-    const cats = d.investment_categories || {};
-    const order = ['EXCELLENT','GOOD','FAIR','POOR','RISKY'];
-    $('catPills').innerHTML = order.filter(k => cats[k]).map(k =>
-      `<button onclick="setCat('${k}')" data-cat="${k}" class="${BADGE[k]}" style="cursor:pointer;padding:.2rem .7rem;opacity:0.55;transition:opacity .15s">${k} <span style="opacity:.7">(${cats[k]})</span></button>`
-    ).join('');
-
     /* Sector dropdown */
     const sel = $('sectorFilter');
     Object.keys(d.sectors).sort().forEach(s => {
@@ -631,19 +622,6 @@ async function loadSummary() {
     if (sp.get('sector')) { sel.value = sp.get('sector'); }
 
   } catch(e) { console.error(e); }
-}
-
-function setCat(cat) {
-  const cur = $('catFilter').value;
-  $('catFilter').value = (cur === cat) ? '' : cat;
-  // Update pill active states
-  document.querySelectorAll('#catPills button').forEach(btn => {
-    const active = btn.dataset.cat === $('catFilter').value;
-    btn.style.opacity = active ? '1' : '0.55';
-    btn.style.outline = active ? '1px solid currentColor' : 'none';
-    btn.style.outlineOffset = '2px';
-  });
-  resetAndLoad();
 }
 
 function syncTableHeadOffset() {
@@ -760,6 +738,19 @@ function renderProgress(d) {
     scheduleProgressPoll();
   }
 })();
+document.addEventListener('moonuser:auth', e => {
+  const wrap = $('favFilterWrap');
+  if (wrap) wrap.style.display = e.detail?.userSignedIn ? '' : 'none';
+  if (!e.detail?.userSignedIn && $('favFilterOnly')) { $('favFilterOnly').checked = false; resetAndLoad(); }
+  gchatRefreshAuth?.();
+});
+document.addEventListener('moonuser:favorites', () => {
+  document.querySelectorAll('#tableBody .ms-star').forEach(btn => {
+    const on = MoonUser.isFav(btn.dataset.favKind, btn.dataset.favKey);
+    btn.textContent = on ? '★' : '☆';
+    btn.classList.toggle('on', on);
+  });
+});
 </script>
 
 <!-- Progress popup modal -->

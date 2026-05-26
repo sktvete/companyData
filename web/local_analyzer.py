@@ -521,6 +521,8 @@ def analyze_stream_codex(
     ticker_exchange: str,
     project_root,
     model: str | None = None,
+    *,
+    codex_session: dict | None = None,
 ) -> Generator[dict, None, None]:
     model = model or os.getenv("OPENAI_MODEL") or "gpt-5.5"
     """
@@ -528,6 +530,10 @@ def analyze_stream_codex(
     visible as {type:"tool"} events — then produces the JSON report.
     """
     import codex_chat  # local import; optional dependency
+
+    if not codex_session or not codex_session.get("accessToken"):
+        yield {"type": "error", "text": "ChatGPT not signed in — use Sign in with ChatGPT on this page."}
+        return
 
     yield {"type": "status", "text": "Starting AI analysis via ChatGPT…\n\n"}
 
@@ -563,6 +569,7 @@ def analyze_stream_codex(
         )
         for evt in codex_chat.stream_codex_chat(
             project_root,
+            codex_session=codex_session,
             model=model,
             messages=messages,
             tools=ANALYSIS_TOOLS,

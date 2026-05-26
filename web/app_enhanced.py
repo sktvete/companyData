@@ -44,6 +44,7 @@ import chat_tools
 from glossary_data import GLOSSARY
 from metric_tones import build_sector_valuation_medians, row_tones
 import moonstocks_store as ms_store
+import user_auth
 
 load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv(PROJECT_ROOT.parent / ".env")
@@ -55,6 +56,14 @@ MOONSTOCKS_API_BASE = os.environ.get(
 ).rstrip("/")
 
 app = Flask(__name__)
+app.secret_key = (
+    os.environ.get("FLASK_SECRET_KEY")
+    or os.environ.get("MOONSTOCKS_SECRET_KEY")
+    or "moonstocks-dev-secret-change-in-production"
+)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=90)
 
 # ---------------------------------------------------------------------------
 # Analysis broadcast registry — lets ALL users watching a ticker see the
@@ -1473,6 +1482,16 @@ def api_companies():
     blend_sorts = frozenset({"listing_score", "overall_score"})
     effective_sort = "custom_score" if use_custom and sort_by in blend_sorts else sort_by
     filtered = filter_sort(sector, category, min_score, effective_sort, sort_order, search, wq, wv, wg, ws, wa)
+    if request.args.get("favorites_only") == "1":
+        uid = user_auth.current_user_id()
+        if uid:
+            fav_syms = {
+                f["item_key"]
+                for f in ms_store.list_favorites(PROJECT_ROOT, uid, "symbol")
+            }
+            filtered = [c for c in filtered if c.get("symbol") in fav_syms]
+        else:
+            filtered = []
     total    = len(filtered)
     page     = filtered[offset: offset + limit]
 
@@ -3669,7 +3688,7 @@ def _apply_price_density(prices: list, density: float) -> list:
     return _downsample_prices_evenly(prices, target)
 
 
-def _slice_and_downsample(prices: list, rng: str) -> list:
+def _slice_and_downsample(prices: list, rng: str, *, dense: bool = False) -> list:
     """Slice EOD history to a range; keep 200–400 points when enough data exists."""
     from datetime import timedelta
     if not prices:
@@ -3707,13 +3726,13 @@ def _slice_and_downsample(prices: list, rng: str) -> list:
         start_idx = max(0, first_idx - need)
         sliced = prices[start_idx:]
 
-    if len(sliced) > _MAX_CHART_POINTS:
+    if not dense and len(sliced) > _MAX_CHART_POINTS:
         return _downsample_prices_evenly(sliced, _MAX_CHART_POINTS)
     return sliced
 
 
 def _chart_prices_for_range(
-    all_prices: list, rng: str = "1y", symbol: str | None = None,
+    all_prices: list, rng: str = "1y", symbol: str | None = None, *, dense: bool = False,
 ) -> list:
     """Slice/downsample bars for a chart range; 1D uses intraday 1m when available."""
     if rng == "1d" and symbol:
@@ -3722,7 +3741,7 @@ def _chart_prices_for_range(
             return intra
     if not all_prices:
         return []
-    return _slice_and_downsample(all_prices, rng)
+    return _slice_and_downsample(all_prices, rng, dense=dense)
 
 
 @app.route('/api/company/<symbol>/price-history')
@@ -3736,11 +3755,12 @@ def api_company_price_history(symbol):
         density_f = float(density_raw)
     except (TypeError, ValueError):
         density_f = 1.0
+    dense = request.args.get("dense", "").lower() in ("1", "true", "yes")
     try:
         all_prices = _fetch_full_price_history(symbol)
         if not all_prices:
             return jsonify({"error": "No price data", "prices": []}), 200
-        prices = _chart_prices_for_range(all_prices, rng, symbol=symbol)
+        prices = _chart_prices_for_range(all_prices, rng, symbol=symbol, dense=dense)
         preview = density_f < 1.0
         if preview:
             prices = _apply_price_density(prices, density_f)
@@ -4490,25 +4510,122 @@ def _chat_build_messages(c: dict, user_msg: str, history: list, max_in: int, max
     return sym, messages
 
 
+def _codex_session_from_body(body: dict | None = None) -> dict | None:
+    body = body if body is not None else (request.get_json(silent=True) or {})
+    return codex_chat.session_from_payload(body)
+
+
+def _prepare_codex_session(body: dict | None = None) -> dict | None:
+    sess = _codex_session_from_body(body)
+    if not sess:
+        return None
+    try:
+        return codex_chat.ensure_valid_token(session=sess)
+    except Exception:
+        return None
+
+
 @app.route("/api/auth/status")
 def api_auth_status():
-    return jsonify(codex_chat.auth_status(PROJECT_ROOT))
+    return jsonify(user_auth.auth_payload(PROJECT_ROOT))
 
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
+    """Start ChatGPT OAuth; tokens are claimed into browser localStorage."""
     try:
-        if codex_chat.auth_status(PROJECT_ROOT).get("authenticated"):
-            return jsonify({"authenticated": True})
         auth_url = codex_chat.start_login(PROJECT_ROOT)
-        return jsonify({"authUrl": auth_url})
+        return jsonify({
+            "authUrl": auth_url,
+            "authenticated": False,
+            "loginInProgress": True,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/auth/codex/status", methods=["GET"])
+def api_auth_codex_status():
+    return jsonify({"loginInProgress": codex_chat.oauth_in_progress()})
+
+
+@app.route("/api/auth/codex/claim", methods=["GET"])
+def api_auth_codex_claim():
+    return jsonify(codex_chat.claim_session(PROJECT_ROOT))
+
+
+@app.route("/api/auth/codex/refresh", methods=["POST"])
+def api_auth_codex_refresh():
+    body = request.get_json(silent=True) or {}
+    raw = body.get("codex_session") or body.get("session")
+    if not isinstance(raw, dict):
+        return jsonify({"error": "codex_session required"}), 400
+    try:
+        sess = codex_chat.normalize_session(raw)
+        updated = codex_chat.ensure_valid_token(session=sess)
+        return jsonify({"session": updated})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 401
+
+
+@app.route("/api/auth/demo-login", methods=["POST"])
+def api_auth_demo_login():
+    body = request.get_json(silent=True) or {}
+    slug = (body.get("user") or body.get("slug") or "").strip()
+    if not slug:
+        return jsonify({"error": "user required"}), 400
+    try:
+        return jsonify(user_auth.login_demo_user(PROJECT_ROOT, slug))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Sign in failed: {e}"}), 500
+
+
 @app.route("/api/auth/logout", methods=["POST"])
 def api_auth_logout():
-    codex_chat.logout(PROJECT_ROOT)
+    user_auth.logout_user(PROJECT_ROOT)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/codex-logout", methods=["POST"])
+def api_auth_codex_logout():
+    codex_chat.clear_oauth_state(PROJECT_ROOT)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/favorites", methods=["GET"])
+def api_favorites_list():
+    uid = user_auth.require_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in required", "favorites": []}), 401
+    kind = (request.args.get("kind") or "").strip().lower() or None
+    favs = ms_store.list_favorites(PROJECT_ROOT, uid, kind)
+    return jsonify({"favorites": favs, "userId": uid})
+
+
+@app.route("/api/favorites", methods=["POST"])
+def api_favorites_add():
+    uid = user_auth.require_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in required"}), 401
+    body = request.get_json(silent=True) or {}
+    kind = (body.get("kind") or "").strip().lower()
+    key = (body.get("key") or body.get("item_key") or "").strip()
+    if kind not in ("symbol", "investor"):
+        return jsonify({"error": "kind must be symbol or investor"}), 400
+    if not key:
+        return jsonify({"error": "key required"}), 400
+    ms_store.add_favorite(PROJECT_ROOT, uid, kind, key)
+    return jsonify({"ok": True, "kind": kind, "key": key.upper() if kind == "symbol" else key})
+
+
+@app.route("/api/favorites/<kind>/<path:item_key>", methods=["DELETE"])
+def api_favorites_remove(kind, item_key):
+    uid = user_auth.require_user_id()
+    if not uid:
+        return jsonify({"error": "Sign in required"}), 401
+    ms_store.remove_favorite(PROJECT_ROOT, uid, kind, item_key)
     return jsonify({"ok": True})
 
 
@@ -4669,7 +4786,8 @@ def api_company_chat(symbol):
 
     body = request.get_json(silent=True) or {}
     api_key_from_body = (body.get("openai_api_key") or "").strip()
-    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+    codex_session = _prepare_codex_session(body)
+    use_codex = codex_session is not None
 
     if not use_codex and not (api_key_from_body and api_key_from_body.startswith("sk-")):
         return jsonify({
@@ -4700,7 +4818,7 @@ def api_company_chat(symbol):
         parts: list[str] = []
         source = (
             codex_chat.stream_codex_chat(
-                PROJECT_ROOT, model=model, messages=messages,
+                PROJECT_ROOT, codex_session=codex_session, model=model, messages=messages,
                 tools=_CHAT_TOOLS, tool_executor=_chat_tool_executor(sym),
                 max_tool_rounds=max_tool_rounds,
             )
@@ -4734,7 +4852,8 @@ def api_company_chat_stream(symbol):
 
     body = request.get_json(silent=True) or {}
     api_key_from_body = (body.get("openai_api_key") or "").strip()
-    use_codex = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
+    codex_session = _prepare_codex_session(body)
+    use_codex = codex_session is not None
 
     if not use_codex and not (api_key_from_body and api_key_from_body.startswith("sk-")):
         return Response(
@@ -4771,6 +4890,7 @@ def api_company_chat_stream(symbol):
             if use_codex:
                 source = codex_chat.stream_codex_chat(
                     PROJECT_ROOT,
+                    codex_session=codex_session,
                     model=model,
                     messages=messages,
                     tools=_CHAT_TOOLS,
@@ -5070,24 +5190,22 @@ def moonstocks_analyze_stream(ticker):
     openai_key       = (body.get("openai_api_key") or "").strip()
     model            = (body.get("model") or os.getenv("OPENAI_MODEL") or "gpt-5.5").strip()
     reasoning_effort = (body.get("reasoning_effort") or "").strip() or None
+    codex_session    = _prepare_codex_session(body)
+    has_api_key      = bool(openai_key and openai_key.startswith("sk-"))
+
+    # Prefer API key (LangGraph agent) when available; fall back to Codex subscription.
+    use_codex = codex_session is not None and not has_api_key
+
+    if not codex_session and not has_api_key:
+        return jsonify({
+            "error": "Sign in with ChatGPT (Ask AI panel) or provide an OpenAI API key (sk-...)."
+        }), 400
 
     try:
         import local_analyzer as _la
         import langgraph_analyzer as _lga
     except ImportError as exc:
         return jsonify({"error": f"analyzer not available: {exc}"}), 500
-
-    codex_authenticated = codex_chat.auth_status(PROJECT_ROOT).get("authenticated", False)
-    has_api_key = bool(openai_key and openai_key.startswith("sk-"))
-
-    # Prefer API key (LangGraph agent) when available; fall back to Codex subscription.
-    # Both use the same underlying GPT models — API key just gets the better agent loop.
-    use_codex = codex_authenticated and not has_api_key
-
-    if not codex_authenticated and not has_api_key:
-        return jsonify({
-            "error": "Sign in with ChatGPT (Ask AI panel) or provide an OpenAI API key (sk-...)."
-        }), 400
 
     # Prevent duplicate simultaneous analyses for the same ticker
     with _BROADCAST_LOCK:
@@ -5103,7 +5221,11 @@ def moonstocks_analyze_stream(ticker):
         try:
             if use_codex:
                 # Codex (ChatGPT subscription) — LangGraph agent via OAuth
-                gen = _lga.analyze_stream_langgraph_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.5")
+                gen = _lga.analyze_stream_langgraph_codex(
+                    ticker, PROJECT_ROOT,
+                    model=os.getenv("OPENAI_MODEL") or "gpt-5.5",
+                    codex_session=codex_session,
+                )
             else:
                 # API key path — LangGraph agent with proper research loop
                 gen = _lga.analyze_stream_langgraph(ticker, openai_key, model, reasoning_effort=reasoning_effort)

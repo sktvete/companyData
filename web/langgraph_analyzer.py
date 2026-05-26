@@ -49,6 +49,7 @@ class CodexChatModel(BaseChatModel):
 
     project_root: Any          # pathlib.Path
     model_name:   str = "gpt-5.5"
+    codex_session: Any = None  # dict from browser localStorage
     _bound_tools: list = []    # set via bind_tools
 
     class Config:
@@ -59,7 +60,11 @@ class CodexChatModel(BaseChatModel):
         return "codex"
 
     def bind_tools(self, tools, **kwargs) -> "CodexChatModel":
-        clone = self.__class__(project_root=self.project_root, model_name=self.model_name)
+        clone = self.__class__(
+            project_root=self.project_root,
+            model_name=self.model_name,
+            codex_session=self.codex_session,
+        )
         clone._bound_tools = list(tools)
         return clone
 
@@ -123,7 +128,7 @@ class CodexChatModel(BaseChatModel):
         import requests as _req
         import codex_chat as _cc
 
-        session   = _cc.ensure_valid_token(self.project_root)
+        session   = _cc.ensure_valid_token(session=dict(self.codex_session or {}))
         instr, inp = self._lc_to_codex_input(messages)
         tools     = self._codex_tools()
 
@@ -473,14 +478,23 @@ def analyze_stream_langgraph_codex(
     ticker_exchange: str,
     project_root,
     model: str | None = None,
+    *,
+    codex_session: dict | None = None,
 ) -> Generator[dict, None, None]:
     """LangGraph analyst using the ChatGPT subscription (Codex OAuth)."""
     from pathlib import Path as _Path
     model = model or os.getenv("OPENAI_MODEL") or "gpt-5.5"
+    if not codex_session or not codex_session.get("accessToken"):
+        yield {"type": "error", "text": "ChatGPT not signed in — use Sign in with ChatGPT on this page."}
+        return
     yield {"type": "status", "text": "Starting LangGraph analysis via ChatGPT…\n\n"}
 
     try:
-        llm = CodexChatModel(project_root=_Path(project_root), model_name=model)
+        llm = CodexChatModel(
+            project_root=_Path(project_root),
+            model_name=model,
+            codex_session=codex_session,
+        )
     except Exception as exc:
         yield {"type": "error", "text": f"Codex model init failed: {exc}"}
         return

@@ -583,6 +583,34 @@ def _resolve_tickers_batch(issuers: list[str]) -> dict[str, str]:
     return {issuer: _guess_ticker(issuer) for issuer in unique}
 
 
+def _parse_13f_position_value(val_raw: str, shares: float | None) -> tuple[float | None, float | None]:
+    """Return (value_usd, price_per_share) from a 13F info-table value field.
+
+    SEC spec says value is in thousands of USD, but some filers (e.g. Berkshire 2026)
+    report full USD. Pick the interpretation whose implied price is plausible.
+    """
+    if not val_raw:
+        return None, None
+    try:
+        raw = float(str(val_raw).replace(",", ""))
+    except ValueError:
+        return None, None
+    if not shares or shares <= 0:
+        return raw * 1000, None
+
+    price_as_dollars = raw / shares
+    price_as_thousands = (raw * 1000) / shares
+
+    def _plausible(p: float) -> bool:
+        return 0.01 < p < 50_000
+
+    if _plausible(price_as_dollars):
+        return raw, round(price_as_dollars, 2)
+    if _plausible(price_as_thousands):
+        return raw * 1000, round(price_as_thousands, 2)
+    return raw * 1000, round(price_as_thousands, 2)
+
+
 def _fetch_institutional_holdings(entity_name: str, quarters: int = 1) -> dict:
     """Resolve entity, parse recent 13F-HR filings, resolve tickers."""
     base = _edgar_entity_filings(entity_name, form_type="13F-HR", limit=max(1, min(quarters, 3)))
@@ -616,11 +644,7 @@ def _fetch_institutional_holdings(entity_name: str, quarters: int = 1) -> dict:
             except ValueError:
                 shares = None
             val_raw = h.get("value_thousands_usd") or ""
-            try:
-                value_usd = float(str(val_raw).replace(",", "")) * 1000 if val_raw else None
-            except ValueError:
-                value_usd = None
-            price = round(value_usd / shares, 2) if value_usd and shares and shares > 0 else None
+            value_usd, price = _parse_13f_position_value(val_raw, shares)
             pos = {
                 "issuer": issuer,
                 "symbol": None,

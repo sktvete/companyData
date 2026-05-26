@@ -19,7 +19,8 @@
   input:focus,select:focus,textarea:focus{border-color:rgba(59,130,246,.6)}
   button{cursor:pointer;font-family:'JetBrains Mono',monospace}
   .nav{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.5rem;border-bottom:1px solid var(--border);background:rgba(11,15,25,.95);backdrop-filter:blur(8px);position:sticky;top:0;z-index:40}
-  .nav-brand{font-size:.85rem;font-weight:700;letter-spacing:.08em;color:var(--accent2)}
+  .nav-brand{font-size:.85rem;font-weight:700;letter-spacing:.08em;color:var(--accent2);text-decoration:none}
+  .nav-brand:hover{color:var(--fg)}
   .nav-links{display:flex;align-items:center;gap:1.5rem}
   .nav-link{font-size:.72rem;color:var(--dim);letter-spacing:.05em;text-transform:uppercase;transition:color .12s}
   .nav-link:hover,.nav-link.active{color:var(--fg)}
@@ -107,13 +108,16 @@
 </style>
 </head>
 <body>
+<link rel="stylesheet" href="/static/user.css"/>
+<script src="/static/user.js" defer></script>
 
 <nav class="nav">
-  <span class="nav-brand">MOON<span style="color:var(--fg)">STOCKS</span></span>
+  <a href="/" class="nav-brand">MOON<span style="color:var(--fg)">STOCKS</span></a>
   <div class="nav-links">
     <a href="/" class="nav-link">Screener</a>
     <a href="/tracker" class="nav-link active">Tracker</a>
     <a href="/sectors" class="nav-link">Sectors</a>
+    <div id="msUserNav" class="ms-user-nav"></div>
   </div>
 </nav>
 
@@ -282,7 +286,7 @@ let _researchInvId = null;
 let _researchAbort = null;
 let _researchPollTimer = null;
 const CHART_POINTS = 60;
-const PRICE_CACHE_KEY = 'moonstocks_tracker_prices_v1';
+const PRICE_CACHE_KEY = 'moonstocks_tracker_prices_v2';
 const PRICE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CHART_RANGE_STORAGE_KEY = 'moonstocks_tracker_range_v1';
 const TRACKER_RANGE_META = {
@@ -494,7 +498,10 @@ function renderSidebar() {
     const active = _activeInv && _activeInv.id === inv.id ? ' active' : '';
     const slug = investorSlug(inv);
     return `<a href="/tracker/${encodeURIComponent(slug)}" class="inv-card${active}" onclick="return navigateInvestor(event, '${inv.id}')">
-      <div class="inv-name">${esc(inv.name)}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.35rem">
+        <div class="inv-name">${esc(inv.name)}</div>
+        ${window.MoonUser ? MoonUser.starBtn('investor', slug) : ''}
+      </div>
       <div class="inv-meta">${holds.length} holding${holds.length !== 1 ? 's' : ''} · ${holds.slice(0,4).map(h=>h.symbol).join(', ') || '—'}</div>
     </a>`;
   }).join('');
@@ -778,10 +785,15 @@ function resolveEntryAnchorIndex(prices, entryDate) {
 
 function entryPriceForTxn(allPrices, entry) {
   if (!entry) return null;
-  if (entry.price != null) return entry.price;
-  return priceOnOrBefore(allPrices, entry.date)?.close
+  const market = priceOnOrBefore(allPrices, entry.date)?.close
     || priceOnOrAfter(allPrices, entry.date)?.close
     || null;
+  if (entry.price != null && market != null) {
+    const ratio = entry.price / market;
+    if (ratio >= 0.25 && ratio <= 4) return entry.price;
+    return market;
+  }
+  return market ?? entry.price ?? null;
 }
 
 function pricesForHoldingChart(allPrices, entryDate, target = CHART_POINTS, range = _chartRange) {
@@ -806,6 +818,38 @@ function holdingRangePct(prices, isShort) {
   return isShort
     ? ((first - last) / first * 100)
     : ((last - first) / first * 100);
+}
+
+function holdingPnlSinceEntry(allPrices, entry, isShort) {
+  if (!allPrices?.length || !entry) return 0;
+  const entryPrice = entryPriceForTxn(allPrices, entry);
+  const last = allPrices[allPrices.length - 1]?.close;
+  if (!entryPrice || !last) return 0;
+  return isShort
+    ? ((entryPrice - last) / entryPrice * 100)
+    : ((last - entryPrice) / entryPrice * 100);
+}
+
+function _trackerPriceRange(transactions) {
+  const txns = transactions || [];
+  if (!txns.length) return '1y';
+  let minDate = null;
+  for (const t of txns) {
+    const d = (t.date || '').slice(0, 10);
+    if (!d) continue;
+    if (!minDate || d < minDate) minDate = d;
+  }
+  if (!minDate) return '1y';
+  const start = new Date(minDate + 'T00:00:00');
+  const days = Math.max(14, Math.ceil((Date.now() - start.getTime()) / 86400000) + 45);
+  if (days <= 60) return '1m';
+  if (days <= 100) return '3m';
+  if (days <= 190) return '6m';
+  if (days <= 370) return '1y';
+  if (days <= 1100) return '3y';
+  if (days <= 1830) return '5y';
+  if (days <= 3660) return '10y';
+  return 'max';
 }
 
 function timelineIndexAt(timeline, date) {
@@ -1062,17 +1106,19 @@ function invalidatePriceCache(sym) {
   persistPriceCache();
 }
 
-async function fetchPrices(sym) {
+async function fetchPrices(sym, transactions) {
   sym = (sym || '').toUpperCase();
   if (!sym) return [];
-  if (_priceCache[sym]) return _priceCache[sym];
+  const rng = _trackerPriceRange(transactions);
+  const cacheKey = sym + ':' + rng;
+  if (_priceCache[cacheKey]) return _priceCache[cacheKey];
   try {
-    const r = await fetch(`/api/company/${sym}/price-history?range=max`);
+    const r = await fetch(`/api/company/${sym}/price-history?range=${rng}&dense=1`);
     if (!r.ok) return [];
     const d = await r.json();
     const prices = d.prices || [];
     if (prices.length) {
-      _priceCache[sym] = prices;
+      _priceCache[cacheKey] = prices;
       persistPriceCache();
     }
     return prices;
@@ -1186,6 +1232,10 @@ function computeHoldings(transactions) {
   }).sort((a, b) => b.volume - a.volume);
 }
 
+function holdingFavStar(sym) {
+  return window.MoonUser ? MoonUser.starBtn('symbol', sym, 'ms-star-holding') : '';
+}
+
 async function renderHoldings(inv, renderId, cachedPriceMap) {
   if (renderId == null) renderId = ++_holdingsRenderId;
   const invId = inv.id;
@@ -1216,7 +1266,7 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
   const priceMap = cachedPriceMap ? cachedPriceMap : {};
   if (!cachedPriceMap) {
     await Promise.all(symbols.map(async sym => {
-      priceMap[sym] = await fetchPrices(sym);
+      priceMap[sym] = await fetchPrices(sym, inv.transactions);
     }));
   }
 
@@ -1246,7 +1296,7 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
       cardParts.push(`<div class="holding-card">
         <div class="holding-top">
           <div>
-            <a class="holding-symbol" href="/company/${sym}">${sym}</a>
+            <a class="holding-symbol" href="/company/${sym}">${sym}</a>${holdingFavStar(sym)}
             <div class="holding-meta">Since ${entry.date}${entry.price ? ' @ $' + Number(entry.price).toFixed(2) : ''}${sharesLabel ? ' · ' + sharesLabel : ''}</div>
           </div>
           <span class="holding-pnl" style="color:var(--dim);font-size:.72rem">chart n/a</span>
@@ -1255,14 +1305,14 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
       continue;
     }
 
-    const pct = holdingRangePct(prices, false);
+    const pct = holdingPnlSinceEntry(allPrices, entry, false);
     const cls = pct >= 0 ? 'pnl-pos' : 'pnl-neg';
     const id = 'chart_' + sym + '_' + Math.random().toString(36).slice(2, 8);
 
     cardParts.push(`<div class="holding-card">
       <div class="holding-top">
         <div>
-          <a class="holding-symbol" href="/company/${sym}">${sym}</a>
+          <a class="holding-symbol" href="/company/${sym}">${sym}</a>${holdingFavStar(sym)}
           <div class="holding-meta">Since ${entry.date}${entry.price ? ' @ $' + Number(entry.price).toFixed(2) : ''}</div>
         </div>
         <span class="holding-pnl ${cls}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>
@@ -1283,7 +1333,7 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
       cardParts.push(`<div class="holding-card short">
         <div class="holding-top">
           <div>
-            <a class="holding-symbol" href="/company/${sym}">${sym}</a>
+            <a class="holding-symbol" href="/company/${sym}">${sym}</a>${holdingFavStar(sym)}
             <div class="holding-meta">${entry ? 'Short · ' + entry.date : 'Hedge / short'}</div>
           </div>
           <span class="chip-short">short</span>
@@ -1292,14 +1342,14 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
       continue;
     }
 
-    const pct = holdingRangePct(prices, true);
+    const pct = holdingPnlSinceEntry(allPrices, entry, true);
     const cls = pct >= 0 ? 'pnl-pos' : 'pnl-neg';
     const id = 'chart_short_' + sym + '_' + Math.random().toString(36).slice(2, 8);
 
     cardParts.push(`<div class="holding-card short">
       <div class="holding-top">
         <div>
-          <a class="holding-symbol" href="/company/${sym}">${sym}</a>
+          <a class="holding-symbol" href="/company/${sym}">${sym}</a>${holdingFavStar(sym)}
           <div class="holding-meta">Short · ${entry.date}${entry.price ? ' @ $' + Number(entry.price).toFixed(2) : ''}</div>
         </div>
         <span class="holding-pnl ${cls}">${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>
@@ -1755,6 +1805,14 @@ async function startResearch() {
 }
 
 loadPriceCacheFromStorage();
+document.addEventListener('moonuser:favorites', () => {
+  renderSidebar();
+  if (_activeInv) renderHoldings(_activeInv, ++_holdingsRenderId, _cachedPriceMap);
+});
+document.addEventListener('moonuser:auth', () => {
+  renderSidebar();
+  if (_activeInv) renderHoldings(_activeInv, ++_holdingsRenderId, _cachedPriceMap);
+});
 document.getElementById('chartRangeBar')?.addEventListener('click', e => {
   const btn = e.target.closest('.rbtn');
   if (!btn || btn.style.display === 'none') return;

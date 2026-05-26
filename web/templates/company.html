@@ -126,8 +126,8 @@
   #chartPrice{cursor:crosshair}
   #chartPrice.reports-hit{cursor:pointer}
   .price-chart-card{overflow:visible}
-  .price-toolbar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.75rem 1rem;padding:1rem 1rem .5rem}
-  .price-toolbar-main{flex:1;min-width:min(100%,12rem)}
+  .price-toolbar{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.75rem 1rem;padding:1rem 1rem .5rem;position:relative}
+  .price-toolbar-main{flex:1;min-width:min(100%,12rem);padding-right:min(22rem,42%)}
   .price-range-row{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem;margin-bottom:.25rem}
   .price-chart-stack{padding:0 .75rem .5rem;overflow:visible;display:flex;flex-direction:column;flex:1;min-height:0}
   .price-chart-pane,.vol-chart-pane{overflow:hidden;position:relative}
@@ -156,10 +156,13 @@
   }
   @media (max-width:639px){
     .fin-panel-grid{grid-template-columns:1fr}
+    .price-toolbar-main{padding-right:0}
+    #priceHover{top:auto;bottom:0;left:1rem;right:1rem;max-width:none;text-align:left}
   }
   #priceHover{
-    display:none;pointer-events:none;flex:0 1 auto;align-self:flex-start;min-width:0;max-width:min(100%,22rem);
-    margin-left:auto;padding:.35rem .5rem;text-align:right;font-size:.58rem;line-height:1.35;
+    display:none;pointer-events:none;position:absolute;top:1rem;right:1rem;z-index:25;
+    min-width:0;max-width:min(calc(100% - 2rem),22rem);
+    padding:.35rem .5rem;text-align:right;font-size:.58rem;line-height:1.35;
     color:var(--dim);background:rgba(11,15,25,.85);border:1px solid var(--border);border-radius:3px;
   }
   #hoverDate{color:var(--fg);font-weight:600;margin-bottom:.2rem;font-size:.62rem}
@@ -168,6 +171,9 @@
   #hoverOverlay{margin-top:.25rem;padding-top:.25rem;border-top:1px solid rgba(30,45,61,.7);font-size:.58rem;line-height:1.45}
   #hoverOverlay:empty{display:none}
 </style>
+<link rel="stylesheet" href="/static/user.css"/>
+<script src="/static/codex_auth.js"></script>
+<script src="/static/user.js" defer></script>
 <body class="min-h-screen">
 <nav class="sticky top-0 z-40 flex items-center justify-between px-6 py-3" style="background:rgba(11,15,25,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)">
   <div class="flex items-center gap-3 flex-wrap">
@@ -175,9 +181,11 @@
     <a href="/" class="run-btn" style="padding:.25rem .55rem;font-size:.62rem">&larr; Dashboard</a>
     <span style="color:var(--border);font-size:.7rem">/</span>
     <span style="font-weight:700;font-size:.8rem;color:var(--accent);letter-spacing:.04em">{{ company.symbol }}</span>
+    <span id="companyFavStar"></span>
     <span style="color:var(--dim);font-size:.72rem;max-width:min(280px,40vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" class="hidden sm:inline">{{ company.name }}</span>
   </div>
   <div class="flex items-center gap-2 flex-shrink-0">
+    <div id="msUserNav" class="ms-user-nav"></div>
     <a href="/sectors" style="color:var(--dim);font-size:.72rem" onmouseover="this.style.color='var(--fg)'" onmouseout="this.style.color='var(--dim)'">Sectors</a>
     <span class="badge badge-good" style="font-size:.55rem;max-width:120px;overflow:hidden;text-overflow:ellipsis">{{ company.sector }}</span>
     <span class="badge badge-fair" style="font-size:.55rem">{{ company.data_quality.quality }}</span>
@@ -193,7 +201,10 @@
     <div class="card p-5 lg:col-span-2">
       <div class="flex flex-wrap items-start gap-4 mb-4">
         <div>
-          <h1 style="font-size:1.75rem;font-weight:800;color:var(--fg);letter-spacing:.04em">{{ company.symbol }}</h1>
+          <h1 style="font-size:1.75rem;font-weight:800;color:var(--fg);letter-spacing:.04em;display:flex;align-items:center;gap:.35rem;flex-wrap:wrap">
+            {{ company.symbol }}
+            <span id="companyFavStarHero"></span>
+          </h1>
           <div style="color:var(--dim);font-size:.8rem;margin-top:.15rem">{{ company.name }}</div>
           <div style="color:var(--dim);font-size:.68rem;margin-top:.1rem">{{ company.industry or '' }} &nbsp;·&nbsp; {{ company.exchange or 'US' }}</div>
         </div>
@@ -640,7 +651,7 @@
   </div>
   <div id="gchatAuth" class="gchat-auth show">
     <button type="button" id="gchatLoginBtn">Sign in with ChatGPT</button>
-    <div class="gchat-hint" style="margin-top:.4rem">Uses your ChatGPT Plus/Pro subscription. Login is saved on this server.</div>
+    <div class="gchat-hint" style="margin-top:.4rem">Uses your ChatGPT Plus/Pro subscription. Login is saved in this browser only.</div>
     <div id="gchatSigned" class="gchat-signed" style="display:none">Connected · <button type="button" id="gchatLogoutBtn" style="background:none;border:none;color:var(--dim);cursor:pointer;font-size:.58rem;text-decoration:underline">Sign out</button></div>
     <!-- API-key fallback -->
     <div id="gchatApiKeyRow" style="margin-top:.55rem;display:flex;gap:.4rem;align-items:center">
@@ -1762,6 +1773,32 @@ function indexForReportDate(labels, dateStr) {
   return best;
 }
 
+/** Extend overlay filter by N quarters beyond the visible price range on each side. */
+function _overlayHistBounds(labels, hist, padQuarters = 1) {
+  const rangeStart = labels[0];
+  const rangeEnd = labels[labels.length - 1];
+  const dates = [...new Set(
+    (hist || []).map(r => r.period_end).filter(Boolean)
+  )].sort((a, b) => a.localeCompare(b));
+  if (!dates.length) return { rangeStart, rangeEnd };
+
+  let firstIdx = dates.findIndex(d => d >= rangeStart);
+  if (firstIdx === -1) firstIdx = dates.length;
+  else firstIdx = Math.max(0, firstIdx - padQuarters);
+
+  let lastIdx = -1;
+  for (let i = dates.length - 1; i >= 0; i--) {
+    if (dates[i] <= rangeEnd) { lastIdx = i; break; }
+  }
+  if (lastIdx === -1) lastIdx = 0;
+  else lastIdx = Math.min(dates.length - 1, lastIdx + padQuarters);
+
+  return {
+    rangeStart: dates[firstIdx] ?? rangeStart,
+    rangeEnd: dates[lastIdx] ?? rangeEnd,
+  };
+}
+
 function reportsInPriceRange(labels) {
   if (!labels.length || !_quarterlyReports.length) return [];
   const lo = labels[0];
@@ -2130,24 +2167,24 @@ async function gchatRefreshAuth() {
   const inp      = document.getElementById('gchatInput');
   const send     = document.getElementById('gchatSend');
   try {
-    const r = await fetch('/api/auth/status');
-    const d = await r.json();
-    gchatAuthenticated = !!d.authenticated;
+    if (window.CodexAuth) await CodexAuth.refreshIfNeeded().catch(() => {});
+    gchatAuthenticated = window.CodexAuth ? CodexAuth.isAuthenticated() : false;
     if (authBox) authBox.classList.add('show');
     if (gchatAuthenticated) {
       if (signed)   signed.classList.add('show');
-      if (loginBtn) loginBtn.style.display = 'none';
+      if (loginBtn) { loginBtn.style.display = 'none'; loginBtn.disabled = false; }
       if (apiKeyRow) apiKeyRow.style.display = 'none';
       const hint0 = authBox && authBox.querySelector('.gchat-hint');
       if (hint0) hint0.style.display = 'none';
       gchatEnableChat();
+      CodexAuth?.stopPoll?.();
       if (gchatAuthPoll) { clearInterval(gchatAuthPoll); gchatAuthPoll = null; }
     } else {
       if (signed)   signed.classList.remove('show');
-      if (loginBtn) { loginBtn.style.display = ''; loginBtn.disabled = !!d.loginInProgress; }
+      if (loginBtn) { loginBtn.style.display = ''; loginBtn.disabled = false; loginBtn.textContent = 'Sign in with ChatGPT'; }
       const hint0 = authBox && authBox.querySelector('.gchat-hint');
       if (hint0) hint0.style.display = '';
-      // If we already have a stored API key, enable chat immediately
+      if (window.CodexAuth) await CodexAuth.resumeIfPending?.().catch(() => {});
       if (gchatApiKey && gchatApiKey.startsWith('sk-')) {
         gchatEnableChat();
         const stat = document.getElementById('gchatApiKeyStatus');
@@ -2159,36 +2196,31 @@ async function gchatRefreshAuth() {
     }
   } catch (_) {
     gchatAuthenticated = false;
+    if (loginBtn) loginBtn.disabled = false;
   }
 }
 
 async function gchatLogin() {
   const err = document.getElementById('gchatErr');
   const loginBtn = document.getElementById('gchatLoginBtn');
+  if (!window.CodexAuth) {
+    if (err) err.textContent = 'ChatGPT auth module failed to load.';
+    return;
+  }
   if (err) err.textContent = '';
-  if (loginBtn) loginBtn.disabled = true;
+  if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = 'Signing in…'; }
   try {
-    const r = await fetch('/api/auth/login', { method: 'POST' });
-    const d = await r.json();
-    if (d.authenticated) {
-      await gchatRefreshAuth();
-      return;
-    }
-    if (d.error) throw new Error(d.error);
-    if (!d.authUrl) throw new Error('No auth URL');
-    window.open(d.authUrl, 'chatgpt_oauth', 'width=520,height=720');
-    if (gchatAuthPoll) clearInterval(gchatAuthPoll);
-    gchatAuthPoll = setInterval(async () => {
-      await gchatRefreshAuth();
-    }, 1200);
+    await CodexAuth.login();
+    await gchatRefreshAuth();
   } catch (e) {
-    if (err) err.textContent = String(e);
-    if (loginBtn) loginBtn.disabled = false;
+    if (err) err.textContent = String(e.message || e);
+  } finally {
+    if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign in with ChatGPT'; }
   }
 }
 
 async function gchatLogout() {
-  await fetch('/api/auth/logout', { method: 'POST' });
+  if (window.CodexAuth) await CodexAuth.logout();
   gchatAuthenticated = false;
   await gchatRefreshAuth();
 }
@@ -2268,6 +2300,7 @@ async function gchatSend() {
   try {
     const chatPayload = { message: msg, history: gchatHistory };
     if (!gchatAuthenticated && gchatApiKey) chatPayload.openai_api_key = gchatApiKey;
+    await CodexAuth.appendToBody(chatPayload);
     const r = await fetch(`/api/company/${encodeURIComponent(SYM)}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2421,7 +2454,7 @@ function _buildFcfYieldOverlay(labels) {
   const hist = (_fullHist && _fullHist.length) ? _fullHist : (_annualHist || []);
   if (!hist.length || !_sharesOut) return null;
   const sorted = hist.slice().sort((a, b) => (a.period_end || '').localeCompare(b.period_end || ''));
-  const rangeStart = labels[0], rangeEnd = labels[labels.length - 1];
+  const { rangeStart, rangeEnd } = _overlayHistBounds(labels, sorted);
   const sparse = new Array(labels.length).fill(null);
   for (let i = 0; i < sorted.length; i++) {
     const row = sorted[i];
@@ -2453,7 +2486,7 @@ function _buildOverlayData(key, labels) {
   if (!hist.length) return null;
   const source = (def.histField === 'roe_pct' && !hist.some(r => r.roe_pct != null) && _annualHist.length)
     ? _annualHist : hist;
-  const rangeStart = labels[0], rangeEnd = labels[labels.length - 1];
+  const { rangeStart, rangeEnd } = _overlayHistBounds(labels, source);
   const sparse = new Array(labels.length).fill(null);
   for (const row of source) {
     const d = row.period_end;
@@ -2594,6 +2627,17 @@ function initOverlayDragAndDrop() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  function paintCompanyFav() {
+    if (!window.MoonUser) return;
+    const html = MoonUser.starBtn('symbol', '{{ company.symbol }}', 'ms-star-lg');
+    for (const id of ['companyFavStar', 'companyFavStarHero']) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = html;
+    }
+  }
+  paintCompanyFav();
+  document.addEventListener('moonuser:auth', paintCompanyFav);
+  document.addEventListener('moonuser:favorites', paintCompanyFav);
   _historyPayloadPromise = loadHistory();
   bootPriceChart();
   restartLiveQuotePolling();
@@ -2742,6 +2786,7 @@ document.addEventListener('DOMContentLoaded', () => {
       gchatEnableChat();
     });
   }
+  document.addEventListener('codexauth:changed', () => gchatRefreshAuth());
   gchatRefreshAuth();
 });
 
@@ -2883,9 +2928,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Re-use same flow as the trigger button
     try {
-      const authR = await fetch('/api/auth/status');
-      const authD = await authR.json();
-      if (authD.authenticated) { msRunStream(null, 'auto'); return; }
+      if (CodexAuth.isAuthenticated()) { msRunStream(null, 'auto'); return; }
     } catch (_) {}
     let key = msGetStoredKey(), model = msGetStoredModel(), highEffort = msGetStoredEffort();
     if (!key || !key.startsWith('sk-')) {
@@ -2946,7 +2989,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const cleanup = () => {
         modal.style.display = 'none';
         cancel.onclick = null; confirm.onclick = null; codexBtn.onclick = null;
-        if (window._msCodexPoll) { clearInterval(window._msCodexPoll); window._msCodexPoll = null; }
+        CodexAuth.stopPoll();
       };
 
       cancel.onclick = () => { cleanup(); resolve(null); };
@@ -2958,29 +3001,17 @@ document.addEventListener('DOMContentLoaded', () => {
         codexStat.style.color   = 'var(--dim)';
         codexStat.textContent   = 'Opening ChatGPT sign-in…';
         try {
-          const r = await fetch('/api/auth/login', { method: 'POST' });
-          const d = await r.json();
-          if (d.authenticated) {
+          if (CodexAuth.isAuthenticated()) {
             codexStat.style.color = 'var(--pos)';
             codexStat.textContent = 'Signed in! Starting analysis…';
             cleanup();
             resolve({ key: null, model: 'auto' });
             return;
           }
-          if (d.authUrl) {
-            window.open(d.authUrl, 'chatgpt_oauth', 'width=520,height=720');
-            codexStat.textContent = 'Complete sign-in in the popup…';
-            window._msCodexPoll = setInterval(async () => {
-              const sr = await fetch('/api/auth/status');
-              const sd = await sr.json();
-              if (sd.authenticated) {
-                clearInterval(window._msCodexPoll); window._msCodexPoll = null;
-                codexStat.style.color = 'var(--pos)';
-                codexStat.textContent = 'Signed in! Starting analysis…';
-                setTimeout(() => { cleanup(); resolve({ key: null, model: 'auto' }); }, 800);
-              }
-            }, 1200);
-          }
+          await CodexAuth.login();
+          codexStat.style.color = 'var(--pos)';
+          codexStat.textContent = 'Signed in! Starting analysis…';
+          setTimeout(() => { cleanup(); resolve({ key: null, model: 'auto' }); }, 800);
         } catch (e) {
           codexStat.style.color = 'var(--neg)';
           codexStat.textContent = 'Login failed: ' + e.message;
@@ -3096,6 +3127,7 @@ document.addEventListener('DOMContentLoaded', () => {
       : { model };
     // strip undefined keys
     Object.keys(reqBody).forEach(k => reqBody[k] === undefined && delete reqBody[k]);
+    if (!key) await CodexAuth.appendToBody(reqBody);
 
     let resp;
     try {
@@ -3347,9 +3379,7 @@ document.addEventListener('DOMContentLoaded', () => {
       triggerBtn.addEventListener('click', async () => {
         // Prefer ChatGPT OAuth session (no key needed) — same sign-in as the chatbot
         try {
-          const authR = await fetch('/api/auth/status');
-          const authD = await authR.json();
-          if (authD.authenticated) {
+          if (CodexAuth.isAuthenticated()) {
             msRunStream(null, 'auto');
             return;
           }
