@@ -1,0 +1,27 @@
+{
+  "analysis_timestamp": "2026-05-26T19:08:57.641848",
+  "average_metrics_count": 0,
+  "batch_success_rate_pct": 0.0,
+  "batch_successful": 0,
+  "data_quality_stats": {
+    "excellent": 0,
+    "fair": 0,
+    "good": 0,
+    "poor": 0
+  },
+  "failed_companies": 1,
+  "failed_companies_details": [
+    {
+      "reason": "No fundamental data: 422 Client Error: Unprocessable Content for url: https://eodhd.com/api/fundamentals/%7B.US?api_token=6a00e8660ac464.50768272&fmt=json",
+      "symbol": "{"
+    }
+  ],
+  "investment_categories": {},
+  "merge_base": null,
+  "scale_target": 1,
+  "sector_breakdown": {},
+  "success_rate": 0.0,
+  "successful_analyses": 0,
+  "top_performers": [],
+  "total_companies_tested": 1
+}

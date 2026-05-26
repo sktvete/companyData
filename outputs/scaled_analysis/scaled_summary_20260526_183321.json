@@ -1,0 +1,43 @@
+{
+  "analysis_timestamp": "2026-05-26T18:33:21.092569",
+  "average_metrics_count": 0,
+  "batch_success_rate_pct": 0.0,
+  "batch_successful": 0,
+  "data_quality_stats": {
+    "excellent": 0,
+    "fair": 0,
+    "good": 0,
+    "poor": 0
+  },
+  "failed_companies": 5,
+  "failed_companies_details": [
+    {
+      "reason": "No fundamental data: 401 Client Error: Unauthorized for url: https://eodhd.com/api/fundamentals/AAPL.US?fmt=json",
+      "symbol": "AAPL"
+    },
+    {
+      "reason": "No fundamental data: 401 Client Error: Unauthorized for url: https://eodhd.com/api/fundamentals/AMZN.US?fmt=json",
+      "symbol": "AMZN"
+    },
+    {
+      "reason": "No fundamental data: 401 Client Error: Unauthorized for url: https://eodhd.com/api/fundamentals/GOOGL.US?fmt=json",
+      "symbol": "GOOGL"
+    },
+    {
+      "reason": "No fundamental data: 401 Client Error: Unauthorized for url: https://eodhd.com/api/fundamentals/MSFT.US?fmt=json",
+      "symbol": "MSFT"
+    },
+    {
+      "reason": "No fundamental data: 401 Client Error: Unauthorized for url: https://eodhd.com/api/fundamentals/NVDA.US?fmt=json",
+      "symbol": "NVDA"
+    }
+  ],
+  "investment_categories": {},
+  "merge_base": null,
+  "scale_target": 5,
+  "sector_breakdown": {},
+  "success_rate": 0.0,
+  "successful_analyses": 0,
+  "top_performers": [],
+  "total_companies_tested": 5
+}

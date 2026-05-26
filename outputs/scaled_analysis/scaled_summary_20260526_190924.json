@@ -1,0 +1,457 @@
+{
+  "analysis_timestamp": "2026-05-26T19:09:24.334180",
+  "average_metrics_count": 73.55442642173148,
+  "batch_success_rate_pct": 100.0,
+  "batch_successful": 1,
+  "data_quality_stats": {
+    "excellent": 1022,
+    "fair": 1150,
+    "good": 2064,
+    "poor": 881
+  },
+  "failed_companies": 0,
+  "failed_companies_details": [],
+  "investment_categories": {
+    "EXCELLENT": 17,
+    "FAIR": 1205,
+    "GOOD": 329,
+    "POOR": 1941,
+    "RISKY": 1625
+  },
+  "merge_base": "C:\\Users\\sintve\\Documents\\projects\\2026_Q3\\moonStocks\\moonstocks-core\\outputs\\scaled_analysis\\snapshot.jsonl",
+  "scale_target": 1000,
+  "sector_breakdown": {
+    "Basic Materials": {
+      "average_score": 4.478096723868985,
+      "companies": [
+        "AEM",
+        "AU",
+        "B",
+        "DPMLF",
+        "CGAU"
+      ],
+      "count": 641,
+      "total_score": 2870.460000000019
+    },
+    "Communication Services": {
+      "average_score": 6.159905213270144,
+      "companies": [
+        "EVER",
+        "META",
+        "NFLX",
+        "APP",
+        "ATDRY"
+      ],
+      "count": 211,
+      "total_score": 1299.7400000000005
+    },
+    "Consumer Cyclical": {
+      "average_score": 7.259830097087374,
+      "companies": [
+        "EAT",
+        "DECK",
+        "BBW",
+        "ALV",
+        "FIVE"
+      ],
+      "count": 412,
+      "total_score": 2991.049999999998
+    },
+    "Consumer Defensive": {
+      "average_score": 7.052727272727273,
+      "companies": [
+        "AMNF",
+        "CRBBF",
+        "DLTR",
+        "COCO",
+        "CALM"
+      ],
+      "count": 286,
+      "total_score": 2017.08
+    },
+    "Energy": {
+      "average_score": 5.26448669201521,
+      "companies": [
+        "EFXT",
+        "CESDF",
+        "ARLP",
+        "BSM",
+        "BWLP"
+      ],
+      "count": 263,
+      "total_score": 1384.5600000000004
+    },
+    "Financial Services": {
+      "average_score": 7.150000000000018,
+      "companies": [
+        "CRVL",
+        "EZPW",
+        "ASA",
+        "CARE",
+        "EVR"
+      ],
+      "count": 812,
+      "total_score": 5805.800000000015
+    },
+    "Financials": {
+      "average_score": 5.1274999999999995,
+      "companies": [
+        "AFGE",
+        "BPAC",
+        "BPACU",
+        "AFFS"
+      ],
+      "count": 4,
+      "total_score": 20.509999999999998
+    },
+    "Healthcare": {
+      "average_score": 5.76544061302679,
+      "companies": [
+        "CRMD",
+        "AUPH",
+        "DXCM",
+        "ADMA",
+        "CPRX"
+      ],
+      "count": 783,
+      "total_score": 4514.3399999999765
+    },
+    "Industrials": {
+      "average_score": 7.109720998531558,
+      "companies": [
+        "ECG",
+        "FIX",
+        "ALLE",
+        "BLBD",
+        "TT"
+      ],
+      "count": 681,
+      "total_score": 4841.719999999991
+    },
+    "Other": {
+      "average_score": 5.400666666666666,
+      "companies": [
+        "ETP",
+        "COWPP",
+        "ASCS",
+        "CRLKP",
+        "AKS"
+      ],
+      "count": 15,
+      "total_score": 81.00999999999999
+    },
+    "Real Estate": {
+      "average_score": 6.038287037037032,
+      "companies": [
+        "CBRE",
+        "CHCI",
+        "DX",
+        "CTOUF",
+        "CNPPF"
+      ],
+      "count": 216,
+      "total_score": 1304.2699999999988
+    },
+    "Technology": {
+      "average_score": 6.804387568555753,
+      "companies": [
+        "DUOL",
+        "DAVE",
+        "FSLR",
+        "EXLS",
+        "DLO"
+      ],
+      "count": 547,
+      "total_score": 3721.999999999997
+    },
+    "Unknown": {
+      "average_score": 5.528690476190475,
+      "companies": [
+        "AIZN",
+        "EAI",
+        "ENJ",
+        "CCZ",
+        "CGRIF"
+      ],
+      "count": 84,
+      "total_score": 464.40999999999985
+    },
+    "Utilities": {
+      "average_score": 5.446419753086419,
+      "companies": [
+        "CWCO",
+        "CEPU",
+        "EMP",
+        "ENGDF",
+        "ENO"
+      ],
+      "count": 162,
+      "total_score": 882.3199999999998
+    }
+  },
+  "success_rate": 100.0,
+  "successful_analyses": 5117,
+  "top_performers": [
+    {
+      "category": "EXCELLENT",
+      "data_quality": "FAIR",
+      "market_cap_b": 4.967291904,
+      "name": "Duolingo Inc",
+      "overall_score": 18.78,
+      "pe_ratio": 11.601854263020979,
+      "rank": 1,
+      "revenue_b": 1.098813,
+      "roe_pct": 30.349254615006565,
+      "sector": "Technology",
+      "symbol": "DUOL"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "FAIR",
+      "market_cap_b": 2.904696832,
+      "name": "Dave Inc",
+      "overall_score": 18.5,
+      "pe_ratio": 12.94737938535137,
+      "rank": 2,
+      "revenue_b": 0.604617,
+      "roe_pct": 110.4072509213322,
+      "sector": "Technology",
+      "symbol": "DAVE"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 0.62604608,
+      "name": "CorMedix Inc",
+      "overall_score": 17.49,
+      "pe_ratio": 3.1026563176410447,
+      "rank": 3,
+      "revenue_b": 0.400054343,
+      "roe_pct": 41.41688963937682,
+      "sector": "Healthcare",
+      "symbol": "CRMD"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 5.893211648,
+      "name": "Brinker International Inc",
+      "overall_score": 17.42,
+      "pe_ratio": 12.907575285279368,
+      "rank": 4,
+      "revenue_b": 5.7335,
+      "roe_pct": 114.01477832512315,
+      "sector": "Consumer Cyclical",
+      "symbol": "EAT"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 27.70684928,
+      "name": "First Solar Inc",
+      "overall_score": 17.33,
+      "pe_ratio": 16.641471848560208,
+      "rank": 5,
+      "revenue_b": 5.419048,
+      "roe_pct": 16.8578380996112,
+      "sector": "Technology",
+      "symbol": "FSLR"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 4.508624384,
+      "name": "ExlService Holdings Inc",
+      "overall_score": 17.1,
+      "pe_ratio": 18.302475150605883,
+      "rank": 6,
+      "revenue_b": 2.157011,
+      "roe_pct": 32.29811351765014,
+      "sector": "Technology",
+      "symbol": "EXLS"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 1.957317504,
+      "name": "Aurinia Pharmaceuticals Inc",
+      "overall_score": 16.98,
+      "pe_ratio": 6.5836391655788775,
+      "rank": 7,
+      "revenue_b": 0.298295,
+      "roe_pct": 52.5368816791338,
+      "sector": "Healthcare",
+      "symbol": "AUPH"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 0.667847488,
+      "name": "EverQuote Inc Class A",
+      "overall_score": 16.9,
+      "pe_ratio": 6.170058368408148,
+      "rank": 8,
+      "revenue_b": 0.716741,
+      "roe_pct": 45.66586539459536,
+      "sector": "Communication Services",
+      "symbol": "EVER"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "POOR",
+      "market_cap_b": 7.587334656,
+      "name": "Everus Construction Group Inc",
+      "overall_score": 16.88,
+      "pe_ratio": 33.91807198280273,
+      "rank": 9,
+      "revenue_b": 3.956711,
+      "roe_pct": 32.52288396142917,
+      "sector": "Industrials",
+      "symbol": "ECG"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "FAIR",
+      "market_cap_b": 3.54888576,
+      "name": "Dlocal Ltd",
+      "overall_score": 16.75,
+      "pe_ratio": 18.8438,
+      "rank": 10,
+      "revenue_b": 1.21269,
+      "roe_pct": 34.73813428019243,
+      "sector": "Technology",
+      "symbol": "DLO"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 64.325091328,
+      "name": "Comfort Systems USA Inc",
+      "overall_score": 16.75,
+      "pe_ratio": 52.81544194720837,
+      "rank": 11,
+      "revenue_b": 10.135687,
+      "roe_pct": 43.46806875051509,
+      "sector": "Industrials",
+      "symbol": "FIX"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 15.141803008,
+      "name": "Deckers Outdoor Corporation",
+      "overall_score": 16.63,
+      "pe_ratio": 15.243261547127219,
+      "rank": 12,
+      "revenue_b": 5.472296,
+      "roe_pct": 40.968772278225885,
+      "sector": "Consumer Cyclical",
+      "symbol": "DECK"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 0.46510032,
+      "name": "Build-A-Bear Workshop Inc",
+      "overall_score": 16.57,
+      "pe_ratio": 8.909471200119105,
+      "rank": 13,
+      "revenue_b": 0.529832,
+      "roe_pct": 33.6732719250716,
+      "sector": "Consumer Cyclical",
+      "symbol": "BBW"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 27.821443072,
+      "name": "DexCom Inc",
+      "overall_score": 16.22,
+      "pe_ratio": 11.940533507296138,
+      "rank": 14,
+      "revenue_b": 4.8179,
+      "roe_pct": 31.46538604619703,
+      "sector": "Healthcare",
+      "symbol": "DXCM"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 3.215233792,
+      "name": "CorVel Corp",
+      "overall_score": 16.2,
+      "pe_ratio": 29.29600657494904,
+      "rank": 15,
+      "revenue_b": 0.958527,
+      "roe_pct": 27.989681176771995,
+      "sector": "Financial Services",
+      "symbol": "CRVL"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 9.187977216,
+      "name": "Autoliv Inc",
+      "overall_score": 16.08,
+      "pe_ratio": 13.169347530884549,
+      "rank": 16,
+      "revenue_b": 10.99,
+      "roe_pct": 26.955201214882308,
+      "sector": "Consumer Cyclical",
+      "symbol": "ALV"
+    },
+    {
+      "category": "EXCELLENT",
+      "data_quality": "GOOD",
+      "market_cap_b": 12.13723648,
+      "name": "Five Below Inc",
+      "overall_score": 16.01,
+      "pe_ratio": 33.68940923362393,
+      "rank": 17,
+      "revenue_b": 4.764147,
+      "roe_pct": 16.351736432482706,
+      "sector": "Consumer Cyclical",
+      "symbol": "FIVE"
+    },
+    {
+      "category": "GOOD",
+      "data_quality": "GOOD",
+      "market_cap_b": 1.909807104,
+      "name": "ADMA Biologics Inc",
+      "overall_score": 15.93,
+      "pe_ratio": 11.70440682655301,
+      "rank": 18,
+      "revenue_b": 0.509864,
+      "roe_pct": 42.363158906039835,
+      "sector": "Healthcare",
+      "symbol": "ADMA"
+    },
+    {
+      "category": "GOOD",
+      "data_quality": "EXCELLENT",
+      "market_cap_b": 2.079300736,
+      "name": "EZCORP Inc",
+      "overall_score": 15.93,
+      "pe_ratio": 13.474959162975468,
+      "rank": 19,
+      "revenue_b": 1.476694,
+      "roe_pct": 13.090430523326152,
+      "sector": "Financial Services",
+      "symbol": "EZPW"
+    },
+    {
+      "category": "GOOD",
+      "data_quality": "GOOD",
+      "market_cap_b": 11.208613888,
+      "name": "Allegion PLC",
+      "overall_score": 15.92,
+      "pe_ratio": 17.681655952245737,
+      "rank": 20,
+      "revenue_b": 4.159,
+      "roe_pct": 30.15895680095134,
+      "sector": "Industrials",
+      "symbol": "ALLE"
+    }
+  ],
+  "total_companies_tested": 1
+}

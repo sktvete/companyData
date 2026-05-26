@@ -12,7 +12,6 @@ __pycache__/
 
 data/
 # Ignore volatile runtime outputs only
-outputs/analysis_progress.json
 outputs/analysis_progress.json.tmp
 outputs/*.db
 outputs/*.db-shm
@@ -21,9 +20,8 @@ outputs/path_symbols.txt
 *.db
 *.db-shm
 *.db-wal
+!web/moonstocks_local.db
 outputs/scaled_analysis/scaled_failed_*.jsonl
-outputs/scaled_analysis/scaled_summary_*.json
-outputs/scaled_analysis/scaled_analysis_[0-9]*.jsonl
 **/.chatgpt_session.json
 
 web/__pycache__/
