@@ -151,6 +151,7 @@ _kill_port(PORT)
 try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(_ROOT, ".env"), override=False)
+    load_dotenv(os.path.join(_ROOT, "..", ".env"), override=False)
 except ImportError:
     pass
 _check_db()

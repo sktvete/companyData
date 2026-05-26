@@ -48,7 +48,7 @@ class CodexChatModel(BaseChatModel):
     """Single-round wrapper around the ChatGPT subscription Codex Responses API."""
 
     project_root: Any          # pathlib.Path
-    model_name:   str = "gpt-5.3-codex"
+    model_name:   str = "gpt-5.5"
     _bound_tools: list = []    # set via bind_tools
 
     class Config:
@@ -476,7 +476,7 @@ def analyze_stream_langgraph_codex(
 ) -> Generator[dict, None, None]:
     """LangGraph analyst using the ChatGPT subscription (Codex OAuth)."""
     from pathlib import Path as _Path
-    model = model or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex"
+    model = model or os.getenv("OPENAI_MODEL") or "gpt-5.5"
     yield {"type": "status", "text": "Starting LangGraph analysis via ChatGPT…\n\n"}
 
     try:

@@ -11,11 +11,19 @@ __pycache__/
 .pytest_cache/
 
 data/
-outputs/
-# Allow snapshot data so clones work out of the box
-!outputs/company_universe.json
-!outputs/scaled_analysis/
-!outputs/scaled_analysis/snapshot.jsonl
+# Ignore volatile runtime outputs only
+outputs/analysis_progress.json
+outputs/analysis_progress.json.tmp
+outputs/*.db
+outputs/*.db-shm
+outputs/*.db-wal
+outputs/path_symbols.txt
+*.db
+*.db-shm
+*.db-wal
+outputs/scaled_analysis/scaled_failed_*.jsonl
+outputs/scaled_analysis/scaled_summary_*.json
+outputs/scaled_analysis/scaled_analysis_[0-9]*.jsonl
 **/.chatgpt_session.json
 
 web/__pycache__/

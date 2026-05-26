@@ -2954,7 +2954,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (_) {}
 
-    // Fallback: no active broadcast — show countdown timer
+    // watch-stream returned 204: no analysis is actively running — clear the stale
+    // trigger so the user sees the normal "trigger" button instead of a countdown.
+    await fetch('/api/moonstocks/' + encodeURIComponent(MS_TICKER) + '/trigger', { method: 'DELETE' }).catch(() => {});
+    msHide('msLoading');
+    msShow('msNotFound');
+    const triggerBtn2 = document.getElementById('msTriggerBtn');
+    if (triggerBtn2) triggerBtn2.style.display = '';
+    return;
+
+    // Fallback: no active broadcast — show countdown timer (unreachable, kept for reference)
     const status = document.getElementById('msTriggerStatus');
     const totalSecs = 180;
     const elapsed   = Math.floor((Date.now() - triggeredAtMs) / 1000);

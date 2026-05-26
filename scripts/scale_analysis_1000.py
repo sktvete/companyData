@@ -35,6 +35,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "web"))
 # Load .env BEFORE importing Settings (defaults are evaluated at import time)
 from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env")
 
 from equity_sorter.config import load_settings
 from equity_sorter.io_utils import read_jsonl, write_jsonl, write_json

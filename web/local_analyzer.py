@@ -522,7 +522,7 @@ def analyze_stream_codex(
     project_root,
     model: str | None = None,
 ) -> Generator[dict, None, None]:
-    model = model or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex"
+    model = model or os.getenv("OPENAI_MODEL") or "gpt-5.5"
     """
     Yields SSE-compatible dicts. The AI uses EODHD tools on demand —
     visible as {type:"tool"} events — then produces the JSON report.

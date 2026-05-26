@@ -46,6 +46,7 @@ from metric_tones import build_sector_valuation_medians, row_tones
 import moonstocks_store as ms_store
 
 load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT.parent / ".env")
 load_dotenv(_web_dir / ".env")
 
 MOONSTOCKS_API_BASE = os.environ.get(
@@ -4624,7 +4625,7 @@ def api_company_chat(symbol):
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
 
     if use_codex:
-        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.5").strip()
     else:
         model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
@@ -4692,9 +4693,9 @@ def api_company_chat_stream(symbol):
     history = body.get("history") if isinstance(body.get("history"), list) else []
     max_turns = min(int(os.getenv("OPENAI_CHAT_MAX_TURNS", "16")), 40)
     if use_codex:
-        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+        model = (os.getenv("CODEX_CHAT_MODEL") or os.getenv("OPENAI_MODEL") or "gpt-5.5").strip()
     else:
-        # gpt-5.3-codex is Codex-only; use a standard Chat Completions model for API key path
+        # gpt-5.5 is Codex-only; use a standard Chat Completions model for API key path
         model = (os.getenv("OPENAI_CHAT_MODEL") or "gpt-4.1").strip()
     sym, messages = _chat_build_messages(c, user_msg, history, max_in, max_turns)
     max_tool_rounds = min(int(os.getenv("OPENAI_CHAT_MAX_TOOL_ROUNDS", "6")), 10)
@@ -4993,7 +4994,7 @@ def moonstocks_analyze_stream(ticker):
     """
     body = request.get_json(silent=True) or {}
     openai_key       = (body.get("openai_api_key") or "").strip()
-    model            = (body.get("model") or os.getenv("OPENAI_MODEL") or "gpt-5.3-codex").strip()
+    model            = (body.get("model") or os.getenv("OPENAI_MODEL") or "gpt-5.5").strip()
     reasoning_effort = (body.get("reasoning_effort") or "").strip() or None
 
     try:
@@ -5028,7 +5029,7 @@ def moonstocks_analyze_stream(ticker):
         try:
             if use_codex:
                 # Codex (ChatGPT subscription) — LangGraph agent via OAuth
-                gen = _lga.analyze_stream_langgraph_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.3-codex")
+                gen = _lga.analyze_stream_langgraph_codex(ticker, PROJECT_ROOT, model=os.getenv("OPENAI_MODEL") or "gpt-5.5")
             else:
                 # API key path — LangGraph agent with proper research loop
                 gen = _lga.analyze_stream_langgraph(ticker, openai_key, model, reasoning_effort=reasoning_effort)
