@@ -525,6 +525,13 @@
       "name": "Peter Lynch",
       "bio": "",
       "transactions": []
+    },
+    {
+      "id": "f80bad86-cb71-4a53-b57a-50aa435a3c11",
+      "slug": "WarrenBuffet",
+      "name": "Warren Buffet",
+      "bio": "",
+      "transactions": []
     }
   ]
 }
