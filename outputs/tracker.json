@@ -6,60 +6,6 @@
       "bio": "Founder & CIO of Situational Awareness LP ($13.7B). Former OpenAI Superalignment researcher. Author of 'Situational Awareness: The Decade Ahead' (2024). Thesis: AI capex bottleneck is electricity and physical infrastructure, not chips. Fund backed by Patrick & John Collison (Stripe), Nat Friedman, Daniel Gross. Co-managed with Carl Shulman (Director of Research).",
       "transactions": [
         {
-          "id": "cc0a0377-1365-4e99-8fb5-e909f593b51d",
-          "symbol": "BE",
-          "action": "buy",
-          "date": "2024-09-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 Bloom Energy; fund launch Sept 2024 (grew to 15.87% of Q4 2025 book)"
-        },
-        {
-          "id": "a238eb7a-10be-4401-9326-a6d9238114fb",
-          "symbol": "CRWV",
-          "action": "buy",
-          "date": "2024-09-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 CoreWeave; GPU cloud; calls position at fund launch"
-        },
-        {
-          "id": "9c905f18-579c-4df4-a12a-6067ce5c91ee",
-          "symbol": "INTC",
-          "action": "buy",
-          "date": "2024-09-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 Intel calls $747M notional; contrarian CHIPS Act bet (fully exited Q1 2026)"
-        },
-        {
-          "id": "0a31f202-8ba9-4e9b-9ee5-279436831cae",
-          "symbol": "CORZ",
-          "action": "buy",
-          "date": "2024-09-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 Core Scientific; BTC miner turned AI hosting"
-        },
-        {
-          "id": "976615bc-46b4-4159-9394-c7b0acf09bb4",
-          "symbol": "LITE",
-          "action": "buy",
-          "date": "2024-09-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 Lumentum Holdings; optical comms (exited Q1 2026)"
-        },
-        {
-          "id": "17c71684-9d05-4b7f-9d54-a412f99d3926",
-          "symbol": "COHR",
-          "action": "buy",
-          "date": "2024-10-01",
-          "shares": null,
-          "price": null,
-          "notes": "Initial position \u2014 Coherent Corp; optical transceivers (exited Q1 2026)"
-        },
-        {
           "id": "78e76fa5-8921-4a4c-901f-cd7fe6fef689",
           "symbol": "BE",
           "action": "buy",
@@ -67,15 +13,6 @@
           "shares": 408500,
           "price": null,
           "notes": "13F Q1 2026 \u2014 Bloom Energy calls $55M notional; bullish leverage on $878M common"
-        },
-        {
-          "id": "75bd9e0a-9e1f-4467-91dd-79d32bfd78db",
-          "symbol": "SNDK",
-          "action": "buy",
-          "date": "2026-03-31",
-          "shares": 611900,
-          "price": null,
-          "notes": "13F Q1 2026 \u2014 SanDisk calls $389M notional; additional leverage on top of $724M common"
         },
         {
           "id": "3f5c4ec1-0bd0-466e-897d-3687fcb1d9cc",
@@ -87,13 +24,13 @@
           "notes": "13F Q1 2026 \u2014 CoreWeave calls $141M notional (reduced 83%; rotated to common)"
         },
         {
-          "id": "caba7e50-31c6-40b4-a954-ab9c31d748b9",
-          "symbol": "IREN",
-          "action": "buy",
+          "id": "2320851c-8f5b-4f82-bb8a-962e754e8aa5",
+          "symbol": "INTC",
+          "action": "sell",
           "date": "2026-03-31",
-          "shares": 11698835,
-          "price": 34.28,
-          "notes": "13F Q1 2026 \u2014 IREN Ltd; Bitcoin miner pivoting to AI hosting"
+          "shares": 3605400,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 Intel PUTS $159M notional; net negative after unwinding prior call options NEW"
         },
         {
           "id": "3190d7e0-8db9-4107-8903-7387409055f6",
@@ -103,6 +40,42 @@
           "shares": 26008473,
           "price": 14.96,
           "notes": "13F Q1 2026 \u2014 Core Scientific; BTC miner / AI hosting (trimmed)"
+        },
+        {
+          "id": "b9e9a746-ae75-48c9-8f7a-0d198fd2b465",
+          "symbol": "LITE",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 1298400,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Lumentum Holdings; optical comms; full exit (was 8.68%)"
+        },
+        {
+          "id": "0d531982-3231-4e0a-b4f8-64eb071821d2",
+          "symbol": "COHR",
+          "action": "sell",
+          "date": "2026-03-31",
+          "shares": 480300,
+          "price": null,
+          "notes": "13F Q1 2026 EXIT \u2014 Coherent Corp; optical transceivers; full exit"
+        },
+        {
+          "id": "75bd9e0a-9e1f-4467-91dd-79d32bfd78db",
+          "symbol": "SNDK",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 611900,
+          "price": null,
+          "notes": "13F Q1 2026 \u2014 SanDisk calls $389M notional; additional leverage on top of $724M common"
+        },
+        {
+          "id": "caba7e50-31c6-40b4-a954-ab9c31d748b9",
+          "symbol": "IREN",
+          "action": "buy",
+          "date": "2026-03-31",
+          "shares": 11698835,
+          "price": 34.28,
+          "notes": "13F Q1 2026 \u2014 IREN Ltd; Bitcoin miner pivoting to AI hosting"
         },
         {
           "id": "223f2176-81bb-46ae-9abb-7ace6ccdfa32",
@@ -285,24 +258,6 @@
           "notes": "13F Q1 2026 \u2014 AMD PUTS $969M notional; net negative on AMD despite small common NEW"
         },
         {
-          "id": "81926a4a-35cf-427b-ac71-db9b5f3cc509",
-          "symbol": "MU",
-          "action": "sell",
-          "date": "2026-03-31",
-          "shares": 1727700,
-          "price": null,
-          "notes": "13F Q1 2026 \u2014 Micron PUTS $584M notional; volatility play (also holds calls)"
-        },
-        {
-          "id": "f80a76b5-ec60-428b-ac48-2456d77d46e1",
-          "symbol": "TSM",
-          "action": "sell",
-          "date": "2026-03-31",
-          "shares": 1583400,
-          "price": null,
-          "notes": "13F Q1 2026 \u2014 Taiwan Semi PUTS $535M notional; volatility + geopolitics NEW"
-        },
-        {
           "id": "7d641f71-8e9a-424d-812c-78dac47af043",
           "symbol": "ASML",
           "action": "sell",
@@ -310,15 +265,6 @@
           "shares": 374100,
           "price": null,
           "notes": "13F Q1 2026 \u2014 ASML PUTS $494M notional; sole EUV maker valuation hedge NEW"
-        },
-        {
-          "id": "2320851c-8f5b-4f82-bb8a-962e754e8aa5",
-          "symbol": "INTC",
-          "action": "sell",
-          "date": "2026-03-31",
-          "shares": 3605400,
-          "price": null,
-          "notes": "13F Q1 2026 \u2014 Intel PUTS $159M notional; net negative after unwinding prior call options NEW"
         },
         {
           "id": "2e38512c-7728-4de2-b1d0-b3f8f5503c81",
@@ -337,24 +283,6 @@
           "shares": 500000,
           "price": null,
           "notes": "13F Q1 2026 \u2014 Infosys PUTS $6.76M notional; bearish on Indian IT exposure to AI displacement"
-        },
-        {
-          "id": "b9e9a746-ae75-48c9-8f7a-0d198fd2b465",
-          "symbol": "LITE",
-          "action": "sell",
-          "date": "2026-03-31",
-          "shares": 1298400,
-          "price": null,
-          "notes": "13F Q1 2026 EXIT \u2014 Lumentum Holdings; optical comms; full exit (was 8.68%)"
-        },
-        {
-          "id": "0d531982-3231-4e0a-b4f8-64eb071821d2",
-          "symbol": "COHR",
-          "action": "sell",
-          "date": "2026-03-31",
-          "shares": 480300,
-          "price": null,
-          "notes": "13F Q1 2026 EXIT \u2014 Coherent Corp; optical transceivers; full exit"
         },
         {
           "id": "68dbdc11-2717-45be-9ea1-ed54f33c8920",
@@ -409,87 +337,6 @@
           "shares": 567200,
           "price": null,
           "notes": "13F Q1 2026 EXIT \u2014 Liberty Energy; oilfield services; full exit"
-        },
-        {
-          "id": "70ac22b1-3cb7-400d-bbfb-6ddc0ac15c55",
-          "symbol": "SMH",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 5327900.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): VanEck ETF Trust holding reported as Put; tool-parsed 13F position, filing-date used as snapshot date."
-        },
-        {
-          "id": "0e911e25-b73e-49cc-b5ac-ce68a6624a7e",
-          "symbol": "NVDA",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 8992300.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): NVIDIA Corporation holding reported as Put; filing-date snapshot."
-        },
-        {
-          "id": "b5f73ef9-8386-45d0-8636-d41592d35182",
-          "symbol": "ORCL",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 7293000.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Oracle Corp holding reported as Put; filing-date snapshot."
-        },
-        {
-          "id": "de071436-94be-4b3a-9fd9-c9da0821458e",
-          "symbol": "AVGO",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 3251100.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Broadcom Inc holding reported as Put; filing-date snapshot."
-        },
-        {
-          "id": "02c69468-6d23-4d76-9bf3-87f7a0ed2b70",
-          "symbol": "AMD",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 4764100.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Advanced Micro Devices Inc holding reported as Put; filing-date snapshot."
-        },
-        {
-          "id": "638d144e-418f-45bf-9461-a78d7f4b8c80",
-          "symbol": "BE",
-          "action": "buy",
-          "date": "2026-05-18",
-          "shares": 6485408.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Bloom Energy Corp common stock Long; filing-date snapshot."
-        },
-        {
-          "id": "8243ef85-4e3c-4cbd-a819-eef01b4fb897",
-          "symbol": "SNDK",
-          "action": "buy",
-          "date": "2026-05-18",
-          "shares": 1140119.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): SanDisk Corp common stock Long; filing-date snapshot."
-        },
-        {
-          "id": "e9a172b8-b63f-4805-849c-1ce370f2ca08",
-          "symbol": "MU",
-          "action": "sell",
-          "date": "2026-05-18",
-          "shares": 1727700.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): Micron Technology Inc holding reported as Put; filing-date snapshot."
-        },
-        {
-          "id": "9e19857a-2c3b-421e-b15f-54660609820b",
-          "symbol": "CRWV",
-          "action": "buy",
-          "date": "2026-05-18",
-          "shares": 7177919.0,
-          "price": null,
-          "notes": "13F-HR filed 2026-05-18 by Situational Awareness LP (CIK 2045724): CoreWeave Inc common stock Long; filing-date snapshot."
         }
       ],
       "slug": "LeopoldAschenbrenner"
@@ -531,7 +378,382 @@
       "slug": "WarrenBuffet",
       "name": "Warren Buffet",
       "bio": "",
-      "transactions": []
+      "transactions": [
+        {
+          "id": "64fc7680-73cf-46b3-a810-7c0dac1a2378",
+          "symbol": "AXP",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 149061045.0,
+          "price": 302480.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 BERKSHIRE HATHAWAY INC CIK #: 0001067983 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "5bf5ab66-6530-4759-994d-bc7ad82ba92f",
+          "symbol": "KO",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 282722729.0,
+          "price": 76050.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 BERKSHIRE HATHAWAY INC CIK #: 0001067983 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "46e93a1a-3909-481f-ac5d-fea9fa085d51",
+          "symbol": "AAPL",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 80664820.0,
+          "price": 253790.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 BERKSHIRE HATHAWAY INC CIK #: 0001067983 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "b8d35fcb-f62b-4b19-8025-5feef0fbffde",
+          "symbol": "CVX",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 58251749.0,
+          "price": 206900.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 BERKSHIRE HATHAWAY INC CIK #: 0001067983 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "3d1d18d0-71c5-4564-816e-9cf9bd44a169",
+          "symbol": "GOOGL",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 41283098.0,
+          "price": 287560.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 BERKSHIRE HATHAWAY INC CIK #: 0001067983 (see all company filings)",
+          "position_type": "long"
+        }
+      ]
+    },
+    {
+      "id": "a1c2d3e4-1111-4000-8000-000000000001",
+      "slug": "CathieWood",
+      "name": "Cathie Wood",
+      "bio": "Founder, CEO & CIO of ARK Invest. Flagship ARKK ETF targets disruptive innovation \u2014 AI, robotics, genomic sequencing, fintech. Known for high-conviction public-market bets on Tesla, Coinbase, and next-gen tech.",
+      "transactions": [
+        {
+          "id": "2a04396d-1d7e-42c3-8c2f-79143e5c89d7",
+          "symbol": "TSLA",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 2831329.0,
+          "price": 371750.05,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "a0be90ed-0cd6-45a5-a1bf-f5b314e726ae",
+          "symbol": "COIN",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 2372884.0,
+          "price": 174610.01,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "234ca88b-4107-4c0c-b079-6fdc7c1d3394",
+          "symbol": "ROKU",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 3820405.0,
+          "price": 94620.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "7186cd9c-e914-42a7-aabc-73482b7210cd",
+          "symbol": "GOOGL",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 720414.0,
+          "price": 286860.08,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "cea27ac1-3634-464f-b221-8e73ccaa9404",
+          "symbol": "XYZ",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 3093936.0,
+          "price": 60180.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "7c8de034-1a8c-448d-acab-56190216b731",
+          "symbol": "INTC",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 14509247.0,
+          "price": 12820.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "d2bbb50d-0446-4341-8553-f5867a70d1d0",
+          "symbol": "CERS",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 19161148.0,
+          "price": 1820.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "15ad06a2-8655-4faa-ac35-4d6c8bf1fd06",
+          "symbol": "SE",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 173066.0,
+          "price": 82809.82,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "3d608aba-d82e-40ab-8a15-d0538a5cab49",
+          "symbol": "HEI",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 43741.0,
+          "price": 274200.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "2a8d5f55-3f48-4547-9ca9-7a4e4b1ef6d8",
+          "symbol": "PTC",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 19563.0,
+          "price": 142490.01,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "5d192f07-7a21-461e-b36e-2203c60590c8",
+          "symbol": "HPQ",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 122753.0,
+          "price": 19210.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "b7e0a48c-618e-40b1-9c00-d1b9e7f2fa27",
+          "symbol": "NVT",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 5082.0,
+          "price": 434280.01,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "b00c9e7a-4c02-42cd-97ce-ea9d620b1b25",
+          "symbol": "NICE",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 19245.0,
+          "price": 110260.02,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "8eced93d-4cb1-4518-80bf-c8c8dd914969",
+          "symbol": "FROG",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 39541.0,
+          "price": 46930.0,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "f731830f-c637-4581-9bdf-ace9922f15eb",
+          "symbol": "ATI",
+          "action": "buy",
+          "date": "2026-05-12",
+          "shares": 679.0,
+          "price": 145459.5,
+          "notes": "13F-HR filed 2026-05-12 \u2014 ARK Investment Management LLC CIK #: 0001697748 (see all company filings)",
+          "position_type": "long"
+        }
+      ]
+    },
+    {
+      "id": "a1c2d3e4-2222-4000-8000-000000000002",
+      "slug": "BradGerstner",
+      "name": "Brad Gerstner",
+      "bio": "Founder & CEO of Altimeter Capital. Public-market tech investor with heavy AI infrastructure exposure (NVDA, TSM, cloud). Also manages SPAC/venture crossover bets; vocal AI capex bull.",
+      "transactions": [
+        {
+          "id": "28f7b413-a3c1-4a70-b907-4c89634cacfa",
+          "symbol": "NVDA",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 9336039.0,
+          "price": 174400.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "660c10a4-5b5c-41ec-9da5-439942a26112",
+          "symbol": "META",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 1953373.0,
+          "price": 572130.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "b3d565d2-8bfa-4f07-b657-8058f19b85c0",
+          "symbol": "TSM",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 1365675.0,
+          "price": 337950.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "53e38c03-07a9-4d30-9e40-ef0fec9f4f31",
+          "symbol": "MSFT",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 1183632.0,
+          "price": 370170.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "10966a8f-c1d4-4c66-a488-99740e0e76df",
+          "symbol": "AMZN",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 2089558.0,
+          "price": 208270.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "31e344ca-e4b5-499f-9d54-9f39e9339285",
+          "symbol": "CRWV",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 4499075.0,
+          "price": 77470.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "a5245011-d5bd-4cb3-9e1a-ab7a42a043e6",
+          "symbol": "ARM",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 1715440.0,
+          "price": 151280.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "270dbdb4-f1d3-46f7-89eb-75b35e4db62a",
+          "symbol": "HOOD",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 899691.0,
+          "price": 69300.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "61094faa-3f02-4834-8b48-54e5d21347e9",
+          "symbol": "AVGO",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 67094.0,
+          "price": 309510.02,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "44277d3d-e1d8-4057-ba58-ad40405f53d4",
+          "symbol": "GRAB",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 3502000.0,
+          "price": 75.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 Altimeter Capital Management, LP CIK #: 0001541617 (see all company filings)",
+          "position_type": "long"
+        }
+      ]
+    },
+    {
+      "id": "a1c2d3e4-3333-4000-8000-000000000003",
+      "slug": "PhilippeLaffont",
+      "name": "Philippe Laffont",
+      "bio": "Founder & CIO of Coatue Management ($26B+ AUM). Tiger Cub hedge fund with massive tech/AI book \u2014 semis (NVDA, AVGO, ASML), hyperscalers, and late-stage private crossover.",
+      "transactions": [
+        {
+          "id": "cf1ce0cf-25b2-4638-b2ff-77dd4fa47950",
+          "symbol": "AMZN",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 6602594.0,
+          "price": 208270.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 COATUE MANAGEMENT LLC CIK #: 0001135730 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "b3128c59-9dc4-432f-8e4e-77c986e31aa5",
+          "symbol": "AVGO",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 3080113.0,
+          "price": 309510.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 COATUE MANAGEMENT LLC CIK #: 0001135730 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "c95e3881-2eb9-42b6-94a7-c033207d627f",
+          "symbol": "ETN",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 1956773.0,
+          "price": 357670.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 COATUE MANAGEMENT LLC CIK #: 0001135730 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "2ac4f2b6-269b-4234-aeb4-aa0f5a8599d7",
+          "symbol": "GOOGL",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 2040367.0,
+          "price": 287560.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 COATUE MANAGEMENT LLC CIK #: 0001135730 (see all company filings)",
+          "position_type": "long"
+        },
+        {
+          "id": "6d6b6eca-daf0-44a3-b7b7-f86972b62e03",
+          "symbol": "ASML",
+          "action": "buy",
+          "date": "2026-05-15",
+          "shares": 197498.0,
+          "price": 1320830.0,
+          "notes": "13F-HR filed 2026-05-15 \u2014 COATUE MANAGEMENT LLC CIK #: 0001135730 (see all company filings)",
+          "position_type": "long"
+        }
+      ]
     }
   ]
 }

@@ -1240,7 +1240,20 @@ async function renderHoldings(inv, renderId, cachedPriceMap) {
     const entry = h.firstBuy;
     const allPrices = priceMap[sym] || [];
     const prices = pricesForHoldingChart(allPrices, entry.date, CHART_POINTS, _chartRange);
-    if (!prices.length) continue;
+
+    if (!prices.length) {
+      const sharesLabel = entry.shares ? Number(entry.shares).toLocaleString() + ' sh' : '';
+      cardParts.push(`<div class="holding-card">
+        <div class="holding-top">
+          <div>
+            <a class="holding-symbol" href="/company/${sym}">${sym}</a>
+            <div class="holding-meta">Since ${entry.date}${entry.price ? ' @ $' + Number(entry.price).toFixed(2) : ''}${sharesLabel ? ' · ' + sharesLabel : ''}</div>
+          </div>
+          <span class="holding-pnl" style="color:var(--dim);font-size:.72rem">chart n/a</span>
+        </div>
+      </div>`);
+      continue;
+    }
 
     const pct = holdingRangePct(prices, false);
     const cls = pct >= 0 ? 'pnl-pos' : 'pnl-neg';

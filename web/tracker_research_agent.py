@@ -39,6 +39,41 @@ _EDGAR_HEADERS = {
 _EDGAR_SEARCH = "https://efts.sec.gov/LATEST/search-index"
 _EDGAR_BASE = "https://www.sec.gov"
 _EDGAR_BROWSE = "https://www.sec.gov/cgi-bin/browse-edgar"
+_TICKER_CIK_CACHE: dict[str, dict] = {}
+_BLOCKED_URL_RE = re.compile(
+    r"pornhub|xvideos|xvideo|xxx\b|/r/pornhub|onlyfans",
+    re.I,
+)
+_TRUSTED_FINANCE_DOMAINS = (
+    "sec.gov", "efts.sec.gov", "oge.gov", "ethics.gov", "congress.gov",
+    "senate.gov", "house.gov", "reuters.com", "bloomberg.com", "wsj.com",
+    "ft.com", "cnbc.com", "apnews.com", "finance.yahoo.com",
+)
+
+
+def _json_dumps(obj) -> str:
+    """JSON encode tool results; coerce httpx URLs and other non-serializable values."""
+    def _default(v):
+        if hasattr(v, "__str__") and type(v).__name__ in ("URL", "HttpUrl"):
+            return str(v)
+        raise TypeError(f"Object of type {type(v).__name__} is not JSON serializable")
+
+    return json.dumps(obj, default=_default)
+
+
+_KNOWN_FILING_ENTITIES: dict[str, str | None] = {
+    "leopold aschenbrenner": "Situational Awareness LP",
+    "cathie wood": "ARK Investment Management LLC",
+    "brad gerstner": "Altimeter Capital Management, LP",
+    "philippe laffont": "Coatue Management LLC",
+    "dan sundheim": "D1 Capital Partners LP",
+    "warren buffett": "BERKSHIRE HATHAWAY INC",
+    "warren buffet": "BERKSHIRE HATHAWAY INC",
+}
+
+
+def _known_filing_entity(investor_name: str) -> str | None:
+    return _KNOWN_FILING_ENTITIES.get((investor_name or "").strip().lower())
 
 
 def _abs_url(href: str) -> str:
@@ -69,17 +104,21 @@ def _edgar_fulltext_search(query: str, form_types: str = "4", max_hits: int = 15
         out = []
         for h in hits[:max_hits]:
             s = h.get("_source", {})
-            accession = s.get("adsh") or h.get("_id", "")
-            cik = str(s.get("cik") or "").lstrip("0")
+            accession = s.get("adsh") or (h.get("_id", "").split(":")[0] if h.get("_id") else "")
+            ciks = s.get("ciks") or []
+            cik_raw = ciks[0] if ciks else s.get("cik") or ""
+            cik = str(cik_raw).lstrip("0")
             index_url = ""
             if cik and accession:
                 acc_no_dash = accession.replace("-", "")
                 index_url = f"{_EDGAR_BASE}/Archives/edgar/data/{cik}/{acc_no_dash}/{accession}-index.htm"
+            display_names = s.get("display_names") or []
+            entity = s.get("entity_name") or (display_names[0] if display_names else "")
             out.append({
-                "form": s.get("form_type", ""),
-                "entity": s.get("entity_name", ""),
-                "filed": s.get("file_date", ""),
-                "period": s.get("period_of_report", ""),
+                "form": s.get("form") or s.get("file_type") or s.get("form_type") or "",
+                "entity": entity,
+                "filed": s.get("file_date") or s.get("filed") or "",
+                "period": s.get("period_of_report") or s.get("period_ending") or "",
                 "cik": cik,
                 "accession": accession,
                 "index_url": index_url,
@@ -142,7 +181,7 @@ def _edgar_resolve_entities(name: str, form_type: str = "") -> list[dict]:
             m = re.search(r"CIK[:\s#]*(\d+)", soup.get_text(" ", strip=True), re.I)
             cik = m.group(1).lstrip("0") if m else ""
         if cik:
-            return [{"cik": cik, "name": entity_name, "filings_url": resp.url}]
+            return [{"cik": cik, "name": entity_name, "filings_url": str(resp.url)}]
         return []
     except Exception as e:
         logger.warning("EDGAR entity resolve error: %s", e)
@@ -192,9 +231,51 @@ def _edgar_list_filings(cik: str, form_type: str = "13F-HR", limit: int = 5) -> 
         return []
 
 
+def _edgar_cik_from_ticker(ticker: str) -> dict:
+    """Resolve a US ticker to CIK + company name via SEC company_tickers.json."""
+    sym = (ticker or "").upper().strip()
+    if not sym or not re.fullmatch(r"[A-Z]{1,5}", sym):
+        return {}
+    if sym in _TICKER_CIK_CACHE:
+        return _TICKER_CIK_CACHE[sym]
+    try:
+        resp = httpx.get(
+            f"{_EDGAR_BASE}/files/company_tickers.json",
+            headers=_EDGAR_HEADERS,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for entry in resp.json().values():
+            if (entry.get("ticker") or "").upper() == sym:
+                cik = str(entry.get("cik_str", "")).lstrip("0") or str(entry.get("cik_str", ""))
+                info = {"cik": cik, "name": entry.get("title", ""), "ticker": sym}
+                _TICKER_CIK_CACHE[sym] = info
+                return info
+    except Exception as e:
+        logger.warning("Ticker CIK lookup error: %s", e)
+    return {}
+
+
 def _edgar_entity_filings(entity_name: str, form_type: str = "13F-HR", limit: int = 3) -> dict:
     """Resolve entity → CIK → recent filings with index URLs."""
     entities = _edgar_resolve_entities(entity_name, form_type=form_type)
+    cik_only = re.fullmatch(r"\d{1,10}", (entity_name or "").strip())
+    if not entities and cik_only:
+        cik = cik_only.group(0).lstrip("0") or cik_only.group(0)
+        entities = [{
+            "cik": cik,
+            "name": entity_name,
+            "filings_url": f"{_EDGAR_BROWSE}?action=getcompany&CIK={cik}",
+        }]
+    if not entities and re.fullmatch(r"[A-Z]{1,5}", (entity_name or "").upper().strip()):
+        info = _edgar_cik_from_ticker(entity_name)
+        if info:
+            entities = [{
+                "cik": info["cik"],
+                "name": info["name"],
+                "ticker": info.get("ticker"),
+                "filings_url": f"{_EDGAR_BROWSE}?action=getcompany&CIK={info['cik']}",
+            }]
     if not entities:
         return {"found": 0, "message": f"No EDGAR registrant matched '{entity_name}'"}
     primary = entities[0]
@@ -249,26 +330,42 @@ def _edgar_filing_xml(filing_index_url: str) -> list[dict]:
         ticker = (_xml_text(root, ".//issuerTradingSymbol") or "").upper()
 
         for txn in root.findall(".//nonDerivativeTransaction"):
-            code = _xml_text(txn, ".//transactionCoding/transactionCode")
+            code = (_xml_text(txn, ".//transactionCoding/transactionCode") or "").upper()
             date = _xml_text(txn, ".//transactionDate/value")[:10]
             shares_raw = _xml_text(txn, ".//transactionAmounts/transactionShares/value")
             price_raw = _xml_text(txn, ".//transactionAmounts/transactionPricePerShare/value")
-            disp = _xml_text(txn, ".//transactionAmounts/transactionAcquiredDisposedCode/value")
+            disp = (_xml_text(txn, ".//transactionAmounts/transactionAcquiredDisposedCode/value") or "").upper()
             if not ticker or not date:
                 continue
-            if code in ("P", "A") or disp == "A":
+            try:
+                price = float(price_raw) if price_raw else None
+            except ValueError:
+                price = None
+            try:
+                shares = float(shares_raw.replace(",", "")) if shares_raw else None
+            except ValueError:
+                shares = None
+
+            # Only record economic open-market trades. Skip grants, gifts, and
+            # trust transfers that Form 4 codes as A/D with $0 price.
+            if code in ("P", "M"):
                 action = "buy"
-            elif code in ("S", "D") or disp == "D":
+            elif code == "S":
+                action = "sell"
+            elif code == "A" and price and price > 0:
+                action = "buy"
+            elif code in ("D",) and disp == "D" and price and price > 0:
                 action = "sell"
             else:
                 continue
+
             transactions.append({
                 "symbol": ticker,
                 "action": action,
                 "date": date,
-                "shares": float(shares_raw) if shares_raw else None,
-                "price": float(price_raw) if price_raw else None,
-                "notes": f"SEC Form 4 — {owner or 'insider filing'}",
+                "shares": shares,
+                "price": price,
+                "notes": f"SEC Form 4 ({code}) — {owner or 'insider filing'}",
             })
     except Exception as e:
         logger.warning("Form 4 parse error: %s", e)
@@ -276,7 +373,9 @@ def _edgar_filing_xml(filing_index_url: str) -> list[dict]:
 
 
 def _pick_13f_xml_url(soup: BeautifulSoup) -> str:
+    """Pick the info-table XML from a 13F filing index (not primary_doc.xml)."""
     candidates: list[tuple[int, str]] = []
+    fallback: list[str] = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if not href.lower().endswith(".xml"):
@@ -284,6 +383,7 @@ def _pick_13f_xml_url(soup: BeautifulSoup) -> str:
         lower = href.lower()
         if "xsd" in lower or "primary_doc" in lower or "/xsl" in lower:
             continue
+        abs_url = _abs_url(href)
         score = 0
         if "infotable" in lower:
             score += 5
@@ -291,13 +391,17 @@ def _pick_13f_xml_url(soup: BeautifulSoup) -> str:
             score += 4
         if "form13f" in lower.replace("-", ""):
             score += 3
-        if score == 0:
-            continue
-        candidates.append((score, _abs_url(href)))
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda x: -x[0])
-    return candidates[0][1]
+        # Berkshire and others use numeric filenames (e.g. 53405.xml) for info tables.
+        if score == 0 and re.search(r"/\d+\.xml$", lower):
+            score = 2
+        if score > 0:
+            candidates.append((score, abs_url))
+        else:
+            fallback.append(abs_url)
+    if candidates:
+        candidates.sort(key=lambda x: -x[0])
+        return candidates[0][1]
+    return fallback[0] if fallback else ""
 
 
 def _edgar_13f_holdings(filing_index_url: str) -> list[dict]:
@@ -322,7 +426,9 @@ def _edgar_13f_holdings(filing_index_url: str) -> list[dict]:
             value = _xml_text(info, "value", ns=ns)
             shares = _xml_text(info, "sshPrnamt", ns=ns)
             if not shares:
-                amt = info.find("ns:shrsOrPrnAmt", ns) or info.find("shrsOrPrnAmt")
+                amt = info.find("ns:shrsOrPrnAmt", ns)
+                if amt is None:
+                    amt = info.find("shrsOrPrnAmt")
                 if amt is not None:
                     shares = _xml_text(amt, "sshPrnamt", ns=ns)
             put_call = _xml_text(info, "putCall", ns=ns) or "Long"
@@ -341,18 +447,51 @@ def _edgar_13f_holdings(filing_index_url: str) -> list[dict]:
         return []
 
 
+def _normalize_search_query(query: str) -> str:
+    q = (query or "").strip()
+    if not q:
+        return q
+    ql = q.lower()
+    if re.search(r"\d{10}-\d{2}-\d{6}", q) or re.search(r"\b(form\s*[34]|13[dfg]|edgar|sec filing)\b", ql):
+        if "site:sec.gov" not in ql:
+            q = f"site:sec.gov {q}"
+    elif re.search(r"\b(oge form 278|financial disclosure|periodic transaction report|stock act)\b", ql):
+        if "site:oge.gov" not in ql and "site:sec.gov" not in ql:
+            q = f"(site:oge.gov OR site:sec.gov OR site:ethics.gov) {q}"
+    return q
+
+
+def _filter_web_results(results: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    for r in results:
+        url = r.get("url") or ""
+        blob = f"{url} {r.get('title', '')} {r.get('body', '')}"
+        if _BLOCKED_URL_RE.search(blob):
+            continue
+        kept.append(r)
+
+    def _rank(r: dict) -> tuple[int, str]:
+        url = (r.get("url") or "").lower()
+        trusted = any(d in url for d in _TRUSTED_FINANCE_DOMAINS)
+        return (0 if trusted else 1, url)
+
+    kept.sort(key=_rank)
+    return kept
+
+
 def _web_search(query: str, max_results: int = 8) -> list[dict]:
+    query = _normalize_search_query(query)
     try:
         from duckduckgo_search import DDGS
         results = []
         with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=max_results):
+            for r in ddgs.text(query, max_results=max(max_results * 2, 12)):
                 results.append({
                     "title": r.get("title", ""),
                     "url": r.get("href", ""),
                     "body": r.get("body", ""),
                 })
-        return results
+        return _filter_web_results(results)[:max_results]
     except Exception as e:
         logger.warning("Web search error: %s", e)
         return []
@@ -371,10 +510,12 @@ def _scrape_url(url: str, max_chars: int = 6000) -> str:
         return f"[scrape error: {e}]"
 
 
-def _guess_ticker(issuer_or_name: str) -> str:
+def _guess_ticker(issuer_or_name: str, allow_web: bool = False) -> str:
     """Best-effort ticker resolution from issuer name."""
     upper = issuer_or_name.upper()
     hints = [
+        ("TESLA", "TSLA"), ("BLOCK INC", "XYZ"), ("SQUARE INC", "XYZ"), ("SQUARE", "XYZ"),
+        ("EATON CORP", "ETN"), ("EATON", "ETN"), ("ROBINHOOD", "HOOD"), ("PALANTIR", "PLTR"),
         ("BLOOM ENERGY", "BE"), ("NVIDIA", "NVDA"), ("MICRON", "MU"), ("TAIWAN SEMICONDUCTOR", "TSM"),
         ("ADVANCED MICRO DEVICES", "AMD"), ("BROADCOM", "AVGO"), ("ORACLE", "ORCL"), ("INTEL", "INTC"),
         ("COREWEAVE", "CRWV"), ("SANDISK", "SNDK"), ("ASML", "ASML"), ("CORNING", "GLW"),
@@ -382,6 +523,14 @@ def _guess_ticker(issuer_or_name: str) -> str:
         ("CORE SCIENTIFIC", "CORZ"), ("RIOT PLATFORMS", "RIOT"), ("CLEANSPARK", "CLSK"),
         ("APPLIED DIGITAL", "APLD"), ("IREN", "IREN"), ("BITDEER", "BTDR"), ("BITFARMS", "BITF"),
         ("HIVE DIGITAL", "HIVE"), ("INFOSYS", "INFY"), ("LUMENTUM", "LITE"), ("COHERENT", "COHR"),
+        ("ARM HOLDINGS", "ARM"), ("SOFTBANK GROUP", "SFTBY"), ("META PLATFORMS", "META"),
+        ("ALPHABET", "GOOGL"), ("AMAZON COM", "AMZN"), ("MICROSOFT", "MSFT"), ("APPLE INC", "AAPL"),
+        ("CERUS CORP", "CERS"), ("ROKU INC", "ROKU"), ("COINBASE", "COIN"), ("SUPER MICRO", "SMCI"),
+        ("COCA COLA", "KO"), ("COCA-COLA", "KO"), ("COCA COLA CO", "KO"),
+        ("AMERICAN EXPRESS", "AXP"), ("BANK OF AMERICA", "BAC"), ("CHEVRON", "CVX"),
+        ("HEICO CORP", "HEI"), ("HEICO", "HEI"), ("MOOG INC", "MOG"), ("MOOG", "MOG"),
+        ("HEWLETT PACKARD", "HPE"), ("HP INC", "HPQ"), ("SEA LTD", "SE"), ("NOVA LTD", "NVT"),
+        ("NICE LTD", "NICE"), ("JFROG LTD", "FROG"), ("JFROG", "FROG"),
     ]
     for needle, ticker in hints:
         if needle in upper:
@@ -389,6 +538,8 @@ def _guess_ticker(issuer_or_name: str) -> str:
     cleaned = re.sub(r"\s+(INC|CORP|CORPORATION|LTD|LLC|LP|PLC|HOLDINGS|CO\.?).*$", "", upper, flags=re.I).strip()
     if re.fullmatch(r"[A-Z]{1,5}", cleaned):
         return cleaned
+    if not allow_web:
+        return ""
     try:
         hits = _web_search(f"{issuer_or_name} stock ticker symbol", max_results=3)
         for hit in hits:
@@ -484,21 +635,44 @@ def _fetch_institutional_holdings(entity_name: str, quarters: int = 1) -> dict:
             }
             all_positions.append(pos)
 
-    # Sort by value descending; resolve tickers for the largest positions only (avoid 40+ web lookups)
     def _val(p: dict) -> float:
         try:
             return float(str(p.get("value_usd") or 0))
         except ValueError:
             return 0.0
 
+    def _issuer_key(name: str) -> str:
+        return re.sub(r"\s+", " ", (name or "").upper()).strip()
+
+    # One row per issuer (13F can repeat the same name with different share classes).
+    by_issuer: dict[str, dict] = {}
+    for p in all_positions:
+        key = _issuer_key(p.get("issuer", ""))
+        if not key:
+            continue
+        if key not in by_issuer or _val(p) > _val(by_issuer[key]):
+            by_issuer[key] = p
+    all_positions = list(by_issuer.values())
+
+    # Sort by value descending; resolve tickers for the largest positions only (avoid 40+ web lookups)
     all_positions.sort(key=lambda p: -_val(p))
     ticker_map = _resolve_tickers_batch([p["issuer"] for p in all_positions[:25]])
     for p in all_positions:
         if not p.get("symbol"):
             sym = ticker_map.get(p["issuer"]) or _guess_ticker(p["issuer"])
+            if sym and not _edgar_cik_from_ticker(sym):
+                sym = _guess_ticker(p["issuer"]) or sym
             p["symbol"] = sym or None
 
-    resolved = [p for p in all_positions if p.get("symbol")]
+    by_symbol: dict[str, dict] = {}
+    for p in all_positions:
+        sym = (p.get("symbol") or "").upper()
+        if not sym or not _edgar_cik_from_ticker(sym):
+            continue
+        if sym not in by_symbol or _val(p) > _val(by_symbol[sym]):
+            by_symbol[sym] = p
+    resolved = list(by_symbol.values())
+    resolved.sort(key=lambda p: -_val(p))
     unresolved = [p for p in all_positions if not p.get("symbol")][:10]
 
     return {
@@ -539,6 +713,198 @@ def _fetch_insider_trades(person_name: str, max_filings: int = 5) -> dict:
     }
 
 
+_ROMAN_NUMERAL_TICKERS = frozenset({"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII"})
+
+
+def _extract_ticker_hint(text: str) -> str:
+    m = re.search(r"\(([A-Z]{1,5}),\s*[A-Z]{1,5}\)", text or "", re.I)
+    if m:
+        return m.group(1).upper()
+    m = re.search(r"(?:Trading Symbol|Ticker Symbol)[:\s]+([A-Z]{1,5})\b", text or "", re.I)
+    if m:
+        return m.group(1).upper()
+    for m in re.finditer(r"\(([A-Z]{2,5})\)", text or "", re.I):
+        cand = m.group(1).upper()
+        if cand not in _ROMAN_NUMERAL_TICKERS:
+            return cand
+    return ""
+
+
+def _extract_ownership_shares(text: str) -> float | None:
+    for pat in (
+        r"beneficially owned by the Reporting Person.*?([\d,]+)\s+shares",
+        r"Reporting Person beneficially owns.*?([\d,]+)\s+shares",
+        r"aggregate amount of ([\d,]+) shares of (?:Class [A-Z] )?Common Stock beneficially owned by the Reporting Person",
+        r"aggregate amount of ([\d,]+) shares of (?:Class [A-Z] )?Common Stock beneficially owned",
+        r"beneficially own[s]? (?:approximately )?([\d,]+) shares of (?:Class [A-Z] )?Common Stock",
+        r"([\d,]+)\s+shares of (?:Class [A-Z] )?Common Stock.*?beneficially owned",
+    ):
+        m = re.search(pat, text, re.I | re.S)
+        if not m:
+            continue
+        try:
+            val = float(m.group(1).replace(",", ""))
+            if val >= 1000:
+                return val
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_filing_date(text: str, fallback: str = "") -> str:
+    for pat in (
+        r"(?:Date of Event Which Requires Filing|Event Date|Date of Event)[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+        r"(?:Date of Event Which Requires Filing|Event Date|Date of Event)[:\s]+(\d{4}-\d{2}-\d{2})",
+        r"(?:Filed|Filing Date)[:\s]+([A-Za-z]+\s+\d{1,2},\s+\d{4})",
+    ):
+        m = re.search(pat, text, re.I)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+    return fallback
+
+
+def _edgar_ownership_snapshots(filing_index_url: str, ticker_hint: str = "") -> list[dict]:
+    """Parse SC 13D/13G/13D/A filings into beneficial ownership snapshots."""
+    snapshots: list[dict] = []
+    try:
+        idx_resp = httpx.get(filing_index_url, headers=_EDGAR_HEADERS, timeout=20, follow_redirects=True)
+        idx_resp.raise_for_status()
+        soup = BeautifulSoup(idx_resp.text, "lxml")
+        index_text = soup.get_text(" ", strip=True)
+
+        ticker = (ticker_hint or "").upper().strip()
+        if not ticker:
+            ticker = _extract_ticker_hint(index_text)
+
+        doc_url = ""
+        candidates: list[tuple[int, str]] = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            hl = href.lower()
+            if not hl.endswith((".htm", ".html", ".txt")):
+                continue
+            if "index" in hl or "/xsl/" in hl or "companysearch" in hl:
+                continue
+            score = 0
+            if "sc13" in hl or "13d" in hl or "13g" in hl:
+                score += 5
+            if hl.endswith(".txt") and "sc13" in hl:
+                score += 4
+            if hl.endswith(".htm"):
+                score += 2
+            candidates.append((score, _abs_url(href)))
+        if candidates:
+            candidates.sort(key=lambda x: -x[0])
+            doc_url = candidates[0][1]
+        if not doc_url:
+            return []
+
+        doc_resp = httpx.get(doc_url, headers=_EDGAR_HEADERS, timeout=20)
+        doc_resp.raise_for_status()
+        text = BeautifulSoup(doc_resp.text, "lxml").get_text(" ", strip=True)
+
+        if not ticker:
+            ticker = _extract_ticker_hint(text)
+
+        shares = _extract_ownership_shares(text)
+
+        pct = None
+        m = re.search(r"(?:represent[s]?|constitute[s]?)\s+(?:approximately\s+)?([\d.]+)\s*%", text, re.I)
+        if m:
+            try:
+                pct = float(m.group(1))
+            except ValueError:
+                pct = None
+
+        reporting = ""
+        m = re.search(
+            r"Name of Reporting Person[s]?[:\s]+(.{4,100}?)(?:\s+(?:Address|Check|Citizenship)|\s{2,})",
+            text,
+            re.I,
+        )
+        if m:
+            reporting = m.group(1).strip()
+
+        filed_match = re.search(r"Filing Date[:\s]+(\d{4}-\d{2}-\d{2})", index_text, re.I)
+        filed = filed_match.group(1) if filed_match else ""
+        event_date = _parse_filing_date(text, filed or datetime.now().strftime("%Y-%m-%d"))
+
+        if ticker and shares:
+            note_parts = ["SEC beneficial ownership filing (SC 13D/13G)"]
+            if reporting:
+                note_parts.append(reporting[:80])
+            if pct is not None:
+                note_parts.append(f"{pct}% stake")
+            note_parts.append("Snapshot of beneficial ownership, not necessarily an open-market purchase.")
+            snapshots.append({
+                "symbol": ticker,
+                "action": "buy",
+                "date": event_date,
+                "shares": shares,
+                "price": None,
+                "position_type": "long",
+                "notes": " — ".join(note_parts[:3]),
+            })
+    except Exception as e:
+        logger.warning("Ownership filing parse error: %s", e)
+    return snapshots
+
+
+def _fetch_ownership_stakes(person_name: str, ticker: str = "", max_filings: int = 6) -> dict:
+    """Search SC 13D/13G filings naming a person and parse ownership snapshots."""
+    forms = "SC 13D,SC 13D/A,SC 13G,SC 13G/A"
+    queries = [f'"{person_name}"']
+    sym = (ticker or "").upper().strip()
+    if sym:
+        queries.append(f'"{person_name}" {sym}')
+
+    seen_acc: set[str] = set()
+    filings: list[dict] = []
+    for q in queries:
+        for f in _edgar_fulltext_search(q, form_types=forms, max_hits=max_filings):
+            acc = f.get("accession") or ""
+            if acc and acc in seen_acc:
+                continue
+            if acc:
+                seen_acc.add(acc)
+            filings.append(f)
+
+    txns: list[dict] = []
+    seen_keys: set[tuple] = set()
+    for f in filings:
+        url = f.get("index_url")
+        if not url:
+            continue
+        entity = f.get("entity") or ""
+        hint = sym or _extract_ticker_hint(entity)
+        for t in _edgar_ownership_snapshots(url, ticker_hint=hint):
+            if sym and t.get("symbol") != sym:
+                continue
+            key = (t["symbol"], t["date"], t.get("shares"))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            t["notes"] = f"{t.get('notes', '')} Filed {f.get('filed', '')}.".strip()
+            txns.append(t)
+
+    return {
+        "found": len(txns),
+        "filings_checked": len(filings),
+        "filings": filings,
+        "transactions": txns,
+        "instruction": (
+            "These are beneficial ownership snapshots from SC 13D/13G filings — use action=buy, "
+            "position_type=long, and note they are ownership stakes not open-market trades."
+        ),
+    }
+
+
 def _web_search_cached(query: str, max_results: int = 8, cache: dict | None = None) -> list[dict]:
     key = f"{query}|{max_results}"
     if cache is not None:
@@ -554,34 +920,35 @@ SYSTEM_PROMPT = """You are a senior financial intelligence analyst building a ve
 
 Your job is to discover every publicly documented equity position or trade attributable to the subject, with evidence. Work like an investigative researcher, not a keyword bot.
 
-## How SEC disclosures actually work
-- Form 4: insider trades by individuals at public companies (personal name usually appears).
-- 13F-HR: quarterly institutional holdings — filed by the legal entity (fund, advisor, trust), NOT the manager's personal name.
-- SC 13D / 13G: activist/passive stakes — may be person or entity.
-- Congressional / STOCK Act disclosures: separate from EDGAR for members of Congress.
-- News articles often summarize 13F holdings with tickers; primary sources are EDGAR index pages.
+## How disclosures actually work (match tool to role)
+| Role | Primary sources | Tools to use |
+|------|-----------------|--------------|
+| Fund manager / hedge fund | 13F-HR filed by the fund entity | fetch_institutional_holdings(entity=fund name) |
+| Corporate insider / officer / director | Form 4 at the company; SC 13D if large stake | fetch_insider_trades; fetch_ownership_stakes; parse_form4_filing |
+| Activist / controlling shareholder | SC 13D / SC 13D/A | fetch_ownership_stakes; search_edgar_fulltext; parse_ownership_filing |
+| Passive 5%+ holder | SC 13G / SC 13G/A | fetch_ownership_stakes; parse_ownership_filing |
+| U.S. President / VP / executive branch | OGE Form 278 & 278-T (NOT EDGAR) | search_web + scrape_url on oge.gov / news summaries |
+| Member of Congress | STOCK Act / House & Senate disclosures | search_web + scrape_url (separate from EDGAR) |
 
 ## Critical reasoning rules
-1. **Identify the subject first.** Determine their role (insider, fund manager, politician, angel, etc.) and which legal entities file on their behalf. The filing entity is often different from the person's name.
-2. **Match source to role.** Pick filing types that fit the role. If personal-name EDGAR searches return nothing, that is a signal — pivot to affiliated entities you discovered via web research.
-3. **Resolve tickers.** 13F XML gives issuer names, not tickers. Use resolve_ticker() or corroborate via scraped articles before add_transaction().
-4. **Write as you go.** Call add_transaction() the moment a position is confirmed with a source. Never batch until the end.
-5. **Self-correct.** Use list_tracker_transactions() and remove_transaction() for duplicates or mistakes.
-6. **Evidence in notes.** Every add must cite the source (form type, filing date, article title, etc.).
-7. **Interpret position type:**
-   - Long equity → action "buy", position_type "long"
-   - Call options → action "buy", position_type "call"
-   - Put options / bearish hedges → action "sell", position_type "put"
-   - Full exits / disclosed sales of long stock → action "sell", position_type "exit"
-   - Pass position_type on every add_transaction() so the UI can distinguish puts from real sales.
-   - Use the filing period end date or filing date when exact trade date is unknown.
+1. **Identify the subject's role first.** The filing entity is often NOT the person's personal name.
+2. **Do NOT call fetch_institutional_holdings on trusts, LLCs, or revocable trusts** unless they are registered investment advisers that file 13F. Personal trusts do not file 13F.
+3. **If personal-name Form 4 search returns 0**, pivot immediately to:
+   - fetch_ownership_stakes(person_name, ticker=...) for SC 13D/13G stakes
+   - find_edgar_entity(company name) or lookup_edgar_ticker(DJT) for the issuer company
+   - search_edgar_fulltext with quoted name + form types SC 13D, SC 13G
+4. **Use search_edgar_fulltext results directly** — parse filing index URLs with parse_ownership_filing or parse_form4_filing. Do NOT web-search raw accession numbers.
+5. **Form 4 vs ownership filings:** Form 4 = insider trades (P/S open market). SC 13D/13G = beneficial ownership snapshots (record as buy/long with note). Do not treat $0 grant/transfer Form 4 rows as sales.
+6. **Resolve tickers** before add_transaction. Use lookup_edgar_ticker or resolve_ticker.
+7. **Write as you go** — add_transaction immediately when confirmed. list_tracker_transactions / remove_transaction for deduping.
+8. **Evidence in notes** — cite form type, filing date, source URL.
 
 ## Quality bar
 - Prefer primary SEC filings over secondary articles when both exist.
 - Do not invent tickers, dates, or share counts.
-- If only quarterly 13F snapshot exists, use period-end date and note it is a quarter-end holding snapshot.
-- When fetch_institutional_holdings or fetch_insider_trades return rows, add them immediately — do not keep searching without recording findings.
-- Avoid repeating the same web search query; use scrape_url on promising URLs instead."""
+- 13F rows are quarter-end snapshots; SC 13D rows are ownership snapshots — say so in notes.
+- When fetch_* tools return ready-made transactions, add them — do not keep searching without recording findings.
+- Avoid repeating failed queries; pivot strategy instead."""
 
 
 PLAN_PROMPT = """Before using any tools, produce a concise research plan for the subject below.
@@ -589,10 +956,10 @@ PLAN_PROMPT = """Before using any tools, produce a concise research plan for the
 Reply with ONLY valid JSON (no markdown):
 {
   "subject_profile": "1-2 sentences: who they are and why they might appear in public market disclosures",
-  "likely_roles": ["fund_manager", "corporate_insider", "politician", "activist_investor", "other"],
-  "filing_entities_to_check": ["names of funds, firms, trusts, employers — empty array if unknown yet"],
-  "form_types_to_prioritize": ["13F-HR", "4", "SC 13D", "SC 13G", "other"],
-  "research_angles": ["3-6 concrete angles, phrased generally — no copy-paste search queries"],
+  "likely_roles": ["fund_manager", "corporate_insider", "politician", "activist_investor", "controlling_shareholder", "other"],
+  "filing_entities_to_check": ["ONLY legal entities that actually file (fund names, public companies) — NOT personal trusts/LLCs unless known 13F filers"],
+  "form_types_to_prioritize": ["13F-HR", "4", "SC 13D", "SC 13G", "OGE-278", "STOCK-act", "other"],
+  "research_angles": ["3-6 concrete angles matched to the subject's role"],
   "risk_of_name_mismatch": "explain whether filings may appear under a different legal name than the subject"
 }"""
 
@@ -600,12 +967,12 @@ Reply with ONLY valid JSON (no markdown):
 REFLECTION_PROMPT = """Pause and assess your investigation so far.
 
 Answer internally, then continue with tools:
-1. Did you identify all legal entities that might file on the subject's behalf?
-2. Are you searching the right SEC form types for this subject's role?
-3. If personal-name EDGAR searches were empty, did you pivot to affiliated entities?
-4. Have you parsed primary filings (not just snippets) for the most recent quarters?
-5. Any duplicates to remove or tickers still unresolved?
-6. What is the single highest-value next action?
+1. Did you match filing types to the subject's role (13F for funds, SC 13D for control stakes, OGE 278 for President/VP, Form 4 for insiders)?
+2. If personal-name Form 4 returned 0, did you try fetch_ownership_stakes and search_edgar_fulltext for SC 13D/13G?
+3. Did you avoid wasting calls on trusts/LLCs that don't file 13F?
+4. Are you parsing primary EDGAR index URLs instead of web-searching accession numbers?
+5. Any duplicates to remove, or Form 4 rows that are grants/transfers misclassified as trades?
+6. For politicians/President: did you search OGE Form 278-T disclosures via web?
 
 Do not write a final essay — take that next action or finish if coverage is sufficient."""
 
@@ -642,6 +1009,14 @@ def _tool_call_detail(name: str, args: dict | None) -> str:
         return f'insider Form 4 for "{args.get("person_name", "")}"'
     if name == "fetch_institutional_holdings":
         return f'13F holdings for "{args.get("entity_name", "")}"'
+    if name == "fetch_ownership_stakes":
+        ticker = args.get("ticker") or ""
+        extra = f", ticker={ticker}" if ticker else ""
+        return f'ownership SC 13D/13G for "{args.get("person_name", "")}"{extra}'
+    if name == "lookup_edgar_ticker":
+        return f'CIK lookup for ticker "{args.get("ticker", "")}"'
+    if name == "parse_ownership_filing":
+        return args.get("filing_index_url", "ownership filing")
     if name == "parse_form4_filing":
         return args.get("filing_index_url", "Form 4 filing")
     if name == "parse_13f_filing":
@@ -745,6 +1120,24 @@ def _summarize_tool_result(name: str, content: str) -> tuple[str, list[str]]:
         elif data.get("message"):
             summary = str(data["message"])[:160]
         return summary, urls
+
+    if name in ("fetch_ownership_stakes", "parse_ownership_filing"):
+        txns = data.get("transactions") or []
+        syms = sorted({t.get("symbol") for t in txns if t.get("symbol")})[:8]
+        urls = [f.get("index_url") for f in (data.get("filings") or []) if f.get("index_url")][:4]
+        if not urls and data.get("filing_index_url"):
+            urls = [data["filing_index_url"]]
+        summary = f"{data.get('found', len(txns))} ownership snapshot(s)"
+        if syms:
+            summary += f" ({', '.join(syms)})"
+        elif data.get("message"):
+            summary = str(data["message"])[:160]
+        return summary, urls
+
+    if name == "lookup_edgar_ticker":
+        if data.get("cik"):
+            return f"{data.get('ticker', '')} → CIK {data['cik']} ({data.get('name', '')[:50]})", urls
+        return data.get("message") or "Ticker not found on EDGAR", urls
 
     if name == "parse_form4_filing":
         txns = data.get("transactions") or []
@@ -868,12 +1261,29 @@ def research_stream(
     def fetch_institutional_holdings(entity_name: str, quarters: int = 1) -> str:
         """Fetch and parse recent 13F-HR holdings for a legal entity (fund, advisor, trust).
         Returns resolved positions with symbol/action/date/shares — ready for add_transaction."""
-        return json.dumps(_fetch_institutional_holdings(entity_name, quarters=quarters))
+        return _json_dumps(_fetch_institutional_holdings(entity_name, quarters=quarters))
 
     @lc_tool
     def fetch_insider_trades(person_name: str, max_filings: int = 5) -> str:
         """Search and parse Form 4 insider filings for a person. Returns transactions ready to add."""
-        return json.dumps(_fetch_insider_trades(person_name, max_filings=max_filings))
+        return _json_dumps(_fetch_insider_trades(person_name, max_filings=max_filings))
+
+    @lc_tool
+    def fetch_ownership_stakes(person_name: str, ticker: str = "", max_filings: int = 6) -> str:
+        """Search SC 13D/13G beneficial ownership filings for a person. Best for controlling shareholders
+        and corporate insiders where Form 4 personal-name search fails. Optional ticker filters results."""
+        return _json_dumps(_fetch_ownership_stakes(person_name, ticker=ticker, max_filings=max_filings))
+
+    @lc_tool
+    def lookup_edgar_ticker(ticker: str) -> str:
+        """Resolve a US stock ticker to EDGAR CIK and company name. Use before find_edgar_entity when you know the ticker."""
+        info = _edgar_cik_from_ticker(ticker)
+        if not info:
+            return _json_dumps({"found": 0, "message": f"No EDGAR company for ticker {ticker.upper()}"})
+        filings = _edgar_list_filings(info["cik"], form_type="SC 13D/A", limit=3)
+        if not filings:
+            filings = _edgar_list_filings(info["cik"], form_type="4", limit=3)
+        return _json_dumps({"found": 1, **info, "recent_filings": filings})
 
     @lc_tool
     def search_edgar_fulltext(query: str, form_types: str = "4,13F-HR,SC 13D,SC 13G") -> str:
@@ -881,45 +1291,53 @@ def research_stream(
         form_types: comma-separated, e.g. '4', '13F-HR', 'SC 13D,SC 13G'."""
         results = _edgar_fulltext_search(query, form_types)
         if not results:
-            return json.dumps({"found": 0})
-        return json.dumps({"found": len(results), "filings": results})
+            return _json_dumps({"found": 0})
+        return _json_dumps({"found": len(results), "filings": results})
 
     @lc_tool
     def find_edgar_entity(entity_name: str, form_type: str = "13F-HR") -> str:
         """Find a registrant on EDGAR by legal entity name and list its recent filings.
         Use for funds, advisors, trusts, or companies — not just personal names."""
         payload = _edgar_entity_filings(entity_name, form_type=form_type, limit=4)
-        return json.dumps(payload)
+        return _json_dumps(payload)
 
     @lc_tool
     def parse_form4_filing(filing_index_url: str) -> str:
         """Parse a Form 4 filing index URL into insider transactions (symbol/action/date/shares/price)."""
         txns = _edgar_filing_xml(filing_index_url)
         if not txns:
-            return json.dumps({"found": 0})
-        return json.dumps({"found": len(txns), "transactions": txns})
+            return _json_dumps({"found": 0})
+        return _json_dumps({"found": len(txns), "transactions": txns})
+
+    @lc_tool
+    def parse_ownership_filing(filing_index_url: str, ticker: str = "") -> str:
+        """Parse an SC 13D/13G/13D/A filing index URL into beneficial ownership snapshots."""
+        txns = _edgar_ownership_snapshots(filing_index_url, ticker_hint=ticker)
+        if not txns:
+            return _json_dumps({"found": 0})
+        return _json_dumps({"found": len(txns), "transactions": txns, "filing_index_url": filing_index_url})
 
     @lc_tool
     def parse_13f_filing(filing_index_url: str) -> str:
         """Parse a 13F-HR filing index URL into holdings (issuer/cusip/shares/value/put_call)."""
         holdings = _edgar_13f_holdings(filing_index_url)
         if not holdings:
-            return json.dumps({"found": 0})
-        return json.dumps({"found": len(holdings), "holdings": holdings})
+            return _json_dumps({"found": 0})
+        return _json_dumps({"found": len(holdings), "holdings": holdings})
 
     @lc_tool
     def resolve_ticker(issuer_or_company: str) -> str:
         """Resolve a company/issuer name to a US stock ticker symbol."""
-        ticker = _guess_ticker(issuer_or_company)
+        ticker = _guess_ticker(issuer_or_company, allow_web=True)
         if ticker:
-            return json.dumps({"ticker": ticker, "issuer": issuer_or_company})
-        return json.dumps({"ticker": None, "issuer": issuer_or_company, "message": "Could not resolve — try web search"})
+            return _json_dumps({"ticker": ticker, "issuer": issuer_or_company})
+        return _json_dumps({"ticker": None, "issuer": issuer_or_company, "message": "Could not resolve — try web search"})
 
     @lc_tool
     def search_web(query: str) -> str:
         """Search the public web for portfolio coverage, filings, interviews, disclosures."""
         results = _web_search_cached(query, max_results=8, cache=_search_cache)
-        return json.dumps({"found": len(results), "results": results})
+        return _json_dumps({"found": len(results), "results": results})
 
     @lc_tool
     def scrape_url(url: str) -> str:
@@ -929,7 +1347,7 @@ def research_stream(
     @lc_tool
     def list_tracker_transactions() -> str:
         """Return transactions already saved for this subject (includes ids for remove_transaction)."""
-        return json.dumps({"count": len(existing_transactions), "transactions": existing_summary})
+        return _json_dumps({"count": len(existing_transactions), "transactions": existing_summary})
 
     @lc_tool
     def add_transaction(
@@ -945,12 +1363,12 @@ def research_stream(
         sym = (symbol or "").upper().strip()
         act = (action or "").lower().strip()
         if not sym or not date or act not in ("buy", "sell"):
-            return json.dumps({"error": "symbol, date, and action (buy/sell) required"})
+            return _json_dumps({"error": "symbol, date, and action (buy/sell) required"})
         dup = _find_duplicate_txn(existing_transactions, {
             "symbol": sym, "action": act, "date": date[:10],
         })
         if dup:
-            return json.dumps({"ok": False, "duplicate": True, "existing": dup,
+            return _json_dumps({"ok": False, "duplicate": True, "existing": dup,
                                "message": f"{act} {sym} on {date[:10]} already tracked"})
         body = {
             "symbol": sym,
@@ -965,7 +1383,7 @@ def research_stream(
             body["position_type"] = pt
         saved = on_add_txn(body)
         if any(t.get("id") == saved.get("id") for t in existing_transactions):
-            return json.dumps({"ok": False, "duplicate": True, "existing": saved,
+            return _json_dumps({"ok": False, "duplicate": True, "existing": saved,
                                "message": f"{act} {sym} on {date[:10]} already tracked"})
         existing_transactions.append(saved)
         existing_summary.append({
@@ -975,7 +1393,7 @@ def research_stream(
             "date": saved.get("date"),
             "notes": (saved.get("notes") or "")[:80],
         })
-        return json.dumps({"ok": True, "transaction": saved})
+        return _json_dumps({"ok": True, "transaction": saved})
 
     @lc_tool
     def remove_transaction(transaction_id: str) -> str:
@@ -984,12 +1402,13 @@ def research_stream(
         if ok:
             existing_transactions[:] = [t for t in existing_transactions if t.get("id") != transaction_id]
             existing_summary[:] = [t for t in existing_summary if t.get("id") != transaction_id]
-            return json.dumps({"ok": True, "removed": transaction_id})
-        return json.dumps({"ok": False, "error": "not found"})
+            return _json_dumps({"ok": True, "removed": transaction_id})
+        return _json_dumps({"ok": False, "error": "not found"})
 
     tools = [
-        fetch_institutional_holdings, fetch_insider_trades,
-        search_edgar_fulltext, find_edgar_entity, parse_form4_filing, parse_13f_filing,
+        fetch_institutional_holdings, fetch_insider_trades, fetch_ownership_stakes,
+        lookup_edgar_ticker, search_edgar_fulltext, find_edgar_entity,
+        parse_form4_filing, parse_ownership_filing, parse_13f_filing,
         resolve_ticker, search_web, scrape_url, list_tracker_transactions,
         add_transaction, remove_transaction,
     ]
@@ -1004,7 +1423,7 @@ def research_stream(
                 """Alternative web search with richer page extraction."""
                 fc = _FC(api_key=firecrawl_key)
                 results = fc.search(query, limit=5)
-                return json.dumps(results if isinstance(results, (list, dict)) else {"result": str(results)})
+                return _json_dumps(results if isinstance(results, (list, dict)) else {"result": str(results)})
 
             tools.append(firecrawl_search)
         except ImportError:
@@ -1016,6 +1435,9 @@ def research_stream(
     context_block = f"""Subject: {investor_name}
 Already tracked: {len(existing_transactions)} transactions
 Sample existing symbols: {sorted({t.get('symbol','') for t in existing_transactions if t.get('symbol')})[:20] or 'none'}"""
+    known_entity = _known_filing_entity(investor_name)
+    if known_entity:
+        context_block += f"\nKnown 13F filing entity (use fetch_institutional_holdings first): {known_entity}"
 
     def plan_node(_state: ResearchState) -> dict:
         resp = llm.invoke([
@@ -1028,11 +1450,21 @@ Sample existing symbols: {sorted({t.get('symbol','') for t in existing_transacti
             match = re.search(r"\{[\s\S]*\}", content)
             if match:
                 plan = json.loads(match.group(0))
+                roles = [r for r in (plan.get("likely_roles") or []) if r]
                 entities = [e for e in (plan.get("filing_entities_to_check") or []) if e]
-                if entities:
+                hints: list[str] = []
+                if any(r in roles for r in ("controlling_shareholder", "corporate_insider", "activist_investor")):
+                    hints.append("fetch_ownership_stakes(person_name) for SC 13D/13G stakes")
+                if "fund_manager" in roles and entities:
+                    hints.append(f"fetch_institutional_holdings for fund entities: {', '.join(entities[:3])}")
+                if "politician" in roles:
+                    hints.append("search_web for OGE Form 278-T / STOCK Act disclosures (not EDGAR)")
+                if hints:
+                    follow_up = "\nBegin execution prioritized by role: " + "; ".join(hints) + "."
+                elif entities:
                     follow_up = (
-                        "\nBegin execution with fetch_institutional_holdings() and/or fetch_insider_trades() "
-                        f"for the entities/roles you identified: {', '.join(entities[:5])}."
+                        "\nBegin execution with the filing types matched to the subject's role — "
+                        f"not blind 13F lookups on: {', '.join(entities[:5])}."
                     )
         except Exception:
             pass

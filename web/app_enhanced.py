@@ -3576,16 +3576,72 @@ def _fetch_full_price_history(symbol: str) -> list:
             timeout=20,
         )
         if resp.status_code != 200:
+            yf_prices = _fetch_yfinance_price_history(symbol)
+            if yf_prices:
+                _price_store.put(symbol, yf_prices)
+                return yf_prices
             return existing
 
         new_prices = _parse_eodhd_prices(resp.json())
+        if not new_prices:
+            yf_prices = _fetch_yfinance_price_history(symbol)
+            if yf_prices:
+                _price_store.put(symbol, yf_prices)
+                return yf_prices
+            return existing
         if existing and last_date:
             return _price_store.append(symbol, new_prices)
         else:
             _price_store.put(symbol, new_prices)
             return new_prices
     except Exception:
+        yf_prices = _fetch_yfinance_price_history(symbol)
+        if yf_prices:
+            _price_store.put(symbol, yf_prices)
+            return yf_prices
         return existing
+
+
+def _fetch_yfinance_price_history(symbol: str) -> list:
+    """Fallback daily OHLCV when EODHD is unavailable or unauthenticated."""
+    sym = _parse_symbol(symbol)
+    if not sym:
+        return []
+    try:
+        import yfinance as yf
+    except ImportError:
+        return []
+    tickers = [sym]
+    c = get_company(sym)
+    eod = _eodhd_ticker(sym, c)
+    if eod and eod not in tickers and "." in eod:
+        tickers.append(eod.split(".")[0])
+    for tk in tickers:
+        try:
+            hist = yf.Ticker(tk).history(period="max", auto_adjust=True)
+        except Exception:
+            continue
+        if hist is None or hist.empty:
+            continue
+        out = []
+        for idx, row in hist.iterrows():
+            try:
+                close = float(row.get("Close") or 0)
+            except (TypeError, ValueError):
+                continue
+            if close <= 0:
+                continue
+            out.append({
+                "date": idx.strftime("%Y-%m-%d"),
+                "open": round(float(row.get("Open") or close), 4),
+                "high": round(float(row.get("High") or close), 4),
+                "low": round(float(row.get("Low") or close), 4),
+                "close": round(close, 4),
+                "volume": int(row.get("Volume") or 0),
+            })
+        if len(out) >= 20:
+            return out
+    return []
 
 
 _MIN_CHART_POINTS = 150
